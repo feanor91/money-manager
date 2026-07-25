@@ -1,0 +1,331 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../models/currency.dart';
+import '../state/database_provider.dart';
+import '../theme/app_theme.dart';
+import '../widgets/account_balance_card.dart';
+import '../widgets/bento_card.dart';
+import '../widgets/category_spend_bar.dart';
+import '../widgets/forecast_chart.dart';
+import '../widgets/responsive_body.dart';
+import '../widgets/transaction_tile.dart';
+
+class DashboardScreen extends StatelessWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final dbProvider = context.watch<DatabaseProvider>();
+    final repo = dbProvider.repository!;
+    final currency = repo.getBaseCurrency();
+
+    final allAccountsById = {for (final a in repo.getAccounts()) a.id: a};
+    final unorderedAccounts = repo
+        .getAccounts(onlyOpen: true)
+        .where((a) => !dbProvider.isAccountHidden(a.id))
+        .toList();
+    final accounts =
+        dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
+    final balances = {
+      for (final a in accounts) a.id: repo.accountBalance(a.id)
+    };
+
+    if (accounts.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Tableau de bord')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Tous les comptes sont masques.'),
+                const SizedBox(height: 12),
+                Text(
+                  'Reactivez-en un depuis l\'onglet Comptes.',
+                  style: TextStyle(color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Fall back to the first visible account if the persisted selection
+    // points at a hidden, closed, or deleted one.
+    final selectedAccountId =
+        accounts.any((a) => a.id == dbProvider.selectedAccountId)
+            ? dbProvider.selectedAccountId!
+            : accounts.first.id;
+    final scopedBalance = balances[selectedAccountId] ?? 0;
+
+    final now = DateTime.now();
+    final categories = {for (final c in repo.getCategories()) c.id: c};
+    final spendByCategory =
+        repo.categorySpendForMonth(now, accountId: selectedAccountId);
+    final budgetYears = repo.getBudgetYears();
+    final budgetByCategory = <int, double>{};
+    if (budgetYears.isNotEmpty) {
+      for (final entry in repo.getBudgetEntries(budgetYears.first.id)) {
+        budgetByCategory[entry.categoryId] =
+            (budgetByCategory[entry.categoryId] ?? 0) + entry.monthlyAmount;
+      }
+    }
+    final spendItems = spendByCategory.entries
+        .where((e) => categories.containsKey(e.key))
+        .map((e) => CategorySpend(
+              category: categories[e.key]!,
+              spent: e.value,
+              budget: budgetByCategory[e.key],
+            ))
+        .toList();
+
+    final recentTx =
+        repo.getTransactions(accountId: selectedAccountId, limit: 6);
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+
+    return CustomScrollView(
+      slivers: [
+        SliverAppBar(
+          floating: true,
+          title: const Text('Tableau de bord'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () => Navigator.of(context).pushNamed('/settings'),
+            ),
+          ],
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.all(16),
+          sliver: SliverToBoxAdapter(
+            child: ResponsiveBody(
+              maxWidth: 1400,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _TotalBalanceCard(
+                    total: scopedBalance,
+                    currency: currency,
+                    label: accounts
+                        .firstWhere((a) => a.id == selectedAccountId)
+                        .name,
+                  ),
+                  const SizedBox(height: AppTheme.gridGap),
+                  LayoutBuilder(builder: (context, constraints) {
+                    // Narrow widths need extra room: the segmented scale
+                    // button and axis labels can wrap onto more lines than
+                    // they do on a wide desktop layout.
+                    final forecastHeight =
+                        constraints.maxWidth < 480 ? 460.0 : 400.0;
+                    return SizedBox(
+                      height: forecastHeight,
+                      child: ForecastChart(
+                        repository: repo,
+                        startingBalance: scopedBalance,
+                        currency: currency,
+                        accountId: selectedAccountId,
+                      ),
+                    );
+                  }),
+                  const SizedBox(height: AppTheme.gridGap),
+                  LayoutBuilder(builder: (context, constraints) {
+                    final wide = constraints.maxWidth > 800;
+                    // A horizontal carousel of fixed-width cards always
+                    // crops the last one somewhere - fine on desktop where
+                    // it reads as "scroll for more", but on a narrow screen
+                    // it just looks broken. Below the wide breakpoint, show
+                    // every account as a full-width tile stacked instead -
+                    // no cropping, no scrolling. Drag-to-reorder only
+                    // applies to the wide carousel; narrow order follows
+                    // the same saved order but isn't itself draggable.
+                    final accountsGrid = wide
+                        ? SizedBox(
+                            height: 168,
+                            child: ReorderableListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              buildDefaultDragHandles: false,
+                              itemCount: accounts.length,
+                              onReorderItem: (oldIndex, newIndex) {
+                                final reordered = [...accounts];
+                                final moved = reordered.removeAt(oldIndex);
+                                reordered.insert(newIndex, moved);
+                                dbProvider.setAccountOrder(
+                                    reordered.map((a) => a.id).toList());
+                              },
+                              itemBuilder: (context, i) {
+                                final account = accounts[i];
+                                return Padding(
+                                  key: ValueKey(account.id),
+                                  padding: const EdgeInsets.only(
+                                      right: AppTheme.gridGap),
+                                  child: SizedBox(
+                                    width: 210,
+                                    child: Stack(
+                                      children: [
+                                        AccountBalanceCard(
+                                          account: account,
+                                          balance: balances[account.id] ?? 0,
+                                          currency: currency,
+                                          selected:
+                                              account.id == selectedAccountId,
+                                          onTap: () => dbProvider
+                                              .selectAccount(account.id),
+                                        ),
+                                        Positioned(
+                                          top: 6,
+                                          right: 6,
+                                          child: ReorderableDragStartListener(
+                                            index: i,
+                                            child: Container(
+                                              padding: const EdgeInsets.all(4),
+                                              decoration: BoxDecoration(
+                                                color: Colors.grey
+                                                    .withValues(alpha: 0.15),
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                              ),
+                                              child: const Icon(
+                                                  Icons.drag_indicator,
+                                                  size: 18,
+                                                  color: AppTheme.accent),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          )
+                        : Wrap(
+                            spacing: AppTheme.gridGap,
+                            runSpacing: AppTheme.gridGap,
+                            children: [
+                              for (final account in accounts)
+                                SizedBox(
+                                  width: constraints.maxWidth < 380
+                                      ? constraints.maxWidth
+                                      : (constraints.maxWidth -
+                                              AppTheme.gridGap) /
+                                          2,
+                                  height: 140,
+                                  child: AccountBalanceCard(
+                                    account: account,
+                                    balance: balances[account.id] ?? 0,
+                                    currency: currency,
+                                    selected: account.id == selectedAccountId,
+                                    onTap: () =>
+                                        dbProvider.selectAccount(account.id),
+                                  ),
+                                ),
+                            ],
+                          );
+                    final spendCard = SizedBox(
+                      height: 320,
+                      child: CategorySpendCard(
+                          items: spendItems, currency: currency),
+                    );
+                    final recentCard = SizedBox(
+                      height: 320,
+                      child: BentoCard(
+                        title: 'Transactions recentes',
+                        child: ListView.builder(
+                          itemCount: recentTx.length,
+                          itemBuilder: (context, i) {
+                            final tx = recentTx[i];
+                            return TransactionTile(
+                              transaction: tx,
+                              payee: payees[tx.payeeId],
+                              category: tx.categoryId != null
+                                  ? categories[tx.categoryId]
+                                  : null,
+                              fromAccount: allAccountsById[tx.accountId],
+                              toAccount: tx.toAccountId != null
+                                  ? allAccountsById[tx.toAccountId]
+                                  : null,
+                              viewpointAccountId: selectedAccountId,
+                              currency: currency,
+                              onToggleReconciled: (value) {
+                                repo.setReconciled(tx.id, value);
+                                dbProvider.touch();
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    );
+
+                    if (wide) {
+                      return Column(
+                        children: [
+                          accountsGrid,
+                          const SizedBox(height: AppTheme.gridGap),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: spendCard),
+                              const SizedBox(width: AppTheme.gridGap),
+                              Expanded(child: recentCard),
+                            ],
+                          ),
+                        ],
+                      );
+                    }
+                    return Column(
+                      children: [
+                        accountsGrid,
+                        const SizedBox(height: AppTheme.gridGap),
+                        spendCard,
+                        const SizedBox(height: AppTheme.gridGap),
+                        recentCard,
+                      ],
+                    );
+                  }),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _TotalBalanceCard extends StatelessWidget {
+  final double total;
+  final CurrencyFormat? currency;
+  final String label;
+
+  const _TotalBalanceCard(
+      {required this.total, required this.label, this.currency});
+
+  @override
+  Widget build(BuildContext context) {
+    return BentoCard(
+      color: AppTheme.accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text(
+            currency?.format(total) ?? total.toStringAsFixed(2),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 34,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
