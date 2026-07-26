@@ -268,11 +268,17 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
     final isTransfer = _transCode == TransCode.transfer;
 
     return Padding(
+      // viewInsets.bottom covers the keyboard when it's open; padding.bottom
+      // covers Android's own system nav bar / gesture strip, which is
+      // otherwise still there (and can cover the Enregistrer/Supprimer row)
+      // even with the keyboard closed.
       padding: EdgeInsets.only(
         left: 20,
         right: 20,
         top: 20,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom +
+            MediaQuery.of(context).padding.bottom +
+            20,
       ),
       child: Form(
         key: _formKey,
