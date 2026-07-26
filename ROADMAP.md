@@ -3,6 +3,24 @@
 Idées et pistes pour la suite, non planifiées ni engagées - une liste de
 courses, pas des engagements.
 
+## Priorité maximale
+
+- **Périodicités manquantes dans les opérations récurrentes.** MMEX
+  desktop propose 16 fréquences (`REPEATS` codes 0-15) ; on n'en gère que
+  0-10 dans `lib/models/recurrence.dart` (`RecurrencePeriod`). Manquent :
+  - Dans (n) jours / Dans (n) mois (codes 11-12)
+  - Tous les (n) jours / Tous les (n) mois (codes 13-14)
+  - Mensuellement (dernier jour ouvré) (code 15, à distinguer de
+    "dernier jour du mois" déjà géré, code 4)
+  Les 4 premières demandent un paramètre `n` en plus du code de période -
+  à vérifier dans le schéma MMEX où ce `n` est réellement stocké
+  (`BILLSDEPOSITS_V1` n'a pas de colonne dédiée visible pour l'instant ;
+  possiblement encodé différemment, à creuser côté source MMEX avant
+  d'implémenter) plutôt que de deviner. Une opération créée dans MMEX
+  desktop avec une de ces périodicités manquantes tombe actuellement sur
+  le comportement par défaut ("Mensuelle") côté decode - à corriger en
+  priorité pour ne pas fausser silencieusement la fréquence réelle.
+
 ## Demandées
 
 - **Thème clair/sombre** (et peut-être d'autres palettes) - actuellement
