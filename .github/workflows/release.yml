@@ -1,0 +1,151 @@
+name: Build, test & release
+
+# Every push to main: analyze + test, then (only if that passes) build the
+# web bundle and the Android APK, bump the patch version, prepend a
+# changelog entry generated from the commits since the last tag, and
+# publish it all as a GitHub Release with both artifacts attached.
+on:
+  push:
+    branches: [main]
+
+# A second push to main while one release is still running would race it
+# for the same next version number - queue them instead of running in
+# parallel, but don't cancel a release that's already in flight.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Belt and suspenders: GitHub already skips runs whose triggering commit
+    # message contains "[skip ci]" (used below on the bot's own version-bump
+    # commit, to avoid it re-triggering this same workflow forever) - this
+    # condition is a second, explicit guard for the same thing.
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags, needed for the changelog and version bump
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;28.0.3" "build-tools;34.0.0"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Compute next version
+        id: version
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          BASE=${LAST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+          NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+          echo "Last tag: $LAST_TAG -> new version: $NEW_VERSION"
+          {
+            echo "new_version=$NEW_VERSION"
+            echo "last_tag=$LAST_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog entry
+        id: changelog
+        run: |
+          LAST_TAG="${{ steps.version.outputs.last_tag }}"
+          RANGE=""
+          if [ "$LAST_TAG" != "v0.0.0" ]; then
+            RANGE="$LAST_TAG..HEAD"
+          fi
+          BODY=$(git log $RANGE --pretty=format:'- %s' --no-merges)
+          if [ -z "$BODY" ]; then
+            BODY="- Aucun changement notable (build de maintenance)."
+          fi
+          {
+            echo "entry<<CHANGELOG_EOF"
+            echo "## [${{ steps.version.outputs.new_version }}] - $(date +%Y-%m-%d)"
+            echo ""
+            echo "$BODY"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update pubspec.yaml and CHANGELOG.md
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+          sed -i "s/^version: .*/version: ${NEW_VERSION}+${{ github.run_number }}/" pubspec.yaml
+
+          TMP_CHANGELOG=$(mktemp)
+          {
+            echo "# Changelog"
+            echo ""
+            echo "Toutes les modifications notables de ce projet sont consignées ici."
+            echo "Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)."
+            echo ""
+            echo "${{ steps.changelog.outputs.entry }}"
+            echo ""
+            tail -n +2 CHANGELOG.md | sed '1{/^$/d}'
+          } > "$TMP_CHANGELOG"
+          mv "$TMP_CHANGELOG" CHANGELOG.md
+
+      - name: Build web
+        run: >
+          flutter build web --release
+          --build-name=${{ steps.version.outputs.new_version }}
+          --build-number=${{ github.run_number }}
+
+      - name: Build APK
+        run: >
+          flutter build apk --release
+          --build-name=${{ steps.version.outputs.new_version }}
+          --build-number=${{ github.run_number }}
+
+      - name: Package web build
+        run: |
+          cd build/web
+          zip -r "../../money-manager-web-${{ steps.version.outputs.new_version }}.zip" .
+
+      - name: Commit version bump and changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml CHANGELOG.md
+          git commit -m "chore(release): v${{ steps.version.outputs.new_version }} [skip ci]"
+          git push
+
+      - name: Tag release
+        run: |
+          git tag -a "v${{ steps.version.outputs.new_version }}" -m "Version ${{ steps.version.outputs.new_version }}"
+          git push origin "v${{ steps.version.outputs.new_version }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.new_version }}
+          name: ${{ steps.version.outputs.new_version }}
+          body: ${{ steps.changelog.outputs.entry }}
+          files: |
+            build/app/outputs/flutter-apk/app-release.apk
+            money-manager-web-${{ steps.version.outputs.new_version }}.zip

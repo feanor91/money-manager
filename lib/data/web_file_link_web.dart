@@ -130,16 +130,18 @@ Future<WebFileLink?> pickAndRemember() async {
 }
 
 Future<WebFileRestoreResult> tryRestore() async {
-  if (!isSupported)
+  if (!isSupported) {
     return const WebFileRestoreResult(WebFileRestoreStatus.none);
+  }
   web.FileSystemFileHandle? handle;
   try {
     handle = await _loadStoredHandle();
   } catch (_) {
     return const WebFileRestoreResult(WebFileRestoreStatus.none);
   }
-  if (handle == null)
+  if (handle == null) {
     return const WebFileRestoreResult(WebFileRestoreStatus.none);
+  }
 
   final permission = await handle.queryPermission(_readWriteDescriptor).toDart;
   if (permission.toDart == 'granted') {
