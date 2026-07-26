@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.3] - 2026-07-26
+
+- ci: fix duplicated intro paragraph in generated CHANGELOG entries
+- Add ROADMAP.md with post-1.0 ideas
+
 ## [1.0.2] - 2026-07-26
 
 - ci: add workflow_dispatch trigger for manual testing
