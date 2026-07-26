@@ -813,8 +813,20 @@ class MmexRepository {
   int? _monthStepFor(RecurrencePeriod period) {
     switch (period) {
       case RecurrencePeriod.monthly:
+      // _addMonths below clamps to the target month's last day when the
+      // origin day doesn't exist there (e.g. day 31 in a 30-day month),
+      // but doesn't force EVERY occurrence onto the actual last day the
+      // way MMEX's own REPEAT_MONTHLY_LAST_DAY/_LAST_BUSINESS_DAY do - a
+      // bill starting mid-month (e.g. the 30th) would drift instead of
+      // landing on each month's true last day. Not yet hit by any real
+      // bill in this project's own data, but worth fixing properly
+      // (dedicated end-of-month occurrence generation) before relying on
+      // it - see ROADMAP.md.
       case RecurrencePeriod.monthlyLastDay:
+      case RecurrencePeriod.monthlyLastBusinessDay:
         return 1;
+      case RecurrencePeriod.biMonthly:
+        return 2;
       case RecurrencePeriod.quarterly:
         return 3;
       case RecurrencePeriod.halfYearly:

@@ -5,21 +5,27 @@ courses, pas des engagements.
 
 ## Priorité maximale
 
-- **Périodicités manquantes dans les opérations récurrentes.** MMEX
-  desktop propose 16 fréquences (`REPEATS` codes 0-15) ; on n'en gère que
-  0-10 dans `lib/models/recurrence.dart` (`RecurrencePeriod`). Manquent :
-  - Dans (n) jours / Dans (n) mois (codes 11-12)
-  - Tous les (n) jours / Tous les (n) mois (codes 13-14)
-  - Mensuellement (dernier jour ouvré) (code 15, à distinguer de
-    "dernier jour du mois" déjà géré, code 4)
-  Les 4 premières demandent un paramètre `n` en plus du code de période -
-  à vérifier dans le schéma MMEX où ce `n` est réellement stocké
-  (`BILLSDEPOSITS_V1` n'a pas de colonne dédiée visible pour l'instant ;
-  possiblement encodé différemment, à creuser côté source MMEX avant
-  d'implémenter) plutôt que de deviner. Une opération créée dans MMEX
-  desktop avec une de ces périodicités manquantes tombe actuellement sur
-  le comportement par défaut ("Mensuelle") côté decode - à corriger en
-  priorité pour ne pas fausser silencieusement la fréquence réelle.
+- ~~Périodicités manquantes dans les opérations récurrentes~~ - **fait**.
+  En creusant (source MMEX stable v1.9.2, `Model_Billsdeposits.h`), le
+  vrai souci était plus profond qu'un simple manque : notre code 4 était
+  carrément **mal mappé** ("mensuel dernier jour" au lieu de "tous les 2
+  mois"), ce qui faussait silencieusement la fréquence de 2 opérations
+  réelles de la base de test (dont "Couverture pour Bitiba"). Corrigé,
+  plus "dernier jour ouvré" (code 16) ajouté. Reste non géré : les 4
+  périodicités "dans/tous les (n) jours/mois" (codes 11-14) - elles
+  réutilisent `NUMOCCURRENCES` comme paramètre `n` plutôt que comme
+  compteur d'occurrences restantes, ce qui entre en conflit avec le champ
+  "Durée limitée" existant et demande une vraie réflexion UI avant
+  d'être ajoutées (aucune opération réelle ne les utilise actuellement,
+  donc pas urgent).
+- **Précision des dates pour "dernier jour du mois"/"dernier jour ouvré".**
+  `_monthStepFor` avance juste d'un mois et laisse `_addMonths` caler sur
+  le même jour du mois (avec clamp si le jour n'existe pas) - une
+  opération démarrant un 30 dérivera au lieu de systématiquement retomber
+  sur le vrai dernier jour de chaque mois (et "dernier jour ouvré" ne
+  recule pas encore si ça tombe un week-end). Aucune opération réelle
+  actuelle n'utilise ces deux périodicités, donc pas bloquant, mais à
+  corriger avant de les recommander à l'usage.
 
 ## Demandées
 
@@ -66,6 +72,16 @@ courses, pas des engagements.
   de prévision), un outil dédié éviterait de recommencer ce travail
   d'enquête à chaque nouveau souci de solde qui ne correspond pas.
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
+
+## Priorité basse
+
+- **Localisation multilingue.** Toute l'interface est actuellement en
+  français en dur dans le code (pas de fichiers `.arb`/`intl_*` ni de
+  `flutter_localizations`). Passage en `l10n` standard Flutter à prévoir
+  si l'app doit un jour servir à quelqu'un d'autre que son utilisateur
+  actuel - gros travail mécanique (extraire toutes les chaînes) plutôt
+  que complexe, mais pas prioritaire tant qu'il n'y a qu'un seul
+  utilisateur francophone.
 
 ## Notes
 
