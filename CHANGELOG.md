@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.5] - 2026-07-26
+
+- roadmap: flag missing recurrence periods as top priority
+
 ## [1.0.4] - 2026-07-26
 
 - ci: retry push with rebase on non-fast-forward (avoid race with manual pushes)
