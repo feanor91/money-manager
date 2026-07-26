@@ -137,7 +137,18 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add pubspec.yaml CHANGELOG.md
           git commit -m "chore(release): v${{ steps.version.outputs.new_version }} [skip ci]"
-          git push
+          # main can have moved since checkout (someone pushed directly
+          # while this run was building) - rebase our one commit on top
+          # instead of failing outright, retrying a few times in case of
+          # a tight race with another push.
+          for attempt in 1 2 3; do
+            if git push; then
+              break
+            fi
+            echo "Push rejected (attempt $attempt), rebasing onto origin/main and retrying..."
+            git fetch origin main
+            git rebase origin/main
+          done
 
       - name: Tag release
         run: |
