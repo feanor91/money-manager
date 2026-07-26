@@ -8,9 +8,6 @@ Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 - ci: add workflow_dispatch trigger for manual testing
 - Add CI pipeline: analyze, test, build, auto-version, changelog, release
 
-Toutes les modifications notables de ce projet sont consignées ici.
-Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
-
 ## [1.0.1] - 2026-07-26
 
 ### Corrigé

@@ -107,7 +107,10 @@ jobs:
             echo ""
             echo "${{ steps.changelog.outputs.entry }}"
             echo ""
-            tail -n +2 CHANGELOG.md | sed '1{/^$/d}'
+            # Keep only the previous entries (from the first "## [" heading
+            # onward) - a plain tail would also re-copy the intro
+            # paragraph above, duplicating it on every release.
+            awk '/^## \[/{found=1} found' CHANGELOG.md
           } > "$TMP_CHANGELOG"
           mv "$TMP_CHANGELOG" CHANGELOG.md
 
