@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/db_picker_screen.dart';
@@ -20,6 +21,16 @@ class MoneyManagerApp extends StatelessWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.system,
+      // Toute l'UI est en francais en dur (voir ROADMAP.md) - le picker de
+      // date Material (showDatePicker) suit sa propre localisation
+      // independante du texte de l'appli, d'ou ce reglage explicite.
+      locale: const Locale('fr'),
+      supportedLocales: const [Locale('fr')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       routes: {
         '/settings': (_) => const SettingsScreen(),
       },

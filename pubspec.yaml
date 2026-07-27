@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
 
   # Acces base SQLite (le fichier .mmb est une base SQLite standard)
   sqlite3: ^2.4.6
@@ -27,7 +29,7 @@ dependencies:
   fl_chart: ^0.69.0
 
   # Formats dates / devises
-  intl: ^0.19.0
+  intl: ^0.20.2
 
   # Persistance du chemin de la base choisie
   shared_preferences: ^2.3.3
