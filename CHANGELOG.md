@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.10] - 2026-07-27
+
+- fix(layout): dashboard crash on unbounded height, ledger row overflow
+
 ## [1.0.9] - 2026-07-27
 
 - Modif roadmap
