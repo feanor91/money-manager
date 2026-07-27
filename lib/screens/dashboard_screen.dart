@@ -155,14 +155,16 @@ class DashboardScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _TotalBalanceCard(
-                    total: scopedBalance,
-                    currency: currency,
-                    label: accounts
-                        .firstWhere((a) => a.id == selectedAccountId)
-                        .name,
-                    forecastBalance: forecastBalances[selectedAccountId],
-                    forecastLabel: forecastDateLabel,
+                  IntrinsicHeight(
+                    child: _TotalBalanceCard(
+                      total: scopedBalance,
+                      currency: currency,
+                      label: accounts
+                          .firstWhere((a) => a.id == selectedAccountId)
+                          .name,
+                      forecastBalance: forecastBalances[selectedAccountId],
+                      forecastLabel: forecastDateLabel,
+                    ),
                   ),
                   const SizedBox(height: AppTheme.gridGap),
                   LayoutBuilder(builder: (context, constraints) {

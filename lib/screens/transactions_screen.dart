@@ -145,6 +145,9 @@ class _LedgerTable extends StatelessWidget {
   static const _colGap = 12.0;
   static const _columnCount =
       9; // check, date, tiers, statut, categorie, debit, credit, solde, remarques
+  // +24 for the 12px horizontal padding on each side of every row (header
+  // and data rows both wrap their Row in EdgeInsets.symmetric(horizontal:
+  // 12)), which isn't otherwise accounted for in the fixed column widths.
   static const _totalWidth = _colCheck +
       _colDate +
       _colTiers +
@@ -153,7 +156,8 @@ class _LedgerTable extends StatelessWidget {
       _colMontant * 2 +
       _colSolde +
       _colRemarques +
-      _colGap * (_columnCount - 1);
+      _colGap * (_columnCount - 1) +
+      24;
 
   final List<TransactionWithBalance> rows;
   final int accountId;
