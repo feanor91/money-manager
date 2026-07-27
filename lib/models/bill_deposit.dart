@@ -14,8 +14,17 @@ class BillDeposit {
   final DateTime nextOccurrence;
   final RecurrencePeriod period;
   final RecurrenceAutoExecute autoExecute;
+  /// -1 = repeats forever; otherwise the remaining occurrence count - EXCEPT
+  /// when [periodUsesXParam] is true for [period], in which case this is the
+  /// day/month interval X ("dans/tous les X ..."), not a count at all.
   final int numOccurrences;
   final String? notes;
+
+  /// True if the user paused this template: excluded from auto-add/catch-up
+  /// and from the forecast, without deleting it or touching
+  /// BILLSDEPOSITS_V1 - stored separately, see
+  /// [MmexRepository.getPausedBillIds]/[MmexRepository.setBillPaused].
+  final bool paused;
 
   const BillDeposit({
     required this.id,
@@ -31,9 +40,10 @@ class BillDeposit {
     this.toAccountId,
     this.categoryId,
     this.notes,
+    this.paused = false,
   });
 
-  factory BillDeposit.fromRow(Map<String, Object?> row) {
+  factory BillDeposit.fromRow(Map<String, Object?> row, {bool paused = false}) {
     final decoded = decodeRepeats((row['REPEATS'] as num?)?.toInt() ?? 3);
     return BillDeposit(
       id: row['BDID'] as int,
@@ -49,6 +59,7 @@ class BillDeposit {
       autoExecute: decoded.autoExecute,
       numOccurrences: (row['NUMOCCURRENCES'] as num?)?.toInt() ?? -1,
       notes: row['NOTES'] as String?,
+      paused: paused,
     );
   }
 }

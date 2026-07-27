@@ -56,7 +56,11 @@ class _RecurringScreenState extends State<RecurringScreen> {
       return haystack.contains(query);
     }
 
-    final bills = allBills.where(matchesBill).toList();
+    // Paused operations first, so they stay visible/easy to find (and
+    // un-pause) instead of blending into the rest of the list sorted by
+    // next-occurrence date.
+    final bills = allBills.where(matchesBill).toList()
+      ..sort((a, b) => (a.paused == b.paused) ? 0 : (a.paused ? -1 : 1));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Operations recurrentes')),
@@ -122,52 +126,68 @@ class _RecurringScreenState extends State<RecurringScreen> {
                             ? 'Virement'
                             : '${accounts[bill.accountId]?.name ?? ''} - ${categories[bill.categoryId]?.name ?? 'Non categorise'}';
                         return Card(
-                          child: ListTile(
-                            onTap: () => _openEditor(context, existing: bill),
-                            leading: CircleAvatar(
-                              backgroundColor: (positive
+                          child: Opacity(
+                            opacity: bill.paused ? 0.55 : 1,
+                            child: ListTile(
+                              onTap: () => _openEditor(context, existing: bill),
+                              leading: CircleAvatar(
+                                backgroundColor: (positive
+                                        ? AppTheme.positive
+                                        : AppTheme.negative)
+                                    .withValues(alpha: 0.12),
+                                child: Icon(
+                                  isTransfer ? Icons.swap_horiz : Icons.autorenew,
+                                  color: positive
                                       ? AppTheme.positive
-                                      : AppTheme.negative)
-                                  .withValues(alpha: 0.12),
-                              child: Icon(
-                                isTransfer ? Icons.swap_horiz : Icons.autorenew,
-                                color: positive
-                                    ? AppTheme.positive
-                                    : AppTheme.negative,
-                                size: 18,
+                                      : AppTheme.negative,
+                                  size: 18,
+                                ),
                               ),
-                            ),
-                            title: Text(title,
-                                maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: Text(
-                              '$subtitleLine1\n'
-                              '${recurrencePeriodLabel(bill.period)} - prochaine: '
-                              '${DateFormat.yMMMd('fr_FR').format(bill.nextOccurrence)}'
-                              '${overdue ? ' (en retard)' : ''}',
-                            ),
-                            isThreeLine: true,
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  currency?.format(signed) ??
-                                      signed.toStringAsFixed(2),
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    color: overdue
-                                        ? AppTheme.negative
-                                        : (positive
-                                            ? AppTheme.positive
-                                            : AppTheme.negative),
+                              title: Text(title,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(
+                                '$subtitleLine1\n'
+                                '${recurrencePeriodLabelWithX(bill.period, bill.numOccurrences)} - prochaine: '
+                                '${DateFormat.yMMMd('fr_FR').format(bill.nextOccurrence)}'
+                                '${overdue ? ' (en retard)' : ''}'
+                                '${bill.paused ? ' (en pause)' : ''}',
+                              ),
+                              isThreeLine: true,
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Tooltip(
+                                    message: 'Mettre en pause (ignoree a '
+                                        'l\'ajout automatique et dans le '
+                                        'previsionnel)',
+                                    child: Checkbox(
+                                      value: bill.paused,
+                                      onChanged: (v) {
+                                        repo.setBillPaused(bill.id, v ?? false);
+                                        dbProvider.touch();
+                                      },
+                                    ),
                                   ),
-                                ),
-                                IconButton(
-                                  tooltip: 'Enregistrer cette occurrence',
-                                  icon: const Icon(Icons.playlist_add_check),
-                                  onPressed: () =>
-                                      _recordOccurrence(context, bill),
-                                ),
-                              ],
+                                  Text(
+                                    currency?.format(signed) ??
+                                        signed.toStringAsFixed(2),
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: overdue
+                                          ? AppTheme.negative
+                                          : (positive
+                                              ? AppTheme.positive
+                                              : AppTheme.negative),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Enregistrer cette occurrence',
+                                    icon: const Icon(Icons.playlist_add_check),
+                                    onPressed: () =>
+                                        _recordOccurrence(context, bill),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         );
@@ -245,8 +265,15 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
     _autoExecute = bill?.autoExecute ?? RecurrenceAutoExecute.notify;
     _amountController.text = bill != null ? bill.amount.toStringAsFixed(2) : '';
     _limitedOccurrences = (bill?.numOccurrences ?? -1) >= 0;
-    _occurrencesController.text =
-        _limitedOccurrences ? bill!.numOccurrences.toString() : '';
+    // For the "dans/tous les X jours/mois" periods, NUMOCCURRENCES holds the
+    // interval X rather than a remaining-occurrences count (see
+    // recurrence.dart periodUsesXParam) - always show/edit it, independent
+    // of the "durée limitée" toggle which doesn't apply to these periods.
+    _occurrencesController.text = periodUsesXParam(_period)
+        ? (bill?.numOccurrences != null && bill!.numOccurrences > 0
+            ? bill.numOccurrences.toString()
+            : '1')
+        : (_limitedOccurrences ? bill!.numOccurrences.toString() : '');
     _notesController.text = bill?.notes ?? '';
   }
 
@@ -380,7 +407,13 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
                     .map((p) => DropdownMenuItem(
                         value: p, child: Text(recurrencePeriodLabel(p))))
                     .toList(),
-                onChanged: (v) => setState(() => _period = v ?? _period),
+                onChanged: (v) => setState(() {
+                  _period = v ?? _period;
+                  if (periodUsesXParam(_period) &&
+                      int.tryParse(_occurrencesController.text) == null) {
+                    _occurrencesController.text = '1';
+                  }
+                }),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<RecurrenceAutoExecute>(
@@ -401,28 +434,51 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
                     setState(() => _autoExecute = v ?? _autoExecute),
               ),
               const SizedBox(height: 12),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Duree limitee'),
-                subtitle: Text(_limitedOccurrences
-                    ? 'S\'arrete apres un nombre fixe d\'occurrences'
-                    : 'Se repete indefiniment'),
-                value: _limitedOccurrences,
-                onChanged: (v) => setState(() => _limitedOccurrences = v),
-              ),
-              if (_limitedOccurrences) ...[
-                const SizedBox(height: 12),
+              if (periodUsesXParam(_period)) ...[
+                // "Dans/tous les X jours/mois": NUMOCCURRENCES holds the
+                // interval X here, not a remaining-occurrences count, so
+                // "durée limitée" doesn't apply - MMEX hardcodes "tous les
+                // X" as repeating forever and "dans X" as exactly 2
+                // firings, X apart (see recurrence.dart periodIsFixedTwoShot
+                // and MmexRepository._advanceSchedule).
                 TextFormField(
                   controller: _occurrencesController,
-                  decoration: const InputDecoration(
-                      labelText: 'Nombre d\'occurrences restantes'),
+                  decoration: InputDecoration(
+                    labelText: _period == RecurrencePeriod.inXDays ||
+                            _period == RecurrencePeriod.everyXDays
+                        ? 'Nombre de jours'
+                        : 'Nombre de mois',
+                  ),
                   keyboardType: TextInputType.number,
-                  validator: (v) => _limitedOccurrences &&
-                          (int.tryParse(v ?? '') == null ||
-                              int.parse(v ?? '0') < 1)
+                  validator: (v) => (int.tryParse(v ?? '') == null ||
+                          int.parse(v ?? '0') < 1)
                       ? 'Nombre invalide'
                       : null,
                 ),
+              ] else ...[
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Duree limitee'),
+                  subtitle: Text(_limitedOccurrences
+                      ? 'S\'arrete apres un nombre fixe d\'occurrences'
+                      : 'Se repete indefiniment'),
+                  value: _limitedOccurrences,
+                  onChanged: (v) => setState(() => _limitedOccurrences = v),
+                ),
+                if (_limitedOccurrences) ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _occurrencesController,
+                    decoration: const InputDecoration(
+                        labelText: 'Nombre d\'occurrences restantes'),
+                    keyboardType: TextInputType.number,
+                    validator: (v) => _limitedOccurrences &&
+                            (int.tryParse(v ?? '') == null ||
+                                int.parse(v ?? '0') < 1)
+                        ? 'Nombre invalide'
+                        : null,
+                  ),
+                ],
               ],
               const SizedBox(height: 12),
               TextFormField(
@@ -475,8 +531,9 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text);
     final isTransfer = _transCode == TransCode.transfer;
-    final numOccurrences =
-        _limitedOccurrences ? int.parse(_occurrencesController.text) : -1;
+    final numOccurrences = periodUsesXParam(_period)
+        ? int.parse(_occurrencesController.text)
+        : (_limitedOccurrences ? int.parse(_occurrencesController.text) : -1);
     if (widget.existing == null) {
       widget.repo.insertBillDeposit(
         accountId: _accountId!,

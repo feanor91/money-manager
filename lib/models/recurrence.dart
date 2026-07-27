@@ -14,16 +14,37 @@ enum RecurrencePeriod {
   daily,
   monthlyLastDay,
   monthlyLastBusinessDay,
+  inXDays,
+  inXMonths,
+  everyXDays,
+  everyXMonths,
 }
+
+/// True for the 4 periods (MMEX codes 11-14) that store their day/month
+/// interval in the NUMOCCURRENCES column instead of a remaining-occurrences
+/// count - see [periodIsFixedTwoShot] and `MmexRepository._advanceSchedule`.
+bool periodUsesXParam(RecurrencePeriod period) =>
+    period == RecurrencePeriod.inXDays ||
+    period == RecurrencePeriod.inXMonths ||
+    period == RecurrencePeriod.everyXDays ||
+    period == RecurrencePeriod.everyXMonths;
+
+/// True for "dans X jours/mois" (MMEX codes 11-12): per MMEX's own
+/// Repeat constructor, these always fire exactly twice (X apart), then the
+/// schedule collapses to a plain one-off and is deleted after the second
+/// firing - unlike "tous les X jours/mois" (13-14), which repeat forever.
+bool periodIsFixedTwoShot(RecurrencePeriod period) =>
+    period == RecurrencePeriod.inXDays || period == RecurrencePeriod.inXMonths;
 
 // Ground truth: MMEX's own REPEAT_TYPE enum (Model_Billsdeposits.h, stable
 // releases - not the in-progress 2026 rewrite, which uses a different
-// internal representation). Verified against the actual file format by
-// cross-checking against real bills: code 4 was previously mis-mapped here
-// to "monthly, last day" - it's actually "every 2 months", and the real
-// "last day of month" is code 15, not 4. That bug silently mis-scheduled
-// any bimonthly bill (confirmed: 2 in this project's own test database) as
-// monthly instead.
+// internal representation, though it preserves the same on-disk codes -
+// see src/data/_DataEnum.cpp RepeatFreq::s_choice_a in moneymanagerex/).
+// Verified against the actual file format by cross-checking against real
+// bills: code 4 was previously mis-mapped here to "monthly, last day" -
+// it's actually "every 2 months", and the real "last day of month" is code
+// 15, not 4. That bug silently mis-scheduled any bimonthly bill (confirmed:
+// 2 in this project's own test database) as monthly instead.
 const _periodBaseCodes = <RecurrencePeriod, int>{
   RecurrencePeriod.none: 0,
   RecurrencePeriod.weekly: 1,
@@ -36,11 +57,10 @@ const _periodBaseCodes = <RecurrencePeriod, int>{
   RecurrencePeriod.fourMonths: 8,
   RecurrencePeriod.fourWeeks: 9,
   RecurrencePeriod.daily: 10,
-  // 11-14 (REPEAT_IN_X_DAYS/MONTHS, REPEAT_EVERY_X_DAYS/MONTHS) are not yet
-  // supported - see ROADMAP.md. They reuse NUMOCCURRENCES as the "every N
-  // days/months" interval itself rather than a remaining-occurrences
-  // counter, which conflicts with how this app currently uses that field
-  // for "durée limitée" and needs its own UI, not just a mapping entry.
+  RecurrencePeriod.inXDays: 11,
+  RecurrencePeriod.inXMonths: 12,
+  RecurrencePeriod.everyXDays: 13,
+  RecurrencePeriod.everyXMonths: 14,
   RecurrencePeriod.monthlyLastDay: 15,
   RecurrencePeriod.monthlyLastBusinessDay: 16,
 };
@@ -73,7 +93,22 @@ String recurrencePeriodLabel(RecurrencePeriod period) {
       return 'Mensuelle (dernier jour du mois)';
     case RecurrencePeriod.monthlyLastBusinessDay:
       return 'Mensuelle (dernier jour ouvré)';
+    case RecurrencePeriod.inXDays:
+      return 'Dans (n) jours';
+    case RecurrencePeriod.inXMonths:
+      return 'Dans (n) mois';
+    case RecurrencePeriod.everyXDays:
+      return 'Tous les (n) jours';
+    case RecurrencePeriod.everyXMonths:
+      return 'Tous les (n) mois';
   }
+}
+
+/// Same as [recurrencePeriodLabel] but with the "(n)" placeholder filled in
+/// for the 4 periods that need it - see [periodUsesXParam].
+String recurrencePeriodLabelWithX(RecurrencePeriod period, int x) {
+  final label = recurrencePeriodLabel(period);
+  return periodUsesXParam(period) ? label.replaceFirst('(n)', '$x') : label;
 }
 
 /// MMEX encodes REPEATS as a base period code (see [_periodBaseCodes]) plus

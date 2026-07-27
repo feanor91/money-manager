@@ -398,6 +398,7 @@ class MmexRepository {
     };
 
     for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
       final involvesAccount = accountId == null ||
           bill.accountId == accountId ||
           bill.toAccountId == accountId;
@@ -482,6 +483,7 @@ class MmexRepository {
     };
 
     for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
       final involvesAccount = accountId == null ||
           bill.accountId == accountId ||
           bill.toAccountId == accountId;
@@ -496,6 +498,77 @@ class MmexRepository {
         result[bucket] = current + signedAmount;
       }
     }
+    return result;
+  }
+
+  /// Projects [accountId]'s balance forward from today to [targetDate]
+  /// using only known recurring transactions (see [recurringDailyNet]) -
+  /// the same mechanical projection the forecast chart uses, collapsed to a
+  /// single final figure. Returns the plain current balance if [targetDate]
+  /// isn't in the future.
+  double forecastAccountBalance(int accountId, DateTime targetDate) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final target = DateTime(targetDate.year, targetDate.month, targetDate.day);
+    final balance = accountBalance(accountId, asOf: now);
+    if (!target.isAfter(today)) return balance;
+
+    final recurring = recurringDailyNet(
+      anchor: target,
+      days: _daysBetween(today, target) + 1,
+      accountId: accountId,
+    );
+    var total = balance;
+    var cursor = _addDays(today, 1);
+    while (!cursor.isAfter(target)) {
+      total += recurring[cursor] ?? 0.0;
+      cursor = _addDays(cursor, 1);
+    }
+    return total;
+  }
+
+  /// Whole calendar days from [a] to [b] (both taken as local dates,
+  /// ignoring time-of-day). Computed via UTC dates - which have no DST -
+  /// so a `.difference().inDays` spanning a spring-forward/fall-back
+  /// transition can't come out one day short or long the way local-time
+  /// difference can.
+  static int _daysBetween(DateTime a, DateTime b) {
+    final utcA = DateTime.utc(a.year, a.month, a.day);
+    final utcB = DateTime.utc(b.year, b.month, b.day);
+    return utcB.difference(utcA).inDays;
+  }
+
+  /// Every individual recurring-transaction occurrence between [start] and
+  /// [end] (inclusive), with enough detail (label, date, signed amount) to
+  /// annotate a forecast chart - unlike [recurringDailyNet], which only
+  /// returns the day's aggregated total and loses which bill(s) made it up.
+  List<RecurringOccurrence> recurringOccurrencesInRange({
+    required DateTime start,
+    required DateTime end,
+    int? accountId,
+  }) {
+    final payees = {for (final p in getPayees(onlyActive: false)) p.id: p};
+    final accounts = {for (final a in getAccounts()) a.id: a};
+    final result = <RecurringOccurrence>[];
+
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      final involvesAccount = accountId == null ||
+          bill.accountId == accountId ||
+          bill.toAccountId == accountId;
+      if (!involvesAccount) continue;
+      if (accountId == null && bill.transCode == TransCode.transfer) continue;
+
+      final signedAmount = _billSignedAmount(bill, accountId);
+      final label = bill.transCode == TransCode.transfer
+          ? '${accounts[bill.accountId]?.name ?? '?'} -> ${accounts[bill.toAccountId]?.name ?? '?'}'
+          : (payees[bill.payeeId]?.name ?? 'Paye inconnu');
+
+      for (final occurrence in _occurrencesInRange(bill, start, end)) {
+        result.add(RecurringOccurrence(date: occurrence, label: label, signedAmount: signedAmount));
+      }
+    }
+    result.sort((a, b) => a.date.compareTo(b.date));
     return result;
   }
 
@@ -547,7 +620,48 @@ class MmexRepository {
 
   List<BillDeposit> getBillDeposits() {
     final rows = db.query('SELECT * FROM BILLSDEPOSITS_V1 ORDER BY NEXTOCCURRENCEDATE ASC');
-    return rows.map(BillDeposit.fromRow).toList();
+    final pausedIds = getPausedBillIds();
+    return rows
+        .map((row) => BillDeposit.fromRow(row, paused: pausedIds.contains(row['BDID'] as int)))
+        .toList();
+  }
+
+  static const _pausedBillsInfoName = 'MMEXFLUTTER_PAUSED_BILLS';
+
+  /// Ids of recurring templates the user paused - stored as a
+  /// comma-separated list in INFOTABLE_V1 (MMEX's own generic settings
+  /// table, already used for e.g. BASECURRENCYID), under an app-specific
+  /// key so it never collides with anything MMEX itself reads/writes.
+  /// Deliberately NOT a schema change to BILLSDEPOSITS_V1: this way the
+  /// .mmb file stays a plain, portable MMEX database - opening it in the
+  /// real MMEX desktop app just ignores this extra row.
+  Set<int> getPausedBillIds() {
+    final rows = db.query("SELECT INFOVALUE FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
+    if (rows.isEmpty) return {};
+    final value = rows.first['INFOVALUE'] as String? ?? '';
+    return value.split(',').map(int.tryParse).whereType<int>().toSet();
+  }
+
+  void setBillPaused(int billId, bool paused) {
+    final ids = getPausedBillIds();
+    if (paused) {
+      ids.add(billId);
+    } else {
+      ids.remove(billId);
+    }
+    final value = ids.join(',');
+    final existing = db.query("SELECT INFOID FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
+    if (existing.isEmpty) {
+      db.execute(
+        'INSERT INTO INFOTABLE_V1 (INFONAME, INFOVALUE) VALUES (?, ?)',
+        [_pausedBillsInfoName, value],
+      );
+    } else {
+      db.execute(
+        'UPDATE INFOTABLE_V1 SET INFOVALUE = ? WHERE INFONAME = ?',
+        [value, _pausedBillsInfoName],
+      );
+    }
   }
 
   int insertBillDeposit({
@@ -612,9 +726,13 @@ class MmexRepository {
     db.execute('DELETE FROM BILLSDEPOSITS_V1 WHERE BDID = ?', [bdId]);
   }
 
-  /// Recurring templates whose next occurrence is due on or before [asOf].
+  /// Recurring templates whose next occurrence is due on or before [asOf] -
+  /// excludes paused templates (see [BillDeposit.paused]), which are never
+  /// auto-added nor projected.
   List<BillDeposit> getDueBillDeposits(DateTime asOf) {
-    return getBillDeposits().where((b) => !b.nextOccurrence.isAfter(asOf)).toList();
+    return getBillDeposits()
+        .where((b) => !b.paused && !b.nextOccurrence.isAfter(asOf))
+        .toList();
   }
 
   /// Records a single occurrence of [bill] as a real transaction dated
@@ -639,7 +757,7 @@ class MmexRepository {
     // from at least the template's own anchor so the schedule can't get
     // stuck repeating the same "next occurrence" forever.
     final advanceFrom = date.isAfter(bill.nextOccurrence) ? date : bill.nextOccurrence;
-    _advanceBillPastDate(bill, advanceFrom, occurrencesConsumed: 1);
+    _applyScheduleAdvance(bill, _advanceSchedule(bill, advanceFrom));
     return transId;
   }
 
@@ -647,10 +765,15 @@ class MmexRepository {
   /// occurrence and [asOf] (inclusive), recording each as a real
   /// transaction, then advances the template past [asOf]. Returns the
   /// inserted transaction ids.
+  ///
+  /// Never generates more occurrences than the template actually has left:
+  /// a limited ("durée limitée") bill stops exactly at its remaining count
+  /// even when [asOf] is far enough in the future to otherwise cover more
+  /// cycle dates - see [_advanceSchedule].
   List<int> catchUpBillDeposit(BillDeposit bill, DateTime asOf, {bool reconciled = false}) {
-    final occurrences = _occurrencesFrom(bill, bill.nextOccurrence, asOf);
+    final advance = _advanceSchedule(bill, asOf);
     final ids = <int>[];
-    for (final occurrence in occurrences) {
+    for (final occurrence in advance.occurrences) {
       ids.add(insertTransaction(
         accountId: bill.accountId,
         payeeId: bill.payeeId,
@@ -664,65 +787,98 @@ class MmexRepository {
         reconciled: reconciled,
       ));
     }
-    if (occurrences.isNotEmpty) {
-      _advanceBillPastDate(bill, asOf, occurrencesConsumed: occurrences.length);
+    if (advance.occurrences.isNotEmpty) {
+      _applyScheduleAdvance(bill, advance);
     }
     return ids;
   }
 
-  void _advanceBillPastDate(BillDeposit bill, DateTime date, {required int occurrencesConsumed}) {
-    final nextDue = _firstOccurrenceAfter(bill, date);
-    final remaining = bill.numOccurrences < 0 ? -1 : bill.numOccurrences - occurrencesConsumed;
-    if (remaining == 0) {
+  void _applyScheduleAdvance(BillDeposit bill, _ScheduleAdvance advance) {
+    if (advance.nextOccurrence == null) {
       deleteBillDeposit(bill.id);
       return;
     }
     db.execute(
-      'UPDATE BILLSDEPOSITS_V1 SET NEXTOCCURRENCEDATE = ?, NUMOCCURRENCES = ? WHERE BDID = ?',
-      [_isoDate(nextDue), remaining, bill.id],
+      'UPDATE BILLSDEPOSITS_V1 SET NEXTOCCURRENCEDATE = ?, REPEATS = ?, NUMOCCURRENCES = ? WHERE BDID = ?',
+      [
+        _isoDate(advance.nextOccurrence!),
+        encodeRepeats(advance.period, bill.autoExecute),
+        advance.numOccurrences,
+        bill.id,
+      ],
     );
   }
 
-  /// Every occurrence date of [bill]'s cycle from [from] up to and
-  /// including [to] (assumes [from] already sits on the cycle, i.e. is
-  /// itself a valid occurrence date such as the template's own
-  /// nextOccurrence).
-  List<DateTime> _occurrencesFrom(BillDeposit bill, DateTime from, DateTime to) {
-    final monthStep = _monthStepFor(bill.period);
-    final dayStep = _dayStepFor(bill.period);
-    final result = <DateTime>[];
-    var cursor = from;
-    var guard = 0;
-    while (!cursor.isAfter(to) && guard < 1000) {
-      result.add(cursor);
-      if (monthStep != null) {
-        cursor = _addMonths(cursor, monthStep);
-      } else if (dayStep != null) {
-        cursor = _addDays(cursor, dayStep);
-      } else {
-        break; // RecurrencePeriod.none: a one-off, never repeats.
-      }
-      guard++;
-    }
-    return result;
-  }
-
-  DateTime _firstOccurrenceAfter(BillDeposit bill, DateTime date) {
-    final monthStep = _monthStepFor(bill.period);
-    final dayStep = _dayStepFor(bill.period);
+  /// Walks [bill]'s schedule forward from its current next-occurrence date,
+  /// emitting every occurrence up to and including [through], and returns
+  /// where the template ends up afterwards. Mirrors MMEX's own
+  /// `SchedModel::reschedule_id`/`Repeat::next_repeat` (one occurrence at a
+  /// time) instead of separately computing "how many occurrences" and
+  /// "what's the next date" - the two must stay in lockstep, or a limited
+  /// ("durée limitée") template can fire more real transactions than its
+  /// remaining count allows and then, because a negative leftover count
+  /// reads as "unlimited" (see [BillDeposit.numOccurrences]), keep firing
+  /// forever afterwards instead of stopping.
+  ///
+  /// [RecurrencePeriod.inXDays]/[inXMonths] follow MMEX's own semantics for
+  /// these: NUMOCCURRENCES holds the day/month interval X, not a count, and
+  /// the *first* firing always converts the schedule into a plain one-off
+  /// due X (days/months) later - i.e. exactly two firings, X apart, ever -
+  /// matching `Repeat`'s constructor (`m_num = 2` for `is_in_x`) and
+  /// `next_repeat` (converts to `e_once` once `m_num == 1`).
+  /// [RecurrencePeriod.everyXDays]/[everyXMonths] instead repeat forever
+  /// with that interval, exactly like `is_every_x` hardcoding `m_num = -1`
+  /// (see moneymanagerex/src/data/_Repeat.cpp).
+  _ScheduleAdvance _advanceSchedule(BillDeposit bill, DateTime through) {
+    final occurrences = <DateTime>[];
+    var period = bill.period;
+    var count = bill.numOccurrences;
     var cursor = bill.nextOccurrence;
     var guard = 0;
-    while (!cursor.isAfter(date) && guard < 1000) {
+    var exhausted = false;
+
+    while (!cursor.isAfter(through) && guard < 1000) {
+      guard++;
+      occurrences.add(cursor);
+
+      if (period == RecurrencePeriod.inXDays || period == RecurrencePeriod.inXMonths) {
+        final x = count > 0 ? count : 1;
+        cursor = period == RecurrencePeriod.inXDays ? _addDays(cursor, x) : _addMonths(cursor, x);
+        period = RecurrencePeriod.none;
+        count = 1;
+        continue;
+      }
+      if (period == RecurrencePeriod.everyXDays || period == RecurrencePeriod.everyXMonths) {
+        final x = count > 0 ? count : 1;
+        cursor = period == RecurrencePeriod.everyXDays ? _addDays(cursor, x) : _addMonths(cursor, x);
+        continue; // always infinite - count keeps holding the interval X.
+      }
+
+      if (count > 0) {
+        count -= 1;
+        if (count == 0) {
+          exhausted = true;
+          break;
+        }
+      }
+      final monthStep = _monthStepForPeriod(period);
+      final dayStep = _dayStepForPeriod(period);
       if (monthStep != null) {
-        cursor = _addMonths(cursor, monthStep);
+        cursor = _stepMonths(cursor, monthStep, period);
       } else if (dayStep != null) {
         cursor = _addDays(cursor, dayStep);
       } else {
-        return cursor;
+        exhausted = true; // RecurrencePeriod.none: a one-off, never repeats.
+        break;
       }
-      guard++;
     }
-    return cursor;
+
+    return _ScheduleAdvance(
+      occurrences: occurrences,
+      nextOccurrence: exhausted ? null : cursor,
+      period: period,
+      numOccurrences: count,
+    );
   }
 
   /// Mechanically projects every recurring transaction template forward
@@ -745,6 +901,7 @@ class MmexRepository {
     };
 
     for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
       final involvesAccount = accountId == null ||
           bill.accountId == accountId ||
           bill.toAccountId == accountId;
@@ -774,25 +931,41 @@ class MmexRepository {
         rangeStart.isBefore(bill.nextOccurrence) ? bill.nextOccurrence : rangeStart;
     if (effectiveStart.isAfter(rangeEnd)) return occurrences;
 
-    final monthStep = _monthStepFor(bill.period);
+    // "Dans X jours/mois": always exactly 2 firings, X apart, then done -
+    // not a genuine indefinite cycle to project forward/backward like the
+    // other periods (see _advanceSchedule).
+    if (periodIsFixedTwoShot(bill.period)) {
+      final x = bill.numOccurrences > 0 ? bill.numOccurrences : 1;
+      final second = bill.period == RecurrencePeriod.inXDays
+          ? _addDays(bill.nextOccurrence, x)
+          : _addMonths(bill.nextOccurrence, x);
+      for (final occurrence in [bill.nextOccurrence, second]) {
+        if (!occurrence.isBefore(effectiveStart) && !occurrence.isAfter(rangeEnd)) {
+          occurrences.add(occurrence);
+        }
+      }
+      return occurrences;
+    }
+
+    final monthStep = _monthStepForBill(bill);
     if (monthStep != null) {
       var cursor = bill.nextOccurrence;
       var guard = 0;
       while (!cursor.isBefore(effectiveStart) && guard < 1000) {
-        cursor = _addMonths(cursor, -monthStep);
+        cursor = _stepMonths(cursor, -monthStep, bill.period);
         guard++;
       }
-      cursor = _addMonths(cursor, monthStep);
+      cursor = _stepMonths(cursor, monthStep, bill.period);
       guard = 0;
       while (!cursor.isAfter(rangeEnd) && guard < 1000) {
         occurrences.add(cursor);
-        cursor = _addMonths(cursor, monthStep);
+        cursor = _stepMonths(cursor, monthStep, bill.period);
         guard++;
       }
       return occurrences;
     }
 
-    final dayStep = _dayStepFor(bill.period);
+    final dayStep = _dayStepForBill(bill);
     if (dayStep == null) return occurrences; // RecurrencePeriod.none: one-off, not recurring.
     var cursor = bill.nextOccurrence;
     var guard = 0;
@@ -810,18 +983,15 @@ class MmexRepository {
     return occurrences;
   }
 
-  int? _monthStepFor(RecurrencePeriod period) {
+  /// Month step for periods whose interval is fixed by the period itself.
+  /// [RecurrencePeriod.inXDays]/[inXMonths]/[everyXDays]/[everyXMonths] are
+  /// deliberately absent here - the "in X" ones are always exactly 2 shots
+  /// (handled directly in [_occurrencesInRange]/[_advanceSchedule]), and
+  /// "every X" needs the bill's own NUMOCCURRENCES for its interval, so it
+  /// goes through [_monthStepForBill]/[_dayStepForBill] instead.
+  int? _monthStepForPeriod(RecurrencePeriod period) {
     switch (period) {
       case RecurrencePeriod.monthly:
-      // _addMonths below clamps to the target month's last day when the
-      // origin day doesn't exist there (e.g. day 31 in a 30-day month),
-      // but doesn't force EVERY occurrence onto the actual last day the
-      // way MMEX's own REPEAT_MONTHLY_LAST_DAY/_LAST_BUSINESS_DAY do - a
-      // bill starting mid-month (e.g. the 30th) would drift instead of
-      // landing on each month's true last day. Not yet hit by any real
-      // bill in this project's own data, but worth fixing properly
-      // (dedicated end-of-month occurrence generation) before relying on
-      // it - see ROADMAP.md.
       case RecurrencePeriod.monthlyLastDay:
       case RecurrencePeriod.monthlyLastBusinessDay:
         return 1;
@@ -840,7 +1010,7 @@ class MmexRepository {
     }
   }
 
-  int? _dayStepFor(RecurrencePeriod period) {
+  int? _dayStepForPeriod(RecurrencePeriod period) {
     switch (period) {
       case RecurrencePeriod.weekly:
         return 7;
@@ -855,12 +1025,58 @@ class MmexRepository {
     }
   }
 
+  int? _monthStepForBill(BillDeposit bill) {
+    if (bill.period == RecurrencePeriod.everyXMonths) {
+      return bill.numOccurrences > 0 ? bill.numOccurrences : 1;
+    }
+    return _monthStepForPeriod(bill.period);
+  }
+
+  int? _dayStepForBill(BillDeposit bill) {
+    if (bill.period == RecurrencePeriod.everyXDays) {
+      return bill.numOccurrences > 0 ? bill.numOccurrences : 1;
+    }
+    return _dayStepForPeriod(bill.period);
+  }
+
   DateTime _addMonths(DateTime date, int months) {
     final total = date.year * 12 + (date.month - 1) + months;
     final year = total ~/ 12;
     final month = total % 12 + 1;
     final lastDayOfMonth = DateTime(year, month + 1, 0).day;
     return DateTime(year, month, date.day > lastDayOfMonth ? lastDayOfMonth : date.day);
+  }
+
+  /// Steps [date] forward (or back, for negative [months]) by [months]
+  /// calendar months, snapping the result onto the true last calendar day
+  /// (and, for [RecurrencePeriod.monthlyLastBusinessDay], the last weekday)
+  /// of the destination month when [period] calls for it - mirroring
+  /// MMEX's own `Repeat::next_date` (`moneymanagerex/src/data/_Repeat.cpp`),
+  /// which does this explicitly via `SetToLastMonthDay`/`SetToPrevWeekDay`
+  /// rather than relying on [_addMonths]'s generic same-day-of-month clamp.
+  /// Without this, a bill starting on, say, the 15th would drift to "15th
+  /// of each month" instead of landing on each month's actual last
+  /// (business) day.
+  DateTime _stepMonths(DateTime date, int months, RecurrencePeriod period) {
+    var next = _addMonths(date, months);
+    if (period == RecurrencePeriod.monthlyLastDay ||
+        period == RecurrencePeriod.monthlyLastBusinessDay) {
+      next = _lastDayOfMonth(next);
+      if (period == RecurrencePeriod.monthlyLastBusinessDay) {
+        next = _lastBusinessDay(next);
+      }
+    }
+    return next;
+  }
+
+  DateTime _lastDayOfMonth(DateTime date) => DateTime(date.year, date.month + 1, 0);
+
+  DateTime _lastBusinessDay(DateTime date) {
+    var d = date;
+    while (d.weekday == DateTime.saturday || d.weekday == DateTime.sunday) {
+      d = _addDays(d, -1);
+    }
+    return d;
   }
 
   // ---- Budgets ----------------------------------------------------
@@ -950,4 +1166,30 @@ class MmexRepository {
         return 'None';
     }
   }
+}
+
+/// A single dated, labelled, signed occurrence of a recurring transaction -
+/// see [MmexRepository.recurringOccurrencesInRange].
+class RecurringOccurrence {
+  final DateTime date;
+  final String label;
+  final double signedAmount;
+
+  RecurringOccurrence({required this.date, required this.label, required this.signedAmount});
+}
+
+/// Result of walking a [BillDeposit]'s schedule forward - see
+/// [MmexRepository._advanceSchedule].
+class _ScheduleAdvance {
+  final List<DateTime> occurrences;
+  final DateTime? nextOccurrence; // null => template exhausted, delete it.
+  final RecurrencePeriod period;
+  final int numOccurrences;
+
+  _ScheduleAdvance({
+    required this.occurrences,
+    required this.nextOccurrence,
+    required this.period,
+    required this.numOccurrences,
+  });
 }
