@@ -95,6 +95,10 @@ class ForecastChart extends StatefulWidget {
 class _ForecastChartState extends State<ForecastChart> {
   ForecastDuration _duration = ForecastDuration.oneMonth;
 
+  /// Chart vs. tabular ("Vue tableau", see ROADMAP.md) view of the same
+  /// data - the duration/simulation controls stay the same either way.
+  bool _showAsTable = false;
+
   /// Simulated "what-if" purchase: null means no simulation active.
   double? _simAmount;
   int _simInstallments = 1;
@@ -160,6 +164,11 @@ class _ForecastChartState extends State<ForecastChart> {
               ),
               const SizedBox(width: 8),
               IconButton(
+                tooltip: _showAsTable ? 'Afficher le graphique' : 'Afficher la liste',
+                onPressed: () => setState(() => _showAsTable = !_showAsTable),
+                icon: Icon(_showAsTable ? Icons.show_chart : Icons.table_rows_outlined),
+              ),
+              IconButton(
                 tooltip: 'Simuler un achat',
                 onPressed: () => _openSimulationDialog(context),
                 icon: Icon(
@@ -199,7 +208,11 @@ class _ForecastChartState extends State<ForecastChart> {
             ),
           ],
           const SizedBox(height: 8),
-          Expanded(child: _buildChart(points, simulatedPoints, currency)),
+          Expanded(
+            child: _showAsTable
+                ? _buildOperationsList(points, currency)
+                : _buildChart(points, simulatedPoints, currency),
+          ),
         ],
       ),
     );
@@ -219,6 +232,95 @@ class _ForecastChartState extends State<ForecastChart> {
       grouped.putIfAbsent(occurrence.date, () => []).add(occurrence);
     }
     return grouped;
+  }
+
+  /// Tabular alternative to the chart ("Vue tableau", see ROADMAP.md):
+  /// every recurring occurrence in the selected window (plus the simulated
+  /// purchase's installments, if any), one row each, styled like
+  /// [TransactionTile] - each row also shows that day's running projected
+  /// balance (shared across every operation on the same day, since the
+  /// underlying data is bucketed by day, not by individual transaction).
+  Widget _buildOperationsList(List<_Point> points, CurrencyFormat? currency) {
+    if (points.isEmpty) return const SizedBox.shrink();
+
+    final grouped = _groupedOccurrences(points);
+    final dayIndex = {for (var i = 0; i < points.length; i++) points[i].day: i};
+
+    final rows = <_ForecastRow>[
+      for (final occurrences in grouped.values)
+        for (final o in occurrences)
+          _ForecastRow(date: o.date, label: o.label, amount: o.signedAmount, simulated: false),
+    ];
+    if (_simAmount != null) {
+      final perInstallment = _simAmount! / _simInstallments;
+      for (var i = 0; i < _simInstallments; i++) {
+        rows.add(_ForecastRow(
+          date: _addMonths(points.first.day, i),
+          label: 'Achat simule',
+          amount: -perInstallment,
+          simulated: true,
+        ));
+      }
+    }
+    rows.sort((a, b) => a.date.compareTo(b.date));
+
+    if (rows.isEmpty) {
+      return const Center(child: Text('Aucune operation prevue sur cette periode.'));
+    }
+
+    final dateFormat = DateFormat('EEEE d MMMM yyyy', 'fr_FR');
+    return ListView.separated(
+      itemCount: rows.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, i) {
+        final row = rows[i];
+        final positive = row.amount >= 0;
+        final dayBalance = dayIndex[row.date] != null ? points[dayIndex[row.date]!].cumulative : null;
+        return ListTile(
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          leading: CircleAvatar(
+            backgroundColor: (positive ? AppTheme.positive : AppTheme.negative).withValues(alpha: 0.12),
+            child: Icon(
+              row.simulated
+                  ? Icons.shopping_cart_outlined
+                  : (positive ? Icons.south_west : Icons.north_east),
+              color: positive ? AppTheme.positive : AppTheme.negative,
+              size: 16,
+            ),
+          ),
+          title: Text(
+            row.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontStyle: row.simulated ? FontStyle.italic : FontStyle.normal),
+          ),
+          subtitle: Text(
+            '${dateFormat.format(row.date)}${row.simulated ? ' - simulation' : ''}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          trailing: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                currency?.format(row.amount) ?? row.amount.toStringAsFixed(2),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: positive ? AppTheme.positive : AppTheme.negative,
+                ),
+              ),
+              if (dayBalance != null)
+                Text(
+                  'Solde : ${currency?.format(dayBalance) ?? dayBalance.toStringAsFixed(2)}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+                ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openSimulationDialog(BuildContext context) async {
@@ -610,6 +712,17 @@ class _Segment {
   final bool projected;
 
   _Segment(this.spots, this.positive, this.projected);
+}
+
+/// One row of the tabular forecast view - see
+/// [_ForecastChartState._buildOperationsList].
+class _ForecastRow {
+  final DateTime date;
+  final String label;
+  final double amount;
+  final bool simulated;
+
+  _ForecastRow({required this.date, required this.label, required this.amount, required this.simulated});
 }
 
 class _RangeLabel extends StatelessWidget {
