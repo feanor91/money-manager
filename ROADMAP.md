@@ -50,13 +50,22 @@ détail de ce qui vient d'être réglé.
   plus du solde du jour, le solde projeté à un jour du mois configurable
   (Paramètres, "Jour de prévision du solde", 24 par défaut - la veille
   d'une paye le 25).
+- ~~Thème clair/sombre~~ - **fait**, et élargi. 4 palettes de couleurs
+  (Indigo/Emeraude/Ardoise/Ambre) pilotent l'échelle de surfaces "tonale"
+  Material 3, donc le fond et les cartes se teintent vraiment (pas
+  seulement les boutons comme dans un premier essai). "Systeme"/"Clair"/
+  "Sombre" dans la même liste permettent de forcer manuellement la
+  luminosité au lieu de dépendre uniquement du systeme - le sombre est un
+  gris tres fonce, pas noir pur. Au passage, deux fonds de ligne codes en
+  dur en blanc (grand livre des transactions, liste des comptes) qui
+  cassaient le rendu en mode sombre ont ete corriges.
+- ~~Vue tableau pour la prévision de solde~~ - **fait**. Bascule
+  graphique/liste a cote du choix de duree : la liste presente chaque
+  operation prevue (style grand livre des transactions), avec le solde
+  du jour courant.
 
 ## Demandées
 
-- **Thème clair/sombre** (et peut-être d'autres palettes) - actuellement
-  l'app suit `ThemeMode.system` mais n'a qu'un seul thème clair réellement
-  soigné (`AppTheme.light()`) ; `AppTheme.dark()` existe mais mériterait
-  une vraie passe de design, pas juste un thème Material par défaut.
 - **Système de budget simple et efficace** - le suivi actuel (Budget par
   catégorie) est basique ; à repenser une fois qu'on sait ce qu'on veut en
   tirer (alertes de dépassement ? report d'un mois sur l'autre ? budget
@@ -66,10 +75,6 @@ détail de ce qui vient d'être réglé.
   macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
   d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
   reste à définir ce que "plus complet" veut dire concrètement.
-- **Vue tableau pour la prévision de solde** - en plus du graphique actuel,
-  une vue tabulaire des mêmes données (date/solde projeté/origine), comme
-  dans MMEX desktop. Plus facile à lire précisément qu'un graphique,
-  complémentaire plutôt que remplaçant.
 
 ## Suggestions (à valider avant de s'y lancer)
 
