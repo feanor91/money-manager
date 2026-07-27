@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../models/currency.dart';
@@ -10,6 +11,23 @@ import '../widgets/category_spend_bar.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
+
+/// The next occurrence (this month, or next if already passed) of [day]
+/// as a calendar day, clamped to the last day of whichever month doesn't
+/// have that many (e.g. day 31 in a 30-day month).
+DateTime _nextForecastDate(DateTime now, int day) {
+  DateTime clampedForMonth(int year, int month) {
+    final lastDay = DateTime(year, month + 1, 0).day;
+    return DateTime(year, month, day > lastDay ? lastDay : day);
+  }
+
+  final today = DateTime(now.year, now.month, now.day);
+  var target = clampedForMonth(now.year, now.month);
+  if (target.isBefore(today)) {
+    target = clampedForMonth(now.year, now.month + 1);
+  }
+  return target;
+}
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -62,6 +80,11 @@ class DashboardScreen extends StatelessWidget {
     final scopedBalance = balances[selectedAccountId] ?? 0;
 
     final now = DateTime.now();
+    final forecastDate = _nextForecastDate(now, dbProvider.forecastDay);
+    final forecastDateLabel = 'Prev. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
+    final forecastBalances = {
+      for (final a in accounts) a.id: repo.forecastAccountBalance(a.id, forecastDate)
+    };
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final spendByCategory =
         repo.categorySpendForMonth(now, accountId: selectedAccountId);
@@ -112,12 +135,14 @@ class DashboardScreen extends StatelessWidget {
                     label: accounts
                         .firstWhere((a) => a.id == selectedAccountId)
                         .name,
+                    forecastBalance: forecastBalances[selectedAccountId],
+                    forecastLabel: forecastDateLabel,
                   ),
                   const SizedBox(height: AppTheme.gridGap),
                   LayoutBuilder(builder: (context, constraints) {
-                    // Narrow widths need extra room: the segmented scale
-                    // button and axis labels can wrap onto more lines than
-                    // they do on a wide desktop layout.
+                    // Narrow widths need extra room: the duration dropdown
+                    // and axis labels can wrap onto more lines than they
+                    // do on a wide desktop layout.
                     final forecastHeight =
                         constraints.maxWidth < 480 ? 460.0 : 400.0;
                     return SizedBox(
@@ -173,6 +198,9 @@ class DashboardScreen extends StatelessWidget {
                                               account.id == selectedAccountId,
                                           onTap: () => dbProvider
                                               .selectAccount(account.id),
+                                          forecastBalance:
+                                              forecastBalances[account.id],
+                                          forecastLabel: forecastDateLabel,
                                         ),
                                         Positioned(
                                           top: 6,
@@ -220,6 +248,8 @@ class DashboardScreen extends StatelessWidget {
                                     selected: account.id == selectedAccountId,
                                     onTap: () =>
                                         dbProvider.selectAccount(account.id),
+                                    forecastBalance: forecastBalances[account.id],
+                                    forecastLabel: forecastDateLabel,
                                   ),
                                 ),
                             ],
@@ -300,8 +330,18 @@ class _TotalBalanceCard extends StatelessWidget {
   final CurrencyFormat? currency;
   final String label;
 
-  const _TotalBalanceCard(
-      {required this.total, required this.label, this.currency});
+  /// Projected total on [forecastLabel]'s date - see
+  /// [AccountBalanceCard.forecastBalance] for the rationale.
+  final double? forecastBalance;
+  final String? forecastLabel;
+
+  const _TotalBalanceCard({
+    required this.total,
+    required this.label,
+    this.currency,
+    this.forecastBalance,
+    this.forecastLabel,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -324,6 +364,15 @@ class _TotalBalanceCard extends StatelessWidget {
               letterSpacing: -1,
             ),
           ),
+          if (forecastBalance != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '$forecastLabel : ${currency?.format(forecastBalance!) ?? forecastBalance!.toStringAsFixed(2)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+            ),
+          ],
         ],
       ),
     );

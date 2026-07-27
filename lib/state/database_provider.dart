@@ -13,6 +13,7 @@ const _prefsKeyLastPath = 'mmex_last_db_path';
 const _prefsKeySelectedAccount = 'mmex_selected_account_id';
 const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
 const _prefsKeyAccountOrder = 'mmex_account_order';
+const _prefsKeyForecastDay = 'mmex_forecast_day';
 
 enum DbStatus {
   none,
@@ -110,6 +111,20 @@ class DatabaseProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
         _prefsKeyAccountOrder, orderedIds.map((id) => id.toString()).toList());
+  }
+
+  /// Day of month for the extra "solde previsionnel" figure shown on each
+  /// account card (e.g. 24, the day before a salary lands on the 25th) -
+  /// configurable since that date is different for everyone. A local app
+  /// preference, like [hiddenAccountIds].
+  int forecastDay = 24;
+  bool _forecastDayLoaded = false;
+
+  Future<void> setForecastDay(int day) async {
+    forecastDay = day.clamp(1, 31);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_prefsKeyForecastDay, forecastDay);
   }
 
   MmexRepository? get repository => _repository;
@@ -362,6 +377,11 @@ class DatabaseProvider extends ChangeNotifier {
           .whereType<int>()
           .toList();
       _accountOrderLoaded = true;
+    }
+    if (!_forecastDayLoaded) {
+      final prefs = await SharedPreferences.getInstance();
+      forecastDay = prefs.getInt(_prefsKeyForecastDay) ?? 24;
+      _forecastDayLoaded = true;
     }
   }
 

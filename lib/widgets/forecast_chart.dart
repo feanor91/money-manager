@@ -7,8 +7,6 @@ import '../models/currency.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 
-enum _Scale { day, week, month }
-
 /// Adds [days] *calendar* days to [date] - never `date.add(Duration(days:
 /// n))` for this. `Duration` addition is elapsed-time arithmetic in local
 /// time, so it drifts by an hour across a DST transition, silently
@@ -26,101 +24,56 @@ int _daysBetween(DateTime a, DateTime b) {
   return utcB.difference(utcA).inDays;
 }
 
-DateTime _weekStart(DateTime date) {
-  final d = DateTime(date.year, date.month, date.day);
-  // Dart's DateTime.weekday: Monday=1 ... Sunday=7. Weeks start on Sunday.
-  final daysSinceSunday = d.weekday % 7;
-  return _addDays(d, -daysSinceSunday);
+/// Adds [months] calendar months to [date], clamping the day of month to
+/// the destination month's actual last day when it doesn't have one (e.g.
+/// 31 January + 1 month -> 28/29 February).
+DateTime _addMonths(DateTime date, int months) {
+  final total = date.year * 12 + (date.month - 1) + months;
+  final year = total ~/ 12;
+  final month = total % 12 + 1;
+  final lastDayOfMonth = DateTime(year, month + 1, 0).day;
+  return DateTime(year, month, date.day > lastDayOfMonth ? lastDayOfMonth : date.day);
 }
 
-DateTime _monthStart(DateTime date) => DateTime(date.year, date.month, 1);
+/// How far ahead the forecast looks, always starting from today - see
+/// [ForecastChart].
+enum ForecastDuration { oneMonth, twoMonths, threeMonths, sixMonths, oneYear }
 
-/// Per-scale tuning: how many buckets are visible by default, how many
-/// extra trailing buckets to pull for the discretionary-average
-/// calculation, how far a "Passe"/"Futur" tap or a drag step moves, and how
-/// dates are formatted for that resolution.
-class _ScaleConfig {
-  final int windowSize;
-  final int historyPadding;
-  final int step;
-  final double pxPerUnit;
-  final int clampMin;
-  final int clampMax;
-  final String label;
-  final String Function(DateTime) axisFormat;
-  final String Function(DateTime) tooltipFormat;
-  final bool showAllLabels;
-  final bool showVerticalGrid;
+extension on ForecastDuration {
+  int get months => switch (this) {
+        ForecastDuration.oneMonth => 1,
+        ForecastDuration.twoMonths => 2,
+        ForecastDuration.threeMonths => 3,
+        ForecastDuration.sixMonths => 6,
+        ForecastDuration.oneYear => 12,
+      };
 
-  const _ScaleConfig({
-    required this.windowSize,
-    required this.historyPadding,
-    required this.step,
-    required this.pxPerUnit,
-    required this.clampMin,
-    required this.clampMax,
-    required this.label,
-    required this.axisFormat,
-    required this.tooltipFormat,
-    this.showAllLabels = false,
-    this.showVerticalGrid = false,
-  });
+  String get label => switch (this) {
+        ForecastDuration.oneMonth => '1 mois',
+        ForecastDuration.twoMonths => '2 mois',
+        ForecastDuration.threeMonths => '3 mois',
+        ForecastDuration.sixMonths => '6 mois',
+        ForecastDuration.oneYear => '1 an',
+      };
 }
 
-final Map<_Scale, _ScaleConfig> _scaleConfigs = {
-  _Scale.day: _ScaleConfig(
-    windowSize: 30,
-    historyPadding: 45,
-    step: 7,
-    pxPerUnit: 10,
-    clampMin: -730,
-    clampMax: 545,
-    label: 'Jour',
-    axisFormat: (d) => DateFormat('d MMMM yyyy', 'fr_FR').format(d),
-    tooltipFormat: (d) => DateFormat('EEEE d MMMM yyyy', 'fr_FR').format(d),
-    showAllLabels: true,
-    showVerticalGrid: true,
-  ),
-  _Scale.week: _ScaleConfig(
-    windowSize: 20,
-    historyPadding: 12,
-    step: 4,
-    pxPerUnit: 18,
-    clampMin: -104,
-    clampMax: 78,
-    label: 'Semaine',
-    axisFormat: (d) => DateFormat('d MMMM yyyy', 'fr_FR').format(d),
-    tooltipFormat: (d) => 'Semaine du ${DateFormat('d MMMM yyyy', 'fr_FR').format(d)}',
-  ),
-  _Scale.month: _ScaleConfig(
-    windowSize: 12,
-    historyPadding: 6,
-    step: 3,
-    pxPerUnit: 28,
-    clampMin: -36,
-    clampMax: 24,
-    label: 'Mois',
-    axisFormat: (d) => DateFormat('MMMM yyyy', 'fr_FR').format(d),
-    tooltipFormat: (d) => DateFormat('MMMM yyyy', 'fr_FR').format(d),
-  ),
-};
-
-/// One point of the forecast timeline (one day/week/month depending on the
-/// selected scale): an actual bucket from the ledger, or a projection
-/// (known recurring transactions only) when in the future.
+/// One point of the forecast timeline (one calendar day): the real balance
+/// for today, or a projection (known recurring transactions only) for every
+/// day after.
 class _Point {
-  final DateTime bucketStart;
+  final DateTime day;
   final double net;
   final double cumulative;
   final bool projected;
 
-  _Point(this.bucketStart, this.net, this.cumulative, this.projected);
+  _Point(this.day, this.net, this.cumulative, this.projected);
 }
 
-/// Bento card showing a scrollable/draggable balance forecast, at a
-/// selectable resolution (day/week/month): drag left to look further into
-/// the future (projected, dashed), drag right to look further into the
-/// past (actual history).
+/// Bento card showing the balance forecast from today forward, over a
+/// selectable duration (1/2/3/6/12 months), with an optional "what-if"
+/// simulated purchase (one-off or spread over up to 12 monthly
+/// installments) overlaid as a second line - never written to the
+/// database, purely a client-side projection.
 class ForecastChart extends StatefulWidget {
   final MmexRepository repository;
   final CurrencyFormat? currency;
@@ -140,18 +93,18 @@ class ForecastChart extends StatefulWidget {
 }
 
 class _ForecastChartState extends State<ForecastChart> {
-  _Scale _scale = _Scale.day;
-  int _offsetUnits = 0;
-  double _dragAccumulator = 0;
+  ForecastDuration _duration = ForecastDuration.oneMonth;
+
+  /// Simulated "what-if" purchase: null means no simulation active.
+  double? _simAmount;
+  int _simInstallments = 1;
 
   // `accountBalance(asOf:)` scans the account's whole transaction history -
-  // too expensive to redo on every rebuild, which fires on every few pixels
-  // of drag (see onHorizontalDragUpdate below) and was pegging the CPU hard
-  // enough to freeze the tab. It only actually changes once per calendar
-  // day, or when the account's data changes - and `widget.startingBalance`
-  // (the parent's all-time balance for this account) already changes
-  // exactly when the latter happens, so it doubles as a cheap invalidation
-  // signal without any extra plumbing.
+  // too expensive to redo on every rebuild. It only actually changes once
+  // per calendar day, or when the account's data changes - and
+  // `widget.startingBalance` (the parent's all-time balance for this
+  // account) already changes exactly when the latter happens, so it doubles
+  // as a cheap invalidation signal without any extra plumbing.
   int? _cachedBalanceAccountId;
   DateTime? _cachedBalanceDay;
   double? _cachedBalanceInput;
@@ -172,188 +125,252 @@ class _ForecastChartState extends State<ForecastChart> {
     return _cachedBalance;
   }
 
-  _ScaleConfig get _config => _scaleConfigs[_scale]!;
-
-  void _setScale(_Scale scale) {
-    if (scale == _scale) return;
-    setState(() {
-      _scale = scale;
-      _offsetUnits = 0;
-      _dragAccumulator = 0;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
     final points = _buildPoints(now);
+    final simulatedPoints = _buildSimulatedPoints(points);
     final currency = widget.currency;
-    final config = _config;
 
     return BentoCard(
       title: 'Prevision de solde',
-      trailing: _RangeLabel(points: points, format: config.axisFormat),
-      child: GestureDetector(
-        onHorizontalDragUpdate: (details) {
-          _dragAccumulator += details.delta.dx;
-          final pxPerUnit = config.pxPerUnit;
-          if (_dragAccumulator.abs() >= pxPerUnit) {
-            final steps = (_dragAccumulator / pxPerUnit).truncate();
-            setState(() {
-              _offsetUnits = (_offsetUnits - steps).clamp(config.clampMin, config.clampMax).toInt();
-              _dragAccumulator -= steps * pxPerUnit;
-            });
-          }
-        },
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SegmentedButton<_Scale>(
-              segments: [
-                for (final s in _Scale.values) ButtonSegment(value: s, label: Text(_scaleConfigs[s]!.label)),
-              ],
-              selected: {_scale},
-              showSelectedIcon: false,
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              onSelectionChanged: (s) => _setScale(s.first),
-            ),
-            const SizedBox(height: 8),
-            Expanded(child: _buildChart(points, currency, config)),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                TextButton.icon(
-                  onPressed: () => setState(
-                      () => _offsetUnits = (_offsetUnits - config.step).clamp(config.clampMin, config.clampMax).toInt()),
-                  icon: const Icon(Icons.chevron_left, size: 18),
-                  label: const Text('Passe'),
-                ),
-                if (_offsetUnits != 0)
-                  TextButton(
-                    onPressed: () => setState(() => _offsetUnits = 0),
-                    child: const Text("Aujourd'hui"),
+      trailing: _RangeLabel(points: points),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<ForecastDuration>(
+                  initialValue: _duration,
+                  isDense: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Duree affichee',
+                    isDense: true,
                   ),
-                TextButton.icon(
-                  onPressed: () => setState(
-                      () => _offsetUnits = (_offsetUnits + config.step).clamp(config.clampMin, config.clampMax).toInt()),
-                  icon: const Text('Futur'),
-                  label: const Icon(Icons.chevron_right, size: 18),
+                  items: [
+                    for (final d in ForecastDuration.values)
+                      DropdownMenuItem(value: d, child: Text(d.label)),
+                  ],
+                  onChanged: (d) {
+                    if (d == null) return;
+                    setState(() => _duration = d);
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Simuler un achat',
+                onPressed: () => _openSimulationDialog(context),
+                icon: Icon(
+                  Icons.add_shopping_cart,
+                  color: _simAmount != null ? AppTheme.accent : null,
+                ),
+              ),
+            ],
+          ),
+          if (_simAmount != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.circle, size: 10, color: Colors.orange.shade700),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _simInstallments > 1
+                        ? 'Simulation : ${currency?.format(_simAmount!) ?? _simAmount!.toStringAsFixed(2)} '
+                            'en $_simInstallments fois'
+                        : 'Simulation : ${currency?.format(_simAmount!) ?? _simAmount!.toStringAsFixed(2)} comptant',
+                    style: Theme.of(context).textTheme.bodySmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Effacer la simulation',
+                  icon: const Icon(Icons.close, size: 16),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => setState(() {
+                    _simAmount = null;
+                    _simInstallments = 1;
+                  }),
                 ),
               ],
+            ),
+          ],
+          const SizedBox(height: 8),
+          Expanded(child: _buildChart(points, simulatedPoints, currency)),
+        ],
+      ),
+    );
+  }
+
+  /// Every recurring-transaction occurrence within the currently displayed
+  /// window, grouped by day (several bills can fall on the same date).
+  Map<DateTime, List<RecurringOccurrence>> _groupedOccurrences(List<_Point> points) {
+    if (points.isEmpty) return {};
+    final occurrences = widget.repository.recurringOccurrencesInRange(
+      start: points.first.day,
+      end: points.last.day,
+      accountId: widget.accountId,
+    );
+    final grouped = <DateTime, List<RecurringOccurrence>>{};
+    for (final occurrence in occurrences) {
+      grouped.putIfAbsent(occurrence.date, () => []).add(occurrence);
+    }
+    return grouped;
+  }
+
+  Future<void> _openSimulationDialog(BuildContext context) async {
+    final amountController = TextEditingController(
+      text: _simAmount != null ? _simAmount!.toStringAsFixed(2) : '',
+    );
+    var installments = _simInstallments;
+    var multiple = _simInstallments > 1;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Simuler un achat'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: amountController,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Montant'),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Paiement en plusieurs fois'),
+                value: multiple,
+                onChanged: (v) => setDialogState(() => multiple = v),
+              ),
+              if (multiple)
+                DropdownButtonFormField<int>(
+                  initialValue: installments > 1 ? installments : 2,
+                  decoration: const InputDecoration(labelText: 'Nombre de mensualites'),
+                  items: [
+                    for (var n = 2; n <= 12; n++)
+                      DropdownMenuItem(value: n, child: Text('$n fois')),
+                  ],
+                  onChanged: (n) {
+                    if (n != null) setDialogState(() => installments = n);
+                  },
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final amount = double.tryParse(amountController.text.replaceAll(',', '.'));
+                if (amount == null || amount == 0) {
+                  Navigator.of(context).pop(false);
+                  return;
+                }
+                setState(() {
+                  _simAmount = amount;
+                  _simInstallments = multiple ? installments : 1;
+                });
+                Navigator.of(context).pop(true);
+              },
+              child: const Text('Appliquer'),
             ),
           ],
         ),
       ),
     );
+    if (result != true) return;
   }
 
+  /// Every day from today (inclusive) forward through the selected
+  /// duration: today uses the real balance-as-of-now (so any transaction
+  /// already recorded for today is reflected), every later day layers on
+  /// the mechanical recurring-transaction projection only.
   List<_Point> _buildPoints(DateTime now) {
-    switch (_scale) {
-      case _Scale.day:
-        return _buildGenericPoints(
-          now: DateTime(now.year, now.month, now.day),
-          // n may be negative (backward) or positive (forward).
-          shift: (d, n) => _addDays(d, n),
-          spanUnits: (a, b) => _daysBetween(a, b),
-          fetchHistory: (anchor, span) =>
-              widget.repository.dailyNetTotals(anchor: anchor, days: span, accountId: widget.accountId),
-          fetchRecurring: (anchor, span) =>
-              widget.repository.recurringDailyNet(anchor: anchor, days: span, accountId: widget.accountId),
-        );
-      case _Scale.week:
-        return _buildGenericPoints(
-          now: _weekStart(now),
-          shift: (d, n) => _addDays(d, 7 * n),
-          spanUnits: (a, b) => _daysBetween(a, b) ~/ 7,
-          fetchHistory: (anchor, span) =>
-              widget.repository.weeklyNetTotals(anchor: anchor, weeks: span, accountId: widget.accountId),
-          fetchRecurring: (anchor, span) =>
-              widget.repository.recurringWeeklyNet(anchor: anchor, weeks: span, accountId: widget.accountId),
-        );
-      case _Scale.month:
-        return _buildGenericPoints(
-          now: _monthStart(now),
-          shift: (d, n) => DateTime(d.year, d.month + n, 1),
-          spanUnits: (a, b) => (b.year - a.year) * 12 + (b.month - a.month),
-          fetchHistory: (anchor, span) =>
-              widget.repository.monthlyNetTotals(anchor: anchor, months: span, accountId: widget.accountId),
-          fetchRecurring: (anchor, span) =>
-              widget.repository.recurringMonthlyNet(anchor: anchor, months: span, accountId: widget.accountId),
-        );
-    }
-  }
+    final today = DateTime(now.year, now.month, now.day);
+    final endDate = _addMonths(today, _duration.months);
+    final totalDays = _daysBetween(today, endDate);
 
-  /// Shared point-building logic parameterized over the bucket unit
-  /// (day/week/month): walk from an "anchor" backward through history plus
-  /// forward into the visible+projected window, mixing real ledger values
-  /// (past/current buckets) with a projection (future buckets = known
-  /// recurring transactions for that bucket only - budget is not factored
-  /// in yet). [shift] moves a bucket start forward by n units (n negative
-  /// moves backward).
-  List<_Point> _buildGenericPoints({
-    required DateTime now,
-    required DateTime Function(DateTime d, int n) shift,
-    required int Function(DateTime, DateTime) spanUnits,
-    required Map<DateTime, double> Function(DateTime anchor, int span) fetchHistory,
-    required Map<DateTime, double> Function(DateTime anchor, int span) fetchRecurring,
-  }) {
-    final config = _config;
-    final endBucket = shift(now, _offsetUnits);
-    final start = shift(endBucket, -(config.windowSize - 1));
+    final recurring = widget.repository.recurringDailyNet(
+      anchor: endDate,
+      days: totalDays + 1,
+      accountId: widget.accountId,
+    );
 
-    final latestBucket = endBucket.isAfter(now) ? endBucket : now;
-    final earliestBucket = shift(start, -config.historyPadding);
-    final spanCount = spanUnits(earliestBucket, latestBucket) + 1;
-
-    final history = fetchHistory(latestBucket, spanCount);
-    final recurring = fetchRecurring(latestBucket, spanCount);
-
-    // `widget.startingBalance` sums every transaction on the account
-    // regardless of date (matching MMEX's own total), which can include
-    // postdated real entries the user already recorded for a known future
-    // expense - beyond `now`, so entirely outside what `history` covers.
-    // Anchoring the walk on that figure would bake those future amounts
-    // into every reconstructed *past* point too. Use the balance capped at
-    // `now` instead, then seed by subtracting the actual net change since
-    // `earliestBucket` (so the walk reconstructs `now`'s balance exactly,
-    // not overshooting it).
-    final balanceAsOfNow = _balanceAsOfNow(now);
-    final actualSinceEarliest = history.entries
-        .where((e) => !e.key.isBefore(earliestBucket) && !e.key.isAfter(now))
-        .fold(0.0, (sum, e) => sum + e.value);
-
-    final points = <_Point>[];
-    var cumulative = balanceAsOfNow - actualSinceEarliest;
-
-    var cursor = earliestBucket;
-    while (!cursor.isAfter(endBucket)) {
-      final isFuture = cursor.isAfter(now);
-      final net = isFuture ? (recurring[cursor] ?? 0) : (history[cursor] ?? 0.0);
+    final balanceNow = _balanceAsOfNow(now);
+    final points = <_Point>[_Point(today, 0, balanceNow, false)];
+    var cumulative = balanceNow;
+    var cursor = _addDays(today, 1);
+    while (!cursor.isAfter(endDate)) {
+      final net = recurring[cursor] ?? 0.0;
       cumulative += net;
-      if (!cursor.isBefore(start)) {
-        points.add(_Point(cursor, net, cumulative, isFuture));
-      }
-      cursor = shift(cursor, 1);
+      points.add(_Point(cursor, net, cumulative, true));
+      cursor = _addDays(cursor, 1);
     }
     return points;
   }
 
-  Widget _buildChart(List<_Point> points, CurrencyFormat? currency, _ScaleConfig config) {
+  /// Overlays a simulated purchase on top of [basePoints]: a one-off hits
+  /// today in full, an installment plan spreads it evenly across up to 12
+  /// consecutive monthly instalments starting today. Purely a display
+  /// overlay - never persisted.
+  List<_Point>? _buildSimulatedPoints(List<_Point> basePoints) {
+    final amount = _simAmount;
+    if (amount == null || basePoints.isEmpty) return null;
+
+    final perInstallment = amount / _simInstallments;
+    final impactDays = <DateTime>{
+      for (var i = 0; i < _simInstallments; i++) _addMonths(basePoints.first.day, i),
+    };
+
+    var extra = 0.0;
+    return [
+      for (final p in basePoints) ...[
+        () {
+          if (impactDays.contains(p.day)) extra -= perInstallment;
+          return _Point(p.day, p.net, p.cumulative + extra, p.projected);
+        }(),
+      ],
+    ];
+  }
+
+  Widget _buildChart(List<_Point> points, List<_Point>? simulatedPoints, CurrencyFormat? currency) {
     if (points.isEmpty) return const SizedBox.shrink();
 
     final segments = _buildSegments(points);
 
     // Always keep the zero line in view (whether the whole window is
     // positive, negative, or straddles both), so the balance's sign is
-    // never ambiguous.
-    final dataMin = points.map((p) => p.cumulative).reduce((a, b) => a < b ? a : b);
-    final dataMax = points.map((p) => p.cumulative).reduce((a, b) => a > b ? a : b);
+    // never ambiguous. The simulated line (if any) is folded into the
+    // min/max so it never gets clipped off the chart.
+    final allCumulative = [
+      ...points.map((p) => p.cumulative),
+      if (simulatedPoints != null) ...simulatedPoints.map((p) => p.cumulative),
+    ];
+    final dataMin = allCumulative.reduce((a, b) => a < b ? a : b);
+    final dataMax = allCumulative.reduce((a, b) => a > b ? a : b);
     final rangeMin = dataMin < 0 ? dataMin : 0.0;
     final rangeMax = dataMax > 0 ? dataMax : 0.0;
     final pad = ((rangeMax - rangeMin).abs() * 0.15).clamp(10, double.infinity).toDouble();
     final minY = rangeMin - pad;
     final maxY = rangeMax + pad;
+
+    final axisFormat = DateFormat(points.length > 120 ? 'MMM yyyy' : 'd MMM', 'fr_FR');
+    final tooltipFormat = DateFormat('EEEE d MMMM yyyy', 'fr_FR');
+    final labelInterval = (points.length / 6).clamp(1, 60).roundToDouble();
+    final grouped = _groupedOccurrences(points);
+    final occurrenceLines = _buildOccurrenceLines(points, grouped);
+    // Always the last series in lineBarsData - see its definition below.
+    final markerBarIndex = segments.length + (simulatedPoints != null ? 1 : 0);
 
     return LineChart(
       LineChartData(
@@ -368,11 +385,11 @@ class _ForecastChartState extends State<ForecastChart> {
               dashArray: [4, 4],
             ),
           ],
+          verticalLines: occurrenceLines,
         ),
         gridData: FlGridData(
           show: true,
-          drawVerticalLine: config.showVerticalGrid,
-          verticalInterval: 1,
+          drawVerticalLine: false,
           getDrawingVerticalLine: (_) => FlLine(color: Colors.grey.withValues(alpha: 0.25), strokeWidth: 1),
         ),
         borderData: FlBorderData(show: false),
@@ -383,16 +400,16 @@ class _ForecastChartState extends State<ForecastChart> {
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: config.showAllLabels ? 76 : 52,
-              interval: config.showAllLabels ? 1 : (points.length / 6).clamp(1, 30).roundToDouble(),
+              reservedSize: 52,
+              interval: labelInterval,
               getTitlesWidget: (value, meta) {
                 final i = value.round();
                 if (i < 0 || i >= points.length) return const SizedBox.shrink();
-                final label = config.axisFormat(points[i].bucketStart);
+                final label = axisFormat.format(points[i].day);
                 return Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: Transform.rotate(
-                    angle: config.showAllLabels ? -1.3 : -0.6,
+                    angle: -0.6,
                     alignment: Alignment.topCenter,
                     child: Text(label, style: const TextStyle(fontSize: 9)),
                   ),
@@ -403,23 +420,55 @@ class _ForecastChartState extends State<ForecastChart> {
         ),
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
+            fitInsideHorizontally: true,
+            fitInsideVertically: true,
             getTooltipItems: (spots) {
-              // The bridge point at the actual/projected transition exists
-              // in both bar series at the same x, which would otherwise
-              // render the same bucket/value twice in the tooltip.
-              final seenIndices = <int>{};
+              final seen = <String>{};
               final items = <LineTooltipItem?>[];
               for (final s in spots) {
                 final i = s.x.round();
-                if (!seenIndices.add(i)) {
+
+                if (s.barIndex == markerBarIndex) {
+                  if (!seen.add('marker:$i')) {
+                    items.add(null);
+                    continue;
+                  }
+                  final dayOccurrences = grouped[points[i].day];
+                  if (dayOccurrences == null || dayOccurrences.isEmpty) {
+                    items.add(null);
+                    continue;
+                  }
+                  final lines = dayOccurrences.map((o) {
+                    final amount = currency?.format(o.signedAmount) ?? o.signedAmount.toStringAsFixed(2);
+                    return '${o.label} : $amount';
+                  }).join('\n');
+                  var text = lines;
+                  if (dayOccurrences.length > 1) {
+                    final total = dayOccurrences.fold(0.0, (sum, o) => sum + o.signedAmount);
+                    final totalStr = currency?.format(total) ?? total.toStringAsFixed(2);
+                    text = '$lines\nTotal : $totalStr';
+                  }
+                  items.add(LineTooltipItem(
+                    text,
+                    const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                  ));
+                  continue;
+                }
+
+                final isSimulated = simulatedPoints != null && s.barIndex == segments.length;
+                final key = isSimulated ? 'sim:$i' : 'base:$i';
+                if (!seen.add(key)) {
                   items.add(null);
                   continue;
                 }
-                final p = points[i];
+                final p = isSimulated ? simulatedPoints[i] : points[i];
                 final value = currency?.format(p.cumulative) ?? p.cumulative.toStringAsFixed(2);
-                final label = config.tooltipFormat(p.bucketStart);
+                final label = tooltipFormat.format(p.day);
+                final suffix = isSimulated
+                    ? ' (avec achat simule)'
+                    : (p.projected ? ' (prevision)' : '');
                 items.add(LineTooltipItem(
-                  '$label\n$value${p.projected ? ' (prevision)' : ''}',
+                  '$label\n$value$suffix',
                   const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
                 ));
               }
@@ -447,19 +496,63 @@ class _ForecastChartState extends State<ForecastChart> {
                 color: (segment.positive ? AppTheme.accent : AppTheme.negative).withValues(alpha: 0.12),
               ),
             ),
+          if (simulatedPoints != null)
+            LineChartBarData(
+              spots: [
+                for (var i = 0; i < simulatedPoints.length; i++)
+                  FlSpot(i.toDouble(), simulatedPoints[i].cumulative),
+              ],
+              isCurved: false,
+              color: Colors.orange.shade700,
+              barWidth: 2.5,
+              dashArray: [2, 3],
+              dotData: const FlDotData(show: false),
+            ),
+          // Invisible series, one spot per day: exists purely so hovering
+          // over a day with recurring occurrences (see [_groupedOccurrences])
+          // registers a touch and can show their tooltip, without drawing
+          // anything itself.
+          LineChartBarData(
+            spots: [for (var i = 0; i < points.length; i++) FlSpot(i.toDouble(), points[i].cumulative)],
+            color: Colors.transparent,
+            barWidth: 0,
+            dotData: const FlDotData(show: false),
+          ),
         ],
       ),
     );
+  }
+
+  /// One dashed red vertical line per day that has at least one recurring
+  /// occurrence in [points]' range - no permanent text (that would clutter
+  /// the chart when there are many), just the marker. Details show up in a
+  /// tooltip on hover instead, via the invisible per-day touch series in
+  /// [_buildChart].
+  List<VerticalLine> _buildOccurrenceLines(
+    List<_Point> points,
+    Map<DateTime, List<RecurringOccurrence>> grouped,
+  ) {
+    if (grouped.isEmpty) return [];
+    final dayIndex = {for (var i = 0; i < points.length; i++) points[i].day: i};
+
+    return [
+      for (final day in grouped.keys)
+        if (dayIndex[day] != null)
+          VerticalLine(
+            x: dayIndex[day]!.toDouble(),
+            color: Colors.red.withValues(alpha: 0.55),
+            strokeWidth: 1.3,
+            dashArray: [4, 3],
+          ),
+    ];
   }
 
   /// Splits the timeline into runs that share the same sign (for colour:
   /// blue above zero, red below) and the same actual/projected status (for
   /// dashing). A sign change between two adjacent points is cut exactly at
   /// its interpolated zero-crossing (not at the surrounding data points),
-  /// otherwise the whole day-to-day segment inherits its start point's
-  /// colour and the new-sign side is left with a single, unrenderable
-  /// point - which is why a rising line used to stay red long after the
-  /// real balance had turned positive.
+  /// otherwise the whole segment inherits its start point's colour and the
+  /// new-sign side is left with a single, unrenderable point.
   List<_Segment> _buildSegments(List<_Point> points) {
     final segments = <_Segment>[];
     var spots = <FlSpot>[];
@@ -521,15 +614,15 @@ class _Segment {
 
 class _RangeLabel extends StatelessWidget {
   final List<_Point> points;
-  final String Function(DateTime) format;
 
-  const _RangeLabel({required this.points, required this.format});
+  const _RangeLabel({required this.points});
 
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) return const SizedBox.shrink();
-    final first = format(points.first.bucketStart);
-    final last = format(points.last.bucketStart);
+    final format = DateFormat('d MMMM yyyy', 'fr_FR');
+    final first = format.format(points.first.day);
+    final last = format.format(points.last.day);
     return Text(
       '$first - $last',
       style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),

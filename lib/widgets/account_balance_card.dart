@@ -34,6 +34,12 @@ class AccountBalanceCard extends StatelessWidget {
   final bool selected;
   final VoidCallback? onTap;
 
+  /// Projected balance on [forecastLabel]'s date (e.g. "Prev. au 24 juil."),
+  /// using known recurring transactions only - see
+  /// [MmexRepository.forecastAccountBalance]. Null hides the row entirely.
+  final double? forecastBalance;
+  final String? forecastLabel;
+
   const AccountBalanceCard({
     super.key,
     required this.account,
@@ -41,6 +47,8 @@ class AccountBalanceCard extends StatelessWidget {
     this.currency,
     this.selected = false,
     this.onTap,
+    this.forecastBalance,
+    this.forecastLabel,
   });
 
   @override
@@ -86,6 +94,17 @@ class AccountBalanceCard extends StatelessWidget {
                       fontWeight: FontWeight.w800,
                     ),
               ),
+              if (forecastBalance != null) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '$forecastLabel : ${currency?.format(forecastBalance!) ?? forecastBalance!.toStringAsFixed(2)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: forecastBalance! >= 0 ? AppTheme.positive : AppTheme.negative,
+                      ),
+                ),
+              ],
             ],
           ),
         ),

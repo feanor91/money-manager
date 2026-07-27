@@ -66,6 +66,26 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.event_outlined),
+              title: const Text('Jour de prevision du solde'),
+              subtitle: const Text(
+                  'Affiche aussi le solde previsionnel a ce jour du mois '
+                  '(ex : 24, la veille de la paye le 25)'),
+              trailing: DropdownButton<int>(
+                value: dbProvider.forecastDay,
+                items: [
+                  for (var day = 1; day <= 31; day++)
+                    DropdownMenuItem(value: day, child: Text('$day')),
+                ],
+                onChanged: (day) {
+                  if (day != null) dbProvider.setForecastDay(day);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () =>
                 context.read<DatabaseProvider>().pickDatabaseFile(),
