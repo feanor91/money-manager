@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
+import '../theme/app_theme.dart';
 import 'pin_lock_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -86,6 +87,58 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.palette_outlined),
+                      SizedBox(width: 12),
+                      Text('Theme'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 8,
+                    children: [
+                      for (final palette in AppPalette.values)
+                        _PaletteSwatch(
+                          palette: palette,
+                          selected: dbProvider.palette == palette,
+                          onTap: () => dbProvider.setPalette(palette),
+                        ),
+                      _ThemeModeSwatch(
+                        icon: Icons.brightness_auto_outlined,
+                        label: 'Systeme',
+                        selected: dbProvider.themeMode == ThemeMode.system,
+                        onTap: () => dbProvider.setThemeMode(ThemeMode.system),
+                      ),
+                      _ThemeModeSwatch(
+                        icon: Icons.light_mode_outlined,
+                        label: 'Clair',
+                        color: Colors.white,
+                        selected: dbProvider.themeMode == ThemeMode.light,
+                        onTap: () => dbProvider.setThemeMode(ThemeMode.light),
+                      ),
+                      _ThemeModeSwatch(
+                        icon: Icons.dark_mode_outlined,
+                        label: 'Sombre',
+                        color: const Color(0xFF2A2E37),
+                        iconColor: Colors.white,
+                        selected: dbProvider.themeMode == ThemeMode.dark,
+                        onTap: () => dbProvider.setThemeMode(ThemeMode.dark),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () =>
                 context.read<DatabaseProvider>().pickDatabaseFile(),
@@ -129,6 +182,107 @@ class SettingsScreen extends StatelessWidget {
     await FilePicker.saveFile(
       fileName: 'MyMoney_export.mmb',
       bytes: Uint8List.fromList(bytes),
+    );
+  }
+}
+
+class _PaletteSwatch extends StatelessWidget {
+  final AppPalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PaletteSwatch({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: palette.seed,
+                shape: BoxShape.circle,
+                border: selected
+                    ? Border.all(color: Theme.of(context).colorScheme.onSurface, width: 2)
+                    : null,
+              ),
+              child: selected
+                  ? const Icon(Icons.check, color: Colors.white, size: 20)
+                  : null,
+            ),
+            const SizedBox(height: 4),
+            Text(palette.label, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Same swatch shape as [_PaletteSwatch], but for the two "Clair"/"Sombre"
+/// forced-brightness options (plus "Systeme" to go back to following the
+/// OS/browser) - shown in the same list since they're all just different
+/// entries in "choose a theme" from the user's point of view, even though
+/// under the hood they set different, independent bits of state (see
+/// DatabaseProvider.themeMode vs .palette).
+class _ThemeModeSwatch extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color? color;
+  final Color iconColor;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ThemeModeSwatch({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.color,
+    this.iconColor = Colors.black54,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color ?? Colors.grey.shade200,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? Theme.of(context).colorScheme.onSurface
+                      : Colors.grey.shade400,
+                  width: selected ? 2 : 1,
+                ),
+              ),
+              child: Icon(icon, size: 20, color: iconColor),
+            ),
+            const SizedBox(height: 4),
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
     );
   }
 }

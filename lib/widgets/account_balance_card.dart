@@ -81,7 +81,7 @@ class AccountBalanceCard extends StatelessWidget {
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
-                  if (selected) const Icon(Icons.check_circle, size: 16, color: AppTheme.accent),
+                  if (selected) Icon(Icons.check_circle, size: 16, color: AppTheme.accent),
                 ],
               ),
               const SizedBox(height: 8),

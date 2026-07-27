@@ -15,12 +15,17 @@ class MoneyManagerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Watched (not just read) so a palette/theme-mode change in Settings -
+    // which calls AppTheme.applyPalette then notifyListeners - rebuilds
+    // MaterialApp with the new accent/brightness immediately, without
+    // needing to thread that state through every individual screen.
+    final dbProvider = context.watch<DatabaseProvider>();
     return MaterialApp(
       title: 'Money Manager',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: dbProvider.themeMode,
       // Toute l'UI est en francais en dur (voir ROADMAP.md) - le picker de
       // date Material (showDatePicker) suit sa propre localisation
       // independante du texte de l'appli, d'ou ce reglage explicite.

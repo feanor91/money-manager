@@ -2,18 +2,22 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/db_backup.dart';
 import '../data/mmex_database.dart';
 import '../data/mmex_repository.dart';
 import '../data/web_file_link.dart';
+import '../theme/app_theme.dart';
 
 const _prefsKeyLastPath = 'mmex_last_db_path';
 const _prefsKeySelectedAccount = 'mmex_selected_account_id';
 const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
 const _prefsKeyAccountOrder = 'mmex_account_order';
 const _prefsKeyForecastDay = 'mmex_forecast_day';
+const _prefsKeyPalette = 'mmex_app_palette';
+const _prefsKeyThemeMode = 'mmex_app_theme_mode';
 
 enum DbStatus {
   none,
@@ -125,6 +129,54 @@ class DatabaseProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_prefsKeyForecastDay, forecastDay);
+  }
+
+  /// Accent-color palette (see [AppTheme.applyPalette]). A pure device/UI
+  /// preference, unrelated to any specific database, so - unlike the
+  /// account-scoped settings above - it's loaded eagerly via [loadPalette]
+  /// at app startup (see main.dart) rather than lazily on first database
+  /// open, so the right colours are already in place for the very first
+  /// frame (PIN screen, database picker, etc.).
+  AppPalette palette = AppPalette.indigo;
+
+  Future<void> loadPalette() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_prefsKeyPalette);
+    palette = AppPalette.values.firstWhere(
+      (p) => p.name == saved,
+      orElse: () => AppPalette.indigo,
+    );
+    AppTheme.applyPalette(palette);
+  }
+
+  Future<void> setPalette(AppPalette newPalette) async {
+    palette = newPalette;
+    AppTheme.applyPalette(newPalette);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeyPalette, newPalette.name);
+  }
+
+  /// Light/dark override - defaults to following the OS/browser setting,
+  /// but can be forced either way (e.g. picking "Sombre" from the theme
+  /// list even while the system itself is in light mode). Same
+  /// eager-load-at-startup rationale as [palette].
+  ThemeMode themeMode = ThemeMode.system;
+
+  Future<void> loadThemeMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_prefsKeyThemeMode);
+    themeMode = ThemeMode.values.firstWhere(
+      (m) => m.name == saved,
+      orElse: () => ThemeMode.system,
+    );
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    themeMode = mode;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsKeyThemeMode, mode.name);
   }
 
   MmexRepository? get repository => _repository;

@@ -53,7 +53,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.lock_outline,
+                Icon(Icons.lock_outline,
                     size: 48, color: AppTheme.accent),
                 const SizedBox(height: 16),
                 Text('Money Manager verrouille',

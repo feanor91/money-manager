@@ -115,6 +115,32 @@ class DashboardScreen extends StatelessWidget {
           floating: true,
           title: const Text('Tableau de bord'),
           actions: [
+            PopupMenuButton<AppPalette>(
+              icon: const Icon(Icons.palette_outlined),
+              tooltip: 'Palette de couleurs',
+              onSelected: (p) => dbProvider.setPalette(p),
+              itemBuilder: (context) => [
+                for (final palette in AppPalette.values)
+                  PopupMenuItem(
+                    value: palette,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(color: palette.seed, shape: BoxShape.circle),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(palette.label),
+                        if (dbProvider.palette == palette) ...[
+                          const Spacer(),
+                          const Icon(Icons.check, size: 18),
+                        ],
+                      ],
+                    ),
+                  ),
+              ],
+            ),
             IconButton(
               icon: const Icon(Icons.settings_outlined),
               onPressed: () => Navigator.of(context).pushNamed('/settings'),
@@ -215,7 +241,7 @@ class DashboardScreen extends StatelessWidget {
                                                 borderRadius:
                                                     BorderRadius.circular(8),
                                               ),
-                                              child: const Icon(
+                                              child: Icon(
                                                   Icons.drag_indicator,
                                                   size: 18,
                                                   color: AppTheme.accent),

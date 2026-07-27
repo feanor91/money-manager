@@ -30,7 +30,7 @@ class DbPickerScreen extends StatelessWidget {
                       color: AppTheme.accent.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(24),
                     ),
-                    child: const Icon(Icons.account_balance_wallet_outlined,
+                    child: Icon(Icons.account_balance_wallet_outlined,
                         size: 40, color: AppTheme.accent),
                   ),
                   const SizedBox(height: 24),

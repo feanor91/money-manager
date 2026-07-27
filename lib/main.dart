@@ -13,6 +13,8 @@ Future<void> main() async {
   await initializeDateFormatting('fr_FR');
 
   final dbProvider = DatabaseProvider();
+  await dbProvider.loadPalette();
+  await dbProvider.loadThemeMode();
   unawaited(dbProvider.restoreLastDatabase());
 
   final pinLockProvider = PinLockProvider();
