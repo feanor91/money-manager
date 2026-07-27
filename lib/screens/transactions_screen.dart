@@ -201,13 +201,14 @@ class _LedgerTable extends StatelessWidget {
   }
 
   Widget _headerRow(BuildContext context) {
+    final onSurface = Theme.of(context).colorScheme.onSurface;
     Widget h(double width, String label, {TextAlign align = TextAlign.left}) =>
         SizedBox(
           width: width,
           child: Text(
             label,
             textAlign: align,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: onSurface),
           ),
         );
     return Padding(
@@ -296,8 +297,9 @@ class _LedgerTable extends StatelessWidget {
       );
     }
 
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: index.isEven ? Colors.white : const Color(0xFFF7F8FC),
+      color: index.isEven ? scheme.surfaceContainerLowest : scheme.surfaceContainerHigh,
       child: InkWell(
         onTap: () => onTapRow(tx),
         child: Padding(
@@ -443,7 +445,7 @@ class _LedgerCards extends StatelessWidget {
         : categoryFullPath(tx.categoryId, categoriesById);
 
     return Material(
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       borderRadius: BorderRadius.circular(AppTheme.cardRadius),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),

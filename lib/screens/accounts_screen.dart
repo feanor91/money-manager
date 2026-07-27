@@ -219,7 +219,7 @@ class _AccountRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final positive = balance >= 0;
     return Material(
-      color: Colors.white,
+      color: Theme.of(context).cardColor,
       borderRadius: BorderRadius.circular(AppTheme.cardRadius),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
