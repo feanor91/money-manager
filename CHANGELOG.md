@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.7] - 2026-07-27
+
+- roadmap: mark recurring-transaction and forecast items as done
+- feat(forecast): future-only balance chart with purchase simulation and configurable forecast-day balance
+- feat(l10n): add French localization for Material widgets (date picker)
+- feat(recurring): implement missing periodicities, fix catch-up overshoot, add pause toggle
+
 ## [1.0.6] - 2026-07-26
 
 - ci: replace fragile rebase-retry with reset-and-redo on push conflict
