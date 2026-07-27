@@ -5,8 +5,7 @@ courses, pas des engagements.
 
 ## Priorité maximale
 
-Rien en attente actuellement - voir "Récemment fait" ci-dessous pour le
-détail de ce qui vient d'être réglé.
+- Ajouter un graphe de dépenses par catégorie 
 
 ## Récemment fait
 
