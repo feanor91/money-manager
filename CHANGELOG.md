@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.8] - 2026-07-27
+
+- roadmap: mark theme and forecast tabular-view items as done
+- fix(theme): stop hardcoding white row backgrounds in ledgers
+- feat(theme): selectable colour palettes and forceable light/dark mode
+- feat(forecast): add tabular view toggle for the balance forecast
+
 ## [1.0.7] - 2026-07-27
 
 - roadmap: mark recurring-transaction and forecast items as done
