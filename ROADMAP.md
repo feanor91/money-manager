@@ -5,27 +5,51 @@ courses, pas des engagements.
 
 ## Priorité maximale
 
+Rien en attente actuellement - voir "Récemment fait" ci-dessous pour le
+détail de ce qui vient d'être réglé.
+
+## Récemment fait
+
 - ~~Périodicités manquantes dans les opérations récurrentes~~ - **fait**.
   En creusant (source MMEX stable v1.9.2, `Model_Billsdeposits.h`), le
   vrai souci était plus profond qu'un simple manque : notre code 4 était
   carrément **mal mappé** ("mensuel dernier jour" au lieu de "tous les 2
   mois"), ce qui faussait silencieusement la fréquence de 2 opérations
   réelles de la base de test (dont "Couverture pour Bitiba"). Corrigé,
-  plus "dernier jour ouvré" (code 16) ajouté. Reste non géré : les 4
-  périodicités "dans/tous les (n) jours/mois" (codes 11-14) - elles
-  réutilisent `NUMOCCURRENCES` comme paramètre `n` plutôt que comme
-  compteur d'occurrences restantes, ce qui entre en conflit avec le champ
-  "Durée limitée" existant et demande une vraie réflexion UI avant
-  d'être ajoutées (aucune opération réelle ne les utilise actuellement,
-  donc pas urgent).
-- **Précision des dates pour "dernier jour du mois"/"dernier jour ouvré".**
-  `_monthStepFor` avance juste d'un mois et laisse `_addMonths` caler sur
-  le même jour du mois (avec clamp si le jour n'existe pas) - une
-  opération démarrant un 30 dérivera au lieu de systématiquement retomber
-  sur le vrai dernier jour de chaque mois (et "dernier jour ouvré" ne
-  recule pas encore si ça tombe un week-end). Aucune opération réelle
-  actuelle n'utilise ces deux périodicités, donc pas bloquant, mais à
-  corriger avant de les recommander à l'usage.
+  plus "dernier jour ouvré" (code 16), et les 4 périodicités restantes
+  "dans/tous les (n) jours/mois" (codes 11-14) implémentées fidèlement au
+  comportement MMEX d'origine (`Repeat::next_repeat`) : "dans X" = exactement
+  2 occurrences espacées de X puis le modèle se supprime, "tous les X" =
+  répétition infinie avec cet intervalle. Au passage, un vrai bug de
+  dépassement a aussi été corrigé : le rattrapage ("catch-up") des
+  opérations en retard pouvait générer plus de transactions qu'il ne
+  restait d'occurrences à une opération à durée limitée, et la faisait
+  ensuite passer illimitée par erreur.
+- ~~Précision des dates pour "dernier jour du mois"/"dernier jour ouvré"~~ -
+  **fait**. Chaque occurrence est désormais explicitement calée sur le
+  vrai dernier jour calendaire du mois cible (et recule au vendredi si
+  "dernier jour ouvré" tombe un week-end), au lieu de dériver depuis le
+  jour d'origine.
+- ~~Opérations récurrentes en pause~~ - **fait**. Case à cocher par
+  opération, stockée dans `INFOTABLE_V1` (table clé-valeur déjà présente
+  dans tout fichier `.mmb`, comme `BASECURRENCYID`) sous une clé dédiée -
+  aucune modification du schéma `BILLSDEPOSITS_V1`, ça voyage avec le
+  fichier et reste inoffensif pour MMEX desktop. Exclue de l'ajout
+  automatique et du prévisionnel ; remontée en tête de liste pour rester
+  facile à retrouver/réactiver.
+- ~~Prévision de solde repensée~~ - **fait**. Le graphique part maintenant
+  toujours d'aujourd'hui vers le futur (fini la navigation vers le passé),
+  avec une durée choisie dans une liste (1/2/3/6 mois, 1 an) au lieu des
+  boutons jour/semaine/mois. Ajout d'une simulation "et si" d'achat non
+  prévu (comptant ou en 2 à 12 fois) affichée en surimpression, et de
+  repères visuels (traits rouges, infobulle au survol avec le total si
+  plusieurs opérations tombent le même jour) pour les opérations
+  récurrentes à venir.
+- ~~Solde prévisionnel à date fixe~~ - **fait**. Les bulles de compte et
+  la bande de solde en haut du tableau de bord affichent maintenant, en
+  plus du solde du jour, le solde projeté à un jour du mois configurable
+  (Paramètres, "Jour de prévision du solde", 24 par défaut - la veille
+  d'une paye le 25).
 
 ## Demandées
 
@@ -76,12 +100,15 @@ courses, pas des engagements.
 ## Priorité basse
 
 - **Localisation multilingue.** Toute l'interface est actuellement en
-  français en dur dans le code (pas de fichiers `.arb`/`intl_*` ni de
-  `flutter_localizations`). Passage en `l10n` standard Flutter à prévoir
-  si l'app doit un jour servir à quelqu'un d'autre que son utilisateur
-  actuel - gros travail mécanique (extraire toutes les chaînes) plutôt
-  que complexe, mais pas prioritaire tant qu'il n'y a qu'un seul
-  utilisateur francophone.
+  français en dur dans le code (pas de fichiers `.arb`/`intl_*`).
+  `flutter_localizations` a bien été ajouté depuis, mais uniquement pour
+  forcer les widgets Material génériques (le calendrier de `showDatePicker`
+  notamment, qui s'affichait en anglais) en français via `locale: Locale('fr')`
+  - ça ne couvre pas le texte de l'appli elle-même. Passage en `l10n`
+  standard Flutter à prévoir si l'app doit un jour servir à quelqu'un
+  d'autre que son utilisateur actuel - gros travail mécanique (extraire
+  toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
+  qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Notes
 
