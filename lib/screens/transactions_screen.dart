@@ -10,6 +10,7 @@ import '../models/payee.dart';
 import '../models/transaction.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
+import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
@@ -99,7 +100,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               controller: _searchController,
               decoration: InputDecoration(
                 prefixIcon: const Icon(Icons.search),
-                hintText: 'Rechercher (tiers, categorie, remarque, montant...)',
+                hintText: 'Rechercher (tiers, catégorie, remarque, montant...)',
                 isDense: true,
                 border: const OutlineInputBorder(),
                 suffixIcon: _search.isEmpty
@@ -118,13 +119,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context),
+        onPressed: () => _openEditor(context, defaultAccountId: accountId),
         icon: const Icon(Icons.add),
         label: const Text('Ajouter'),
       ),
       body: rows.isEmpty
           ? Center(
-              child: Text(query.isEmpty ? 'Aucune transaction' : 'Aucun resultat'),
+              child: Text(query.isEmpty ? 'Aucune transaction' : 'Aucun résultat'),
             )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
@@ -175,13 +176,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _openEditor(BuildContext context,
-      {MoneyTransaction? existing}) async {
+      {MoneyTransaction? existing, int? defaultAccountId}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _TransactionEditorSheet(existing: existing, repo: repo),
+      builder: (_) => _TransactionEditorSheet(
+        existing: existing,
+        repo: repo,
+        defaultAccountId: defaultAccountId,
+      ),
     );
     dbProvider.touch();
   }
@@ -285,11 +290,11 @@ class _LedgerTable extends StatelessWidget {
           const SizedBox(width: _colGap),
           h(_colStatut, 'Statut'),
           const SizedBox(width: _colGap),
-          h(_colCategorie, 'Categorie'),
+          h(_colCategorie, 'Catégorie'),
           const SizedBox(width: _colGap),
-          h(_colMontant, 'Debit', align: TextAlign.right),
+          h(_colMontant, 'Débit', align: TextAlign.right),
           const SizedBox(width: _colGap),
-          h(_colMontant, 'Credit', align: TextAlign.right),
+          h(_colMontant, 'Crédit', align: TextAlign.right),
           const SizedBox(width: _colGap),
           h(_colSolde, 'Solde', align: TextAlign.right),
           const SizedBox(width: _colGap),
@@ -304,7 +309,7 @@ class _LedgerTable extends StatelessWidget {
   /// fix a date without going through the whole form, e.g. right when
   /// reconciling against a bank statement that posted it a day or two off.
   Future<void> _editDate(BuildContext context, MoneyTransaction tx) async {
-    final picked = await showDatePicker(
+    final picked = await pickDate(
       context: context,
       initialDate: tx.date,
       firstDate: DateTime(2000),
@@ -375,8 +380,8 @@ class _LedgerTable extends StatelessWidget {
                   constraints: const BoxConstraints(),
                   iconSize: 20,
                   tooltip: reconciled
-                      ? 'Pointee - toucher pour depointer'
-                      : 'Non pointee - toucher pour pointer',
+                      ? 'Pointée - toucher pour dépointer'
+                      : 'Non pointée - toucher pour pointer',
                   icon: Icon(
                     reconciled
                         ? Icons.check_circle
@@ -462,7 +467,7 @@ class _LedgerCards extends StatelessWidget {
   });
 
   Future<void> _editDate(BuildContext context, MoneyTransaction tx) async {
-    final picked = await showDatePicker(
+    final picked = await pickDate(
       context: context,
       initialDate: tx.date,
       firstDate: DateTime(2000),
@@ -524,8 +529,8 @@ class _LedgerCards extends StatelessWidget {
                     constraints: const BoxConstraints(),
                     iconSize: 20,
                     tooltip: reconciled
-                        ? 'Pointee - toucher pour depointer'
-                        : 'Non pointee - toucher pour pointer',
+                        ? 'Pointée - toucher pour dépointer'
+                        : 'Non pointée - toucher pour pointer',
                     icon: Icon(
                       reconciled
                           ? Icons.check_circle
@@ -617,8 +622,9 @@ class _LedgerCards extends StatelessWidget {
 class _TransactionEditorSheet extends StatefulWidget {
   final MoneyTransaction? existing;
   final MmexRepository repo;
+  final int? defaultAccountId;
 
-  const _TransactionEditorSheet({this.existing, required this.repo});
+  const _TransactionEditorSheet({this.existing, required this.repo, this.defaultAccountId});
 
   @override
   State<_TransactionEditorSheet> createState() =>
@@ -633,6 +639,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
   late int? _payeeId;
   late TransCode _transCode;
   late DateTime _date;
+  late bool _reconciled;
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
 
@@ -640,12 +647,13 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
   void initState() {
     super.initState();
     final tx = widget.existing;
-    _accountId = tx?.accountId;
+    _accountId = tx?.accountId ?? widget.defaultAccountId;
     _toAccountId = tx?.toAccountId;
     _categoryId = tx?.categoryId;
     _payeeId = tx?.payeeId;
     _transCode = tx?.transCode ?? TransCode.withdrawal;
     _date = tx?.date ?? DateTime.now();
+    _reconciled = tx?.isReconciled ?? false;
     _amountController.text = tx != null ? tx.amount.toStringAsFixed(2) : '';
     _notesController.text = tx?.notes ?? '';
   }
@@ -708,7 +716,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
               SegmentedButton<TransCode>(
                 segments: const [
                   ButtonSegment(
-                      value: TransCode.withdrawal, label: Text('Depense')),
+                      value: TransCode.withdrawal, label: Text('Dépense')),
                   ButtonSegment(
                       value: TransCode.deposit, label: Text('Revenu')),
                   ButtonSegment(
@@ -757,7 +765,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
               ),
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
-                label: 'Categorie',
+                label: 'Catégorie',
                 options: sortedCategories,
                 labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
@@ -795,7 +803,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
                 title: Text('Date : ${_date.day}/${_date.month}/${_date.year}'),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
-                  final picked = await showDatePicker(
+                  final picked = await pickDate(
                     context: context,
                     initialDate: _date,
                     firstDate: DateTime(2000),
@@ -803,6 +811,13 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
                   );
                   if (picked != null) setState(() => _date = picked);
                 },
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('Pointée'),
+                value: _reconciled,
+                onChanged: (v) => setState(() => _reconciled = v ?? false),
               ),
               const SizedBox(height: 20),
               Row(
@@ -844,6 +859,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
         toAccountId: isTransfer ? _toAccountId : null,
         toAmount: isTransfer ? amount : null,
         notes: _notesController.text,
+        reconciled: _reconciled,
       );
     } else {
       widget.repo.updateTransaction(MoneyTransaction(
@@ -854,7 +870,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
         transCode: _transCode,
         amount: amount,
         toAmount: amount,
-        status: widget.existing!.status,
+        status: _reconciled ? 'R' : '',
         date: _date,
         categoryId: _categoryId,
         notes: _notesController.text,

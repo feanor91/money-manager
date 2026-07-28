@@ -67,7 +67,7 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
     final top = items.take(widget.itemCount).toList();
 
     return BentoCard(
-      title: 'Apercu du budget',
+      title: 'Aperçu du budget',
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -99,7 +99,7 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
         ],
       ),
       child: top.isEmpty
-          ? const Center(child: Text('Aucune enveloppe de budget definie'))
+          ? const Center(child: Text('Aucune enveloppe de budget définie'))
           : ListView.separated(
               physics: const NeverScrollableScrollPhysics(),
               itemCount: top.length,

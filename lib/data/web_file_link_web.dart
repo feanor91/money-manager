@@ -70,7 +70,7 @@ Future<void> _storeValue(JSAny key, JSAny value) async {
   final request = txn.objectStore(_storeName).put(value, key);
   request.onsuccess = ((JSAny _) => completer.complete()).toJS;
   request.onerror = ((JSAny _) =>
-      completer.completeError(StateError('Echec ecriture IndexedDB.'))).toJS;
+      completer.completeError(StateError('Échec écriture IndexedDB.'))).toJS;
   await completer.future;
 }
 

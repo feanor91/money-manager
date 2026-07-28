@@ -38,7 +38,7 @@ class DbPickerScreen extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(
                     dbProvider.status == DbStatus.needsReconnect
-                        ? 'Le navigateur a besoin de confirmer l\'acces a votre fichier'
+                        ? 'Le navigateur a besoin de confirmer l\'accès à votre fichier'
                             '${dbProvider.reconnectFileName != null ? ' "${dbProvider.reconnectFileName}"' : ''}.'
                         : 'Choisissez l\'emplacement de votre base MoneyManager Ex (.mmb) pour commencer.',
                     textAlign: TextAlign.center,

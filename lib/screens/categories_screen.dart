@@ -48,11 +48,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           }).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Categories')),
+      appBar: AppBar(title: const Text('Catégories')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addCategory(context, repo, parentId: null),
         icon: const Icon(Icons.add),
-        label: const Text('Nouvelle categorie'),
+        label: const Text('Nouvelle catégorie'),
       ),
       body: ResponsiveBody(
         maxWidth: 800,
@@ -67,7 +67,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                       controller: _searchController,
                       decoration: const InputDecoration(
                         prefixIcon: Icon(Icons.search),
-                        hintText: 'Rechercher une categorie',
+                        hintText: 'Rechercher une catégorie',
                         isDense: true,
                         border: OutlineInputBorder(),
                       ),
@@ -76,9 +76,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                   ),
                   const SizedBox(width: 12),
                   Tooltip(
-                    message: 'Afficher les categories archivees',
+                    message: 'Afficher les catégories archivées',
                     child: FilterChip(
-                      label: const Text('Archivees'),
+                      label: const Text('Archivées'),
                       selected: _showArchived,
                       onSelected: (v) => setState(() => _showArchived = v),
                     ),
@@ -88,7 +88,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             ),
             Expanded(
               child: visibleParents.isEmpty
-                  ? const Center(child: Text('Aucune categorie'))
+                  ? const Center(child: Text('Aucune catégorie'))
                   : ListView.builder(
                       padding: const EdgeInsets.fromLTRB(8, 8, 8, 96),
                       itemCount: visibleParents.length,
@@ -178,7 +178,7 @@ class _CategoryGroup extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: () => _addCategory(context, repo, parentId: parent.id),
                   icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Ajouter une sous-categorie'),
+                  label: const Text('Ajouter une sous-catégorie'),
                 ),
               ),
             ),
@@ -212,7 +212,7 @@ class _CategoryTitle extends StatelessWidget {
         if (!category.active) ...[
           const SizedBox(width: 8),
           const Chip(
-            label: Text('Archivee', style: TextStyle(fontSize: 11)),
+            label: Text('Archivée', style: TextStyle(fontSize: 11)),
             visualDensity: VisualDensity.compact,
             materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             padding: EdgeInsets.zero,
@@ -221,7 +221,7 @@ class _CategoryTitle extends StatelessWidget {
         if (usage.transactionCount > 0) ...[
           const SizedBox(width: 8),
           Text(
-            '${usage.transactionCount} operation(s)',
+            '${usage.transactionCount} opération(s)',
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
@@ -253,9 +253,9 @@ class _CategoryMenu extends StatelessWidget {
       itemBuilder: (context) => [
         const PopupMenuItem(value: 'rename', child: Text('Renommer')),
         if (allowAddChild)
-          const PopupMenuItem(value: 'add_child', child: Text('Ajouter une sous-categorie')),
+          const PopupMenuItem(value: 'add_child', child: Text('Ajouter une sous-catégorie')),
         if (!allowAddChild)
-          const PopupMenuItem(value: 'move', child: Text('Deplacer vers...')),
+          const PopupMenuItem(value: 'move', child: Text('Déplacer vers...')),
         PopupMenuItem(
           value: 'merge',
           enabled: usage.isLeaf,
@@ -268,7 +268,7 @@ class _CategoryMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: 'toggle_active',
-          child: Text(category.active ? 'Archiver' : 'Reactiver'),
+          child: Text(category.active ? 'Archiver' : 'Réactiver'),
         ),
         PopupMenuItem(
           value: 'delete',
@@ -313,7 +313,7 @@ Future<void> _addCategory(BuildContext context, MmexRepository repo, {int? paren
   final name = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
-      title: Text(parentId == null ? 'Nouvelle categorie' : 'Nouvelle sous-categorie'),
+      title: Text(parentId == null ? 'Nouvelle catégorie' : 'Nouvelle sous-catégorie'),
       content: TextField(
         controller: controller,
         autofocus: true,
@@ -339,7 +339,7 @@ Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category
   final name = await showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Renommer la categorie'),
+      title: const Text('Renommer la catégorie'),
       content: TextField(
         controller: controller,
         autofocus: true,
@@ -364,7 +364,7 @@ Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category
 /// is a real DB autoincrement id (always positive), so -1 can never
 /// collide with an actual category, same convention CATEGORY_V1.PARENTID
 /// itself already uses for "no parent".
-const _topLevelSentinel = Category(id: -1, name: 'Aucune (categorie mere)', active: true);
+const _topLevelSentinel = Category(id: -1, name: 'Aucune (catégorie mère)', active: true);
 
 Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category category) async {
   final topLevel = repo
@@ -378,7 +378,7 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setDialogState) => AlertDialog(
-        title: Text('Deplacer "${category.name}"'),
+        title: Text('Déplacer "${category.name}"'),
         content: SizedBox(
           width: 400,
           child: Column(
@@ -386,12 +386,12 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Ses operations, echeances et budgets restent lies a cette '
-                'categorie - seule sa categorie mere change.',
+                'Ses opérations, échéances et budgets restent liés à cette '
+                'catégorie - seule sa catégorie mère change.',
               ),
               const SizedBox(height: 16),
               SearchableSelectField<Category>(
-                label: 'Nouvelle categorie mere',
+                label: 'Nouvelle catégorie mère',
                 options: options,
                 labelOf: (c) => c.name,
                 onSelected: (c) => setDialogState(() => target = c),
@@ -403,7 +403,7 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
           FilledButton(
             onPressed: target == null ? null : () => Navigator.of(context).pop(true),
-            child: const Text('Deplacer'),
+            child: const Text('Déplacer'),
           ),
         ],
       ),
@@ -432,9 +432,9 @@ Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category 
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Les operations, echeances, budgets et tiers associes a '
-                '"${source.name}" seront transferes vers la categorie '
-                'choisie, puis "${source.name}" sera supprimee.',
+                'Les opérations, échéances, budgets et tiers associés à '
+                '"${source.name}" seront transférés vers la catégorie '
+                'choisie, puis "${source.name}" sera supprimée.',
               ),
               const SizedBox(height: 16),
               SearchableSelectField<Category>(
@@ -468,20 +468,20 @@ Future<void> _deleteCategory(
 ) async {
   if (!usage.canDelete) {
     final reasons = <String>[
-      if (usage.childCategoryCount > 0) '${usage.childCategoryCount} sous-categorie(s)',
-      if (usage.transactionCount > 0) '${usage.transactionCount} operation(s)',
-      if (usage.recurringCount > 0) '${usage.recurringCount} operation(s) recurrente(s)',
+      if (usage.childCategoryCount > 0) '${usage.childCategoryCount} sous-catégorie(s)',
+      if (usage.transactionCount > 0) '${usage.transactionCount} opération(s)',
+      if (usage.recurringCount > 0) '${usage.recurringCount} opération(s) récurrente(s)',
       if (usage.budgetEntryCount > 0) '${usage.budgetEntryCount} ligne(s) de budget',
-      if (usage.payeeDefaultCount > 0) '${usage.payeeDefaultCount} tiers par defaut',
+      if (usage.payeeDefaultCount > 0) '${usage.payeeDefaultCount} tiers par défaut',
     ];
     final archiveInstead = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Impossible de supprimer'),
         content: Text(
-          '"${category.name}" est encore utilisee par : ${reasons.join(', ')}.\n\n'
-          'Vous pouvez l\'archiver a la place : elle disparaitra des listes de '
-          'choix sans toucher a son historique.',
+          '"${category.name}" est encore utilisée par : ${reasons.join(', ')}.\n\n'
+          'Vous pouvez l\'archiver à la place : elle disparaîtra des listes de '
+          'choix sans toucher à son historique.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Fermer')),
@@ -502,8 +502,8 @@ Future<void> _deleteCategory(
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Supprimer la categorie'),
-      content: Text('Supprimer definitivement "${category.name}" ?'),
+      title: const Text('Supprimer la catégorie'),
+      content: Text('Supprimer définitivement "${category.name}" ?'),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
         FilledButton(

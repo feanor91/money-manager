@@ -102,7 +102,7 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
         ),
         if (widget.onCreate != null)
           IconButton(
-            tooltip: 'Creer un nouvel element',
+            tooltip: 'Créer un nouvel élément',
             icon: const Icon(Icons.add_circle_outline),
             onPressed: () async {
               final text = _pendingTextHolder.text.trim();

@@ -58,10 +58,10 @@ class DashboardScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Tous les comptes sont masques.'),
+                const Text('Tous les comptes sont masqués.'),
                 const SizedBox(height: 12),
                 Text(
-                  'Reactivez-en un depuis l\'onglet Comptes.',
+                  'Réactivez-en un depuis l\'onglet Comptes.',
                   style: TextStyle(color: Colors.grey[600]),
                 ),
               ],
@@ -81,7 +81,7 @@ class DashboardScreen extends StatelessWidget {
 
     final now = DateTime.now();
     final forecastDate = _nextForecastDate(now, dbProvider.forecastDay);
-    final forecastDateLabel = 'Prev. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
+    final forecastDateLabel = 'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
     final forecastBalances = {
       for (final a in accounts) a.id: repo.forecastAccountBalance(a.id, forecastDate)
     };
@@ -275,7 +275,7 @@ class DashboardScreen extends StatelessWidget {
                     final recentCard = SizedBox(
                       height: 320,
                       child: BentoCard(
-                        title: 'Transactions recentes',
+                        title: 'Transactions récentes',
                         child: ListView.builder(
                           itemCount: recentTx.length,
                           itemBuilder: (context, i) {

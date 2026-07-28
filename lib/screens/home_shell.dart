@@ -58,7 +58,7 @@ class _HomeShellState extends State<HomeShell> {
     if (!mounted) return;
     if (addedCount > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$addedCount operation(s) recurrente(s) enregistree(s) automatiquement')),
+        SnackBar(content: Text('$addedCount opération(s) récurrente(s) enregistrée(s) automatiquement')),
       );
       dbProvider.touch();
     }
@@ -83,7 +83,7 @@ class _HomeShellState extends State<HomeShell> {
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Accueil'),
           NavigationDestination(icon: Icon(Icons.pie_chart_outline), selectedIcon: Icon(Icons.pie_chart), label: 'Budget'),
           NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Transactions'),
-          NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Recurrentes'),
+          NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Récurrentes'),
           NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
         ],
       ),
@@ -120,7 +120,7 @@ class _RecurringCatchUpDialogState extends State<_RecurringCatchUpDialog> {
     final accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
 
     return AlertDialog(
-      title: const Text('Operations recurrentes a confirmer'),
+      title: const Text('Opérations récurrentes à confirmer'),
       content: SizedBox(
         width: 400,
         child: ListView.builder(
@@ -165,7 +165,7 @@ class _RecurringCatchUpDialogState extends State<_RecurringCatchUpDialog> {
             }
             Navigator.of(context).pop();
           },
-          child: const Text('Enregistrer la selection'),
+          child: const Text('Enregistrer la sélection'),
         ),
       ],
     );

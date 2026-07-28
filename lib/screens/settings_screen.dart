@@ -18,7 +18,7 @@ class SettingsScreen extends StatelessWidget {
     final pinLock = context.watch<PinLockProvider>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Parametres')),
+      appBar: AppBar(title: const Text('Paramètres')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -27,8 +27,8 @@ class SettingsScreen extends StatelessWidget {
               leading: const Icon(Icons.lock_outline),
               title: const Text('Code PIN'),
               subtitle: Text(pinLock.hasPin
-                  ? 'Active - demande a chaque ouverture de l\'appli'
-                  : 'Desactive - aucune protection a l\'ouverture'),
+                  ? 'Activé - demandé à chaque ouverture de l\'appli'
+                  : 'Désactivé - aucune protection à l\'ouverture'),
               trailing: Wrap(
                 spacing: 4,
                 children: [
@@ -36,7 +36,7 @@ class SettingsScreen extends StatelessWidget {
                     onPressed: () => Navigator.of(context).push(
                         MaterialPageRoute(
                             builder: (_) => const PinSetupScreen())),
-                    child: Text(pinLock.hasPin ? 'Modifier' : 'Definir'),
+                    child: Text(pinLock.hasPin ? 'Modifier' : 'Définir'),
                   ),
                   if (pinLock.hasPin)
                     TextButton(
@@ -64,17 +64,17 @@ class SettingsScreen extends StatelessWidget {
           Card(
             child: ListTile(
               leading: const Icon(Icons.storage_outlined),
-              title: const Text('Base de donnees active'),
+              title: const Text('Base de données active'),
               subtitle: Text(dbProvider.currentLabel ?? 'Aucune'),
               trailing: dbProvider.isDirectlyPersisted
                   ? const Tooltip(
                       message:
-                          'Les modifications sont ecrites directement dans le fichier',
+                          'Les modifications sont écrites directement dans le fichier',
                       child: Icon(Icons.link, color: Colors.green),
                     )
                   : const Tooltip(
                       message:
-                          'Modifications en memoire uniquement pour cette session',
+                          'Modifications en mémoire uniquement pour cette session',
                       child: Icon(Icons.link_off, color: Colors.orange),
                     ),
             ),
@@ -83,9 +83,9 @@ class SettingsScreen extends StatelessWidget {
           Card(
             child: ListTile(
               leading: const Icon(Icons.event_outlined),
-              title: const Text('Jour de prevision du solde'),
+              title: const Text('Jour de prévision du solde'),
               subtitle: const Text(
-                  'Affiche aussi le solde previsionnel a ce jour du mois '
+                  'Affiche aussi le solde prévisionnel à ce jour du mois '
                   '(ex : 24, la veille de la paye le 25)'),
               trailing: DropdownButton<int>(
                 value: dbProvider.forecastDay,
@@ -110,7 +110,7 @@ class SettingsScreen extends StatelessWidget {
                     children: [
                       Icon(Icons.palette_outlined),
                       SizedBox(width: 12),
-                      Text('Theme'),
+                      Text('Thème'),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -126,7 +126,7 @@ class SettingsScreen extends StatelessWidget {
                         ),
                       _ThemeModeSwatch(
                         icon: Icons.brightness_auto_outlined,
-                        label: 'Systeme',
+                        label: 'Système',
                         selected: dbProvider.themeMode == ThemeMode.system,
                         onTap: () => dbProvider.setThemeMode(ThemeMode.system),
                       ),
@@ -163,7 +163,7 @@ class SettingsScreen extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: () => _exportCopy(context),
               icon: const Icon(Icons.download_outlined),
-              label: const Text('Telecharger une copie .mmb'),
+              label: const Text('Télécharger une copie .mmb'),
             ),
             const SizedBox(height: 16),
             Card(
@@ -172,12 +172,12 @@ class SettingsScreen extends StatelessWidget {
                 child: Text(
                   dbProvider.isDirectlyPersisted
                       ? 'Ce navigateur garde un lien direct vers votre fichier : chaque '
-                          'modification est ecrite dans le vrai fichier .mmb sur votre disque, '
+                          'modification est écrite dans le vrai fichier .mmb sur votre disque, '
                           'comme sur l\'application native. Au prochain lancement, il suffira de '
-                          'confirmer l\'acces au fichier (bouton "Reconnecter").'
+                          'confirmer l\'accès au fichier (bouton "Reconnecter").'
                       : 'Ce navigateur ne permet pas de garder un lien direct vers un fichier '
-                          '(uniquement pris en charge par Chrome/Edge) : la base est chargee en '
-                          'memoire pour cette session uniquement. Pensez a "Telecharger une copie" '
+                          '(uniquement pris en charge par Chrome/Edge) : la base est chargée en '
+                          'mémoire pour cette session uniquement. Pensez à "Télécharger une copie" '
                           'avant de fermer l\'onglet, sinon les modifications seront perdues.',
                 ),
               ),

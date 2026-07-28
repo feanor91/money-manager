@@ -28,7 +28,7 @@ Future<MmexDatabase> openFromBytes(List<int> bytes, {String? label}) async {
   fs.fileData[_dbPath] = Uint8Buffer()..addAll(bytes);
 
   final db = sqlite3.open(_dbPath, mode: OpenMode.readWrite);
-  return _WebMmexDatabase(db, fs, label ?? 'base importee');
+  return _WebMmexDatabase(db, fs, label ?? 'base importée');
 }
 
 class _WebMmexDatabase implements MmexDatabase {

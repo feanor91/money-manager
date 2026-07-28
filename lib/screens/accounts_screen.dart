@@ -62,7 +62,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ],
                   if (hidden.isNotEmpty) ...[
                     const SizedBox(height: 8),
-                    _SectionHeader('Masques (${hidden.length})'),
+                    _SectionHeader('Masqués (${hidden.length})'),
                     const SizedBox(height: 8),
                     for (final account in hidden)
                       Padding(
@@ -270,7 +270,7 @@ class _AccountRow extends StatelessWidget {
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text(
-                                'Masque',
+                                'Masqué',
                                 style: TextStyle(
                                     fontSize: 10,
                                     color: Colors.grey[700],
@@ -294,7 +294,7 @@ class _AccountRow extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip:
-                      hidden ? 'Reafficher ce compte' : 'Masquer ce compte',
+                      hidden ? 'Réafficher ce compte' : 'Masquer ce compte',
                   icon: Icon(
                       hidden
                           ? Icons.visibility_off_outlined

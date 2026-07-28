@@ -51,7 +51,7 @@ class TransactionTile extends StatelessWidget {
         : (payee?.name ?? 'Payé inconnu');
 
     final subtitleParts = <String>[
-      if (_isTransfer) 'Virement' else (category?.name ?? 'Non categorise'),
+      if (_isTransfer) 'Virement' else (category?.name ?? 'Non catégorisé'),
       DateFormat.yMMMd('fr_FR').format(transaction.date),
     ];
     if ((transaction.notes ?? '').trim().isNotEmpty) {
@@ -68,7 +68,7 @@ class TransactionTile extends StatelessWidget {
             GestureDetector(
               onTap: () => onToggleReconciled!(!reconciled),
               child: Tooltip(
-                message: reconciled ? 'Pointee - toucher pour depointer' : 'Non pointee - toucher pour pointer',
+                message: reconciled ? 'Pointée - toucher pour dépointer' : 'Non pointée - toucher pour pointer',
                 child: Icon(
                   reconciled ? Icons.check_circle : Icons.radio_button_unchecked,
                   size: 20,

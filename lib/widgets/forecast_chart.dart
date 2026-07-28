@@ -147,7 +147,7 @@ class _ForecastChartState extends State<ForecastChart> {
     }
 
     return BentoCard(
-      title: 'Prevision de solde',
+      title: 'Prévision de solde',
       trailing: _RangeLabel(points: points),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -159,7 +159,7 @@ class _ForecastChartState extends State<ForecastChart> {
                   initialValue: _duration,
                   isDense: true,
                   decoration: const InputDecoration(
-                    labelText: 'Duree affichee',
+                    labelText: 'Durée affichée',
                     isDense: true,
                   ),
                   items: [
@@ -270,7 +270,7 @@ class _ForecastChartState extends State<ForecastChart> {
       for (var i = 0; i < simInstallments; i++) {
         rows.add(_ForecastRow(
           date: _addMonths(points.first.day, i),
-          label: 'Achat simule',
+          label: 'Achat simulé',
           amount: -perInstallment,
           simulated: true,
         ));
@@ -279,7 +279,7 @@ class _ForecastChartState extends State<ForecastChart> {
     rows.sort((a, b) => a.date.compareTo(b.date));
 
     if (rows.isEmpty) {
-      return const Center(child: Text('Aucune operation prevue sur cette periode.'));
+      return const Center(child: Text('Aucune opération prévue sur cette période.'));
     }
 
     final dateFormat = DateFormat('EEEE d MMMM yyyy', 'fr_FR');
@@ -370,7 +370,7 @@ class _ForecastChartState extends State<ForecastChart> {
               ),
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
-                label: 'Categorie budgetaire (optionnel)',
+                label: 'Catégorie budgétaire (optionnel)',
                 options: sortedCategories,
                 labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: categoryId == null
@@ -388,7 +388,7 @@ class _ForecastChartState extends State<ForecastChart> {
               if (multiple)
                 DropdownButtonFormField<int>(
                   initialValue: installments > 1 ? installments : 2,
-                  decoration: const InputDecoration(labelText: 'Nombre de mensualites'),
+                  decoration: const InputDecoration(labelText: 'Nombre de mensualités'),
                   items: [
                     for (var n = 2; n <= 12; n++)
                       DropdownMenuItem(value: n, child: Text('$n fois')),
@@ -600,8 +600,8 @@ class _ForecastChartState extends State<ForecastChart> {
                 final value = currency?.format(p.cumulative) ?? p.cumulative.toStringAsFixed(2);
                 final label = tooltipFormat.format(p.day);
                 final suffix = isSimulated
-                    ? ' (avec achat simule)'
-                    : (p.projected ? ' (prevision)' : '');
+                    ? ' (avec achat simulé)'
+                    : (p.projected ? ' (prévision)' : '');
                 items.add(LineTooltipItem(
                   '$label\n$value$suffix',
                   const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),

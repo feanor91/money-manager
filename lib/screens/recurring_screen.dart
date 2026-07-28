@@ -10,6 +10,7 @@ import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
+import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
@@ -63,7 +64,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
       ..sort((a, b) => (a.paused == b.paused) ? 0 : (a.paused ? -1 : 1));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Operations recurrentes')),
+      appBar: AppBar(title: const Text('Opérations récurrentes')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(context),
         icon: const Icon(Icons.add),
@@ -78,7 +79,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                 children: [
                   TextField(
                     decoration: const InputDecoration(
-                      hintText: 'Rechercher (tiers, compte, categorie...)',
+                      hintText: 'Rechercher (tiers, compte, catégorie...)',
                       prefixIcon: Icon(Icons.search),
                       isDense: true,
                     ),
@@ -104,7 +105,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
             ),
             Expanded(
               child: bills.isEmpty
-                  ? const Center(child: Text('Aucune operation recurrente'))
+                  ? const Center(child: Text('Aucune opération récurrente'))
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                       itemCount: bills.length,
@@ -126,7 +127,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                         final subtitleLine1 = isTransfer
                             ? (categoryLabel.isEmpty ? 'Virement' : 'Virement - $categoryLabel')
                             : '${accounts[bill.accountId]?.name ?? ''} - '
-                                '${categoryLabel.isEmpty ? 'Non categorise' : categoryLabel}';
+                                '${categoryLabel.isEmpty ? 'Non catégorisé' : categoryLabel}';
                         return Card(
                           child: Opacity(
                             opacity: bill.paused ? 0.55 : 1,
@@ -159,9 +160,9 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Tooltip(
-                                    message: 'Mettre en pause (ignoree a '
+                                    message: 'Mettre en pause (ignorée à '
                                         'l\'ajout automatique et dans le '
-                                        'previsionnel)',
+                                        'prévisionnel)',
                                     child: Checkbox(
                                       value: bill.paused,
                                       onChanged: (v) {
@@ -323,15 +324,15 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
             children: [
               Text(
                 widget.existing == null
-                    ? 'Nouvelle operation recurrente'
-                    : 'Modifier l\'operation recurrente',
+                    ? 'Nouvelle opération récurrente'
+                    : 'Modifier l\'opération récurrente',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 16),
               SegmentedButton<TransCode>(
                 segments: const [
                   ButtonSegment(
-                      value: TransCode.withdrawal, label: Text('Depense')),
+                      value: TransCode.withdrawal, label: Text('Dépense')),
                   ButtonSegment(
                       value: TransCode.deposit, label: Text('Revenu')),
                   ButtonSegment(
@@ -380,7 +381,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
               ),
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
-                label: 'Categorie',
+                label: 'Catégorie',
                 options: sortedCategories,
                 labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
@@ -407,7 +408,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
               ],
               const SizedBox(height: 12),
               DropdownButtonFormField<RecurrencePeriod>(
-                decoration: const InputDecoration(labelText: 'Frequence'),
+                decoration: const InputDecoration(labelText: 'Fréquence'),
                 initialValue: _period,
                 items: RecurrencePeriod.values
                     .where((p) => p != RecurrencePeriod.none)
@@ -424,7 +425,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<RecurrenceAutoExecute>(
-                decoration: const InputDecoration(labelText: 'Execution'),
+                decoration: const InputDecoration(labelText: 'Exécution'),
                 initialValue: _autoExecute,
                 items: const [
                   DropdownMenuItem(
@@ -465,10 +466,10 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
               ] else ...[
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Duree limitee'),
+                  title: const Text('Durée limitée'),
                   subtitle: Text(_limitedOccurrences
-                      ? 'S\'arrete apres un nombre fixe d\'occurrences'
-                      : 'Se repete indefiniment'),
+                      ? 'S\'arrête après un nombre fixe d\'occurrences'
+                      : 'Se répète indéfiniment'),
                   value: _limitedOccurrences,
                   onChanged: (v) => setState(() => _limitedOccurrences = v),
                 ),
@@ -500,7 +501,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
                 ),
                 trailing: const Icon(Icons.calendar_today, size: 18),
                 onTap: () async {
-                  final picked = await showDatePicker(
+                  final picked = await pickDate(
                     context: context,
                     initialDate: _nextOccurrence,
                     firstDate: DateTime(2000),
@@ -606,7 +607,7 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
     final isTransfer = widget.bill.transCode == TransCode.transfer;
     final accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
     return AlertDialog(
-      title: const Text('Enregistrer l\'operation'),
+      title: const Text('Enregistrer l\'opération'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -625,7 +626,7 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
             title: Text('Date : ${_date.day}/${_date.month}/${_date.year}'),
             trailing: const Icon(Icons.calendar_today, size: 18),
             onTap: () async {
-              final picked = await showDatePicker(
+              final picked = await pickDate(
                 context: context,
                 initialDate: _date,
                 firstDate: DateTime(2000),
@@ -636,7 +637,7 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Pointee'),
+            title: const Text('Pointée'),
             value: _reconciled,
             onChanged: (v) => setState(() => _reconciled = v),
           ),

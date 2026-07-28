@@ -263,7 +263,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
         title: Text(accountId == null ? 'Budget' : 'Budget - ${accountsById[accountId]!.name}'),
         actions: [
           IconButton(
-            tooltip: 'Suggerer des enveloppes automatiquement',
+            tooltip: 'Suggérer des enveloppes automatiquement',
             icon: const Icon(Icons.auto_awesome_outlined),
             onPressed: openSuggestions,
           ),
@@ -276,7 +276,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
             ],
           ),
           PopupMenuButton<String>(
-            tooltip: 'Reinitialiser',
+            tooltip: 'Réinitialiser',
             icon: const Icon(Icons.restart_alt),
             onSelected: (action) {
               if (action == 'reset' && accountId != null) {
@@ -297,7 +297,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                 value: 'reset',
                 enabled: accountId != null && envelopes.isNotEmpty,
                 child: Text(
-                  'Reinitialiser le budget de ce compte',
+                  'Réinitialiser le budget de ce compte',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
@@ -392,7 +392,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                       FilledButton.icon(
                         onPressed: openSuggestions,
                         icon: const Icon(Icons.auto_awesome_outlined),
-                        label: const Text('Generer automatiquement'),
+                        label: const Text('Générer automatiquement'),
                       ),
                       const SizedBox(height: 8),
                       TextButton.icon(
@@ -480,11 +480,11 @@ Future<void> _resetBudget({
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Reinitialiser le budget'),
+      title: const Text('Réinitialiser le budget'),
       content: Text(
         'Supprimer toutes les enveloppes de budget de "$accountName" ? '
-        'Les operations et echeances elles-memes ne sont pas touchees, '
-        'seul le budget de ce compte est efface.',
+        'Les opérations et échéances elles-mêmes ne sont pas touchées, '
+        'seul le budget de ce compte est effacé.',
       ),
       actions: [
         TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
@@ -527,7 +527,7 @@ Future<void> _addEnvelope({
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 SearchableSelectField<Category>(
-                  label: 'Categorie',
+                  label: 'Catégorie',
                   options: candidateCategories,
                   labelOf: (c) => categoryFullPath(c.id, categoriesById),
                   onSelected: (c) => setDialogState(() {
@@ -546,10 +546,10 @@ Future<void> _addEnvelope({
                 if (autoTotal != null && autoTotal > 0) ...[
                   const SizedBox(height: 8),
                   Text(
-                    'Cette categorie a deja des operations recurrentes actives : '
-                    'le montant sera calcule automatiquement (${autoTotal.toStringAsFixed(2)}/mois) '
+                    'Cette catégorie a déjà des opérations récurrentes actives : '
+                    'le montant sera calculé automatiquement (${autoTotal.toStringAsFixed(2)}/mois) '
                     'tant qu\'elles existent - la valeur ci-dessus ne sert que de repli si elles '
-                    'sont un jour supprimees.',
+                    'sont un jour supprimées.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -663,10 +663,10 @@ Future<void> _openSuggestions({
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Rien a suggerer'),
+        title: const Text('Rien à suggérer'),
         content: const Text(
-          'Aucune operation recurrente ni historique de depenses exploitable '
-          'trouve pour ce compte.',
+          'Aucune opération récurrente ni historique de dépenses exploitable '
+          'trouvé pour ce compte.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Fermer')),
@@ -739,7 +739,7 @@ Future<void> _openSuggestions({
           }
 
           return AlertDialog(
-            title: const Text('Enveloppes suggerees'),
+            title: const Text('Enveloppes suggérées'),
             content: SizedBox(
               width: 440,
               height: 420,
@@ -781,7 +781,7 @@ Future<void> _openSuggestions({
                                     Icon(s.fromRecurring ? Icons.autorenew : Icons.history, size: 13),
                                     const SizedBox(width: 4),
                                     Text(
-                                      s.fromRecurring ? 'Operation recurrente' : 'Moyenne sur 1 an',
+                                      s.fromRecurring ? 'Opération récurrente' : 'Moyenne sur 1 an',
                                       style: Theme.of(context).textTheme.bodySmall,
                                     ),
                                     if (s.stale) ...[
@@ -979,9 +979,9 @@ Future<void> _editEnvelope({
           if (member.isAuto) ...[
             const SizedBox(height: 8),
             Text(
-              'Cette enveloppe est actuellement calculee automatiquement depuis des '
-              'operations recurrentes actives - ce montant ne sera utilise que si elles '
-              'sont un jour supprimees.',
+              'Cette enveloppe est actuellement calculée automatiquement depuis des '
+              'opérations récurrentes actives - ce montant ne sera utilisé que si elles '
+              'sont un jour supprimées.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -1058,7 +1058,7 @@ class _RemainingCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Reste a vivre ce mois-ci', style: Theme.of(context).textTheme.bodySmall),
+            Text('Reste à vivre ce mois-ci', style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
             Text(
               currency?.format(remaining) ?? remaining.toStringAsFixed(2),
@@ -1070,7 +1070,7 @@ class _RemainingCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              'Solde prevu au ${DateFormat('d MMM', 'fr_FR').format(resetDate)}',
+              'Solde prévu au ${DateFormat('d MMM', 'fr_FR').format(resetDate)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -1283,7 +1283,7 @@ class _AmountSummary extends StatelessWidget {
                 const Icon(Icons.schedule, size: 14, color: forecastColor),
                 const SizedBox(width: 4),
                 Text(
-                  '+ ${fmt(item.forecastExtra)} prevu(s), pas encore passe',
+                  '+ ${fmt(item.forecastExtra)} prévu(s), pas encore passé',
                   style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: forecastColor),
                 ),
               ],
@@ -1375,7 +1375,7 @@ class _EnvelopeDetail extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Ajouter une sous-categorie',
+                  tooltip: 'Ajouter une sous-catégorie',
                   icon: const Icon(Icons.add, size: 18),
                   onPressed: onAddMember,
                 ),
@@ -1387,12 +1387,12 @@ class _EnvelopeDetail extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(
-                  'Dont ${fmt(item.spentSimulated)} simule(s)',
+                  'Dont ${fmt(item.spentSimulated)} simulé(s)',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
                 ),
               ),
             const Divider(height: 20),
-            Text('Repartition du budget', style: Theme.of(context).textTheme.bodySmall),
+            Text('Répartition du budget', style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
             for (final m in item.members)
               Padding(
@@ -1406,7 +1406,7 @@ class _EnvelopeDetail extends StatelessWidget {
                       ),
                     Expanded(
                       child: Text(
-                        m.category.id == item.topCategory.id ? 'Cette categorie (sans les sous-cat.)' : m.category.name,
+                        m.category.id == item.topCategory.id ? 'Cette catégorie (sans les sous-cat.)' : m.category.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1433,12 +1433,12 @@ class _EnvelopeDetail extends StatelessWidget {
                 child: TextButton.icon(
                   onPressed: onAddMember,
                   icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Budgeter une sous-categorie separement'),
+                  label: const Text('Budgeter une sous-catégorie séparément'),
                 ),
               ),
             if (relevantChildren.isNotEmpty) ...[
               const Divider(height: 20),
-              Text('Sous-categories (depenses reelles)', style: Theme.of(context).textTheme.bodySmall),
+              Text('Sous-catégories (dépenses réelles)', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 4),
               for (final c in relevantChildren)
                 Padding(
@@ -1454,12 +1454,12 @@ class _EnvelopeDetail extends StatelessWidget {
                 ),
             ],
             const Divider(height: 20),
-            Text('Operations de la periode', style: Theme.of(context).textTheme.bodySmall),
+            Text('Opérations de la période', style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
             if (transactions.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
-                child: Text('Aucune operation sur cette periode.'),
+                child: Text('Aucune opération sur cette période.'),
               )
             else
               for (final t in transactions)
@@ -1473,7 +1473,7 @@ class _EnvelopeDetail extends StatelessWidget {
                       ),
                       Expanded(
                         child: Text(
-                          payees[t.payeeId]?.name ?? 'Paye inconnu',
+                          payees[t.payeeId]?.name ?? 'Payé inconnu',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),

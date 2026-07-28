@@ -271,7 +271,7 @@ class DatabaseProvider extends ChangeNotifier {
     } catch (e) {
       status = DbStatus.error;
       errorMessage = notFoundMessage != null
-          ? 'Le dernier fichier utilise est introuvable (deplace ou supprime). Choisissez-en un autre.'
+          ? 'Le dernier fichier utilisé est introuvable (déplacé ou supprimé). Choisissez-en un autre.'
           : e.toString();
     }
     notifyListeners();
@@ -318,7 +318,7 @@ class DatabaseProvider extends ChangeNotifier {
     }
 
     final result = await FilePicker.pickFiles(
-      dialogTitle: 'Choisir la base de donnees (.mmb)',
+      dialogTitle: 'Choisir la base de données (.mmb)',
       type: FileType.custom,
       allowedExtensions: ['mmb', 'db', 'sqlite'],
       withData: kIsWeb,
@@ -330,7 +330,7 @@ class DatabaseProvider extends ChangeNotifier {
       final bytes = file.bytes;
       if (bytes == null) {
         status = DbStatus.error;
-        errorMessage = 'Impossible de lire le fichier selectionne.';
+        errorMessage = 'Impossible de lire le fichier sélectionné.';
         notifyListeners();
         return;
       }
@@ -340,7 +340,7 @@ class DatabaseProvider extends ChangeNotifier {
       final path = file.path;
       if (path == null) {
         status = DbStatus.error;
-        errorMessage = 'Impossible de recuperer le chemin du fichier.';
+        errorMessage = 'Impossible de récupérer le chemin du fichier.';
         notifyListeners();
         return;
       }

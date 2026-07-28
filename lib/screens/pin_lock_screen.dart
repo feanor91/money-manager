@@ -56,7 +56,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                 Icon(Icons.lock_outline,
                     size: 48, color: AppTheme.accent),
                 const SizedBox(height: 16),
-                Text('Money Manager verrouille',
+                Text('Money Manager verrouillé',
                     style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 24),
                 TextField(
@@ -82,7 +82,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Deverrouiller'),
+                      : const Text('Déverrouiller'),
                 ),
               ],
             ),
@@ -128,7 +128,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Definir un code PIN')),
+      appBar: AppBar(title: const Text('Définir un code PIN')),
       body: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(

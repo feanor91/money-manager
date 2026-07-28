@@ -693,7 +693,7 @@ class MmexRepository {
       final signedAmount = _billSignedAmount(bill, accountId);
       final label = bill.transCode == TransCode.transfer
           ? '${accounts[bill.accountId]?.name ?? '?'} -> ${accounts[bill.toAccountId]?.name ?? '?'}'
-          : (payees[bill.payeeId]?.name ?? 'Paye inconnu');
+          : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
 
       for (final occurrence in _occurrencesInRange(bill, start, end)) {
         result.add(RecurringOccurrence(date: occurrence, label: label, signedAmount: signedAmount));
