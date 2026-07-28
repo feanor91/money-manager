@@ -74,8 +74,14 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    final dbProvider = context.watch<DatabaseProvider>();
     return Scaffold(
-      body: IndexedStack(index: _index, children: _screens),
+      body: Column(
+        children: [
+          if (dbProvider.saveError != null) _SaveErrorBanner(error: dbProvider.saveError!),
+          Expanded(child: IndexedStack(index: _index, children: _screens)),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
@@ -86,6 +92,47 @@ class _HomeShellState extends State<HomeShell> {
           NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Récurrentes'),
           NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
         ],
+      ),
+    );
+  }
+}
+
+/// Shown app-wide whenever the last write-back to the real .mmb file on
+/// disk failed - a failed save must never happen silently, since the whole
+/// point of the direct file link is that the app doesn't need a separate
+/// "save" step the user could forget.
+class _SaveErrorBanner extends StatelessWidget {
+  final String error;
+
+  const _SaveErrorBanner({required this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.errorContainer,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              Icon(Icons.error_outline, color: theme.colorScheme.onErrorContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Échec de l\'enregistrement sur le fichier .mmb - vos dernières '
+                  'modifications ne sont peut-être pas sauvegardées : $error',
+                  style: TextStyle(color: theme.colorScheme.onErrorContainer),
+                ),
+              ),
+              TextButton(
+                onPressed: () => context.read<DatabaseProvider>().retrySave(),
+                child: const Text('Réessayer'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

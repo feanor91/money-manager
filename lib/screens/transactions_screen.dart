@@ -772,6 +772,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 onCreate: (text) async {
                   final id = widget.repo.insertCategory(name: text);
+                  context.read<DatabaseProvider>().touch();
                   setState(() {});
                   return Category(id: id, name: text, active: true);
                 },
@@ -826,6 +827,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
                     TextButton(
                       onPressed: () {
                         widget.repo.deleteTransaction(widget.existing!.id);
+                        context.read<DatabaseProvider>().touch();
                         Navigator.of(context).pop();
                       },
                       child: const Text('Supprimer'),
@@ -876,6 +878,7 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
         notes: _notesController.text,
       ));
     }
+    context.read<DatabaseProvider>().touch();
     Navigator.of(context).pop();
   }
 }

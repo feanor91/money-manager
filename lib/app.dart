@@ -69,11 +69,14 @@ class _RootGateState extends State<_RootGate> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Re-lock as soon as the app leaves the foreground (mobile: home
-    // button, app switcher, incoming call) - a PIN only checked once at
-    // launch wouldn't do much for a phone left unlocked on a table.
+    // Re-lock once the app is actually hidden (mobile: home button, app
+    // switcher, incoming call; web: tab switched away/minimized) - a PIN
+    // only checked once at launch wouldn't do much for a phone left
+    // unlocked on a table. Deliberately excludes `inactive`: on web that
+    // fires on every transient focus loss (alt-tab, opening dev tools,
+    // clicking a browser dialog), which would relock far too aggressively.
     if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
+        state == AppLifecycleState.hidden) {
       context.read<PinLockProvider>().lockOnBackground();
     }
   }

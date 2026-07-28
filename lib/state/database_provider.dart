@@ -350,6 +350,39 @@ class DatabaseProvider extends ChangeNotifier {
 
   Timer? _writeBackDebounce;
 
+  /// Set when the last attempt to write back to the real file on disk
+  /// (web, File System Access handle) failed - e.g. permission silently
+  /// revoked, the file locked by another program, disk full. Null means
+  /// either persistence isn't applicable (native, or no handle) or the
+  /// last write succeeded. Surfaced app-wide (see [HomeShell]) because a
+  /// failed save must never happen invisibly - the previous behaviour let
+  /// [writeBytes] fail with nobody ever finding out.
+  String? saveError;
+
+  Future<void> _writeBack(WebFileLink link, MmexDatabase db) async {
+    try {
+      await link.writeBytes(db.exportBytes());
+      if (saveError != null) {
+        saveError = null;
+        notifyListeners();
+      }
+    } catch (e) {
+      saveError = e.toString();
+      notifyListeners();
+    }
+  }
+
+  /// Re-attempts the last failed write-back after [saveError] was shown to
+  /// the user (e.g. a "Réessayer" button), using the current in-memory
+  /// state of the database (not just re-running the old attempt).
+  void retrySave() {
+    final link = _webFileLink;
+    final db = _db;
+    if (link != null && db != null) {
+      unawaited(_writeBack(link, db));
+    }
+  }
+
   /// Call after any repository write (insert/update/delete/reconcile/...):
   /// every screen watches this provider, so this is what makes sibling tabs
   /// kept alive by the bottom navigation's IndexedStack refresh their data.
@@ -364,7 +397,7 @@ class DatabaseProvider extends ChangeNotifier {
     if (link != null && db != null) {
       _writeBackDebounce?.cancel();
       _writeBackDebounce = Timer(const Duration(milliseconds: 500), () {
-        link.writeBytes(db.exportBytes());
+        unawaited(_writeBack(link, db));
       });
     }
   }
@@ -408,6 +441,7 @@ class DatabaseProvider extends ChangeNotifier {
     _db = db;
     _repository = MmexRepository(db)..ensureAppSchema();
     currentLabel = db.label;
+    saveError = null;
 
     if (!_selectedAccountLoaded) {
       final prefs = await SharedPreferences.getInstance();

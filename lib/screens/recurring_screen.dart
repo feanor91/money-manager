@@ -388,6 +388,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 onCreate: (text) async {
                   final id = widget.repo.insertCategory(name: text);
+                  context.read<DatabaseProvider>().touch();
                   return Category(id: id, name: text, active: true);
                 },
               ),
@@ -517,6 +518,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
                     TextButton(
                       onPressed: () {
                         widget.repo.deleteBillDeposit(widget.existing!.id);
+                        context.read<DatabaseProvider>().touch();
                         Navigator.of(context).pop();
                       },
                       child: const Text('Supprimer'),
@@ -574,6 +576,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
         categoryId: _categoryId,
       ));
     }
+    context.read<DatabaseProvider>().touch();
     Navigator.of(context).pop();
   }
 }

@@ -50,7 +50,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Catégories')),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addCategory(context, repo, parentId: null),
+        onPressed: () async {
+          await _addCategory(context, repo, parentId: null);
+          dbProvider.touch();
+        },
         icon: const Icon(Icons.add),
         label: const Text('Nouvelle catégorie'),
       ),
@@ -176,7 +179,10 @@ class _CategoryGroup extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
-                  onPressed: () => _addCategory(context, repo, parentId: parent.id),
+                  onPressed: () async {
+                    await _addCategory(context, repo, parentId: parent.id);
+                    onChanged();
+                  },
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Ajouter une sous-catégorie'),
                 ),
