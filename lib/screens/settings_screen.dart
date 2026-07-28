@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
+import 'categories_screen.dart';
 import 'pin_lock_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -44,6 +45,18 @@ class SettingsScreen extends StatelessWidget {
                       child: const Text('Supprimer'),
                     ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.category_outlined),
+              title: const Text('Categories'),
+              subtitle: const Text('Ajouter, renommer, fusionner ou archiver'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CategoriesScreen()),
               ),
             ),
           ),

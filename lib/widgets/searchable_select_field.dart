@@ -80,7 +80,7 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
                   elevation: 4,
                   borderRadius: BorderRadius.circular(12),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 240, minWidth: 240),
+                    constraints: const BoxConstraints(maxHeight: 320, minWidth: 240),
                     child: ListView.builder(
                       padding: EdgeInsets.zero,
                       shrinkWrap: true,
@@ -89,7 +89,7 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
                         final option = list[index];
                         return ListTile(
                           dense: true,
-                          title: Text(widget.labelOf(option)),
+                          title: _OptionLabel(text: widget.labelOf(option)),
                           onTap: () => onSelectedCallback(option),
                         );
                       },
@@ -112,6 +112,39 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
             },
           ),
       ],
+    );
+  }
+}
+
+/// Renders a "Parent:Child" option label (e.g. a category's full path) with
+/// the parent segment muted and the leaf segment emphasized, so a long
+/// alphabetical list still reads as grouped-by-parent at a glance instead
+/// of a flat wall of text. Falls back to a plain label when there's no
+/// ":" to split on (top-level categories, payee names, ...).
+class _OptionLabel extends StatelessWidget {
+  final String text;
+
+  const _OptionLabel({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final separator = text.lastIndexOf(':');
+    if (separator == -1) {
+      return Text(text, style: const TextStyle(fontWeight: FontWeight.w600));
+    }
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return RichText(
+      overflow: TextOverflow.ellipsis,
+      text: TextSpan(
+        style: DefaultTextStyle.of(context).style,
+        children: [
+          TextSpan(text: text.substring(0, separator + 1), style: TextStyle(color: muted)),
+          TextSpan(
+            text: text.substring(separator + 1),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
     );
   }
 }

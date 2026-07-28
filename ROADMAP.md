@@ -9,6 +9,26 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Modes d'exécution auto des opérations récurrentes inversés~~ - **fait**.
+  Vérifié dans le vrai code source MMEX (v1.9.2, `REPEAT_AUTO` +
+  `billsdepositsdialog.cpp`) : +100 = "en attente de saisie du paiement"
+  (demande confirmation), +200 = "exécution automatique" (silencieux). Notre
+  code avait ces deux offsets **inversés** depuis le début - une opération
+  mise en "silencieuse" dans l'appli demandait en réalité confirmation une
+  fois relue selon la vraie sémantique MMEX, et inversement. Corrigé dans
+  `lib/models/recurrence.dart` (`decodeRepeats`/`encodeRepeats`). Pas de
+  migration automatique des opérations déjà enregistrées avec l'ancien
+  mapping - à revérifier/réajuster manuellement au cas par cas.
+- ~~Écran de gestion des catégories~~ - **fait**. Paramètres > Catégories :
+  catégories mères en liste dépliable avec leurs sous-catégories, ajout
+  (mère ou enfant), renommage, fusion (les opérations/échéances/budgets/
+  tiers de la catégorie source basculent vers la catégorie conservée,
+  puis la source est supprimée), et suppression bloquée avec explication
+  quand la catégorie est encore utilisée quelque part - avec un "Archiver"
+  proposé à la place (nouveau : bascule le flag ACTIVE existant de MMEX,
+  la catégorie disparaît des listes de choix sans perdre son historique).
+  La fusion est limitée aux catégories sans sous-catégorie (source), pour
+  ne pas avoir à décider tout seul du sort de petites-catégories orphelines.
 - ~~Périodicités manquantes dans les opérations récurrentes~~ - **fait**.
   En creusant (source MMEX stable v1.9.2, `Model_Billsdeposits.h`), le
   vrai souci était plus profond qu'un simple manque : notre code 4 était
@@ -77,10 +97,6 @@ courses, pas des engagements.
 
 ## Suggestions (à valider avant de s'y lancer)
 
-- **Écran de gestion des catégories/payés** - actuellement seulement
-  créables à la volée depuis l'éditeur de transaction (limitation déjà
-  notée dans le README) ; un écran dédié permettrait de renommer,
-  fusionner, désactiver.
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
   un tableur externe) - relativement simple à ajouter vu que le grand
   livre est déjà entièrement lisible via `MmexRepository`.

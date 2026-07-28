@@ -112,18 +112,21 @@ String recurrencePeriodLabelWithX(RecurrencePeriod period, int x) {
 }
 
 /// MMEX encodes REPEATS as a base period code (see [_periodBaseCodes]) plus
-/// an offset marking whether the occurrence auto-executes: +100 = silently,
-/// +200 = with a confirmation prompt. Anything else falls back to
-/// manual/"none".
+/// an offset marking whether the occurrence auto-executes - confirmed
+/// against the real MMEX source (REPEAT_AUTO enum + billsdepositsdialog.cpp,
+/// v1.9.2): +100 = REPEAT_AUTO_MANUAL, the "en attente de saisie du paiement
+/// par l'utilisateur" checkbox (asks for confirmation before inserting);
+/// +200 = REPEAT_AUTO_SILENT, "exécution automatique de l'opération" (no
+/// prompt at all). Anything else falls back to manual/"none".
 ({RecurrencePeriod period, RecurrenceAutoExecute autoExecute}) decodeRepeats(int repeats) {
   int base = repeats;
   var auto = RecurrenceAutoExecute.manual;
   if (repeats >= 200) {
     base = repeats - 200;
-    auto = RecurrenceAutoExecute.notify;
+    auto = RecurrenceAutoExecute.silent;
   } else if (repeats >= 100) {
     base = repeats - 100;
-    auto = RecurrenceAutoExecute.silent;
+    auto = RecurrenceAutoExecute.notify;
   }
   final period = _periodBaseCodes.entries
       .firstWhere((e) => e.value == base, orElse: () => const MapEntry(RecurrencePeriod.monthly, 3))
@@ -136,9 +139,9 @@ int encodeRepeats(RecurrencePeriod period, RecurrenceAutoExecute autoExecute) {
   switch (autoExecute) {
     case RecurrenceAutoExecute.manual:
       return base;
-    case RecurrenceAutoExecute.silent:
-      return base + 100;
     case RecurrenceAutoExecute.notify:
+      return base + 100;
+    case RecurrenceAutoExecute.silent:
       return base + 200;
   }
 }

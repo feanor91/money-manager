@@ -22,6 +22,15 @@ class TransactionsScreen extends StatefulWidget {
 }
 
 class _TransactionsScreenState extends State<TransactionsScreen> {
+  final _searchController = TextEditingController();
+  String _search = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
@@ -42,9 +51,30 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final accountsById = {for (final a in accounts) a.id: a};
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
-    final rows = accountId == null
+    final allRows = accountId == null
         ? const <TransactionWithBalance>[]
         : repo.getTransactionsWithRunningBalance(accountId);
+
+    final query = foldDiacritics(_search.trim());
+    final rows = query.isEmpty
+        ? allRows
+        : allRows.where((row) {
+            final tx = row.transaction;
+            final isTransfer = tx.transCode == TransCode.transfer;
+            final tiers = isTransfer
+                ? '${accountsById[tx.accountId]?.name ?? ''} ${accountsById[tx.toAccountId]?.name ?? ''}'
+                : (payees[tx.payeeId]?.name ?? '');
+            final categorie =
+                isTransfer ? 'Virement' : categoryFullPath(tx.categoryId, categories);
+            final haystack = foldDiacritics([
+              tiers,
+              categorie,
+              tx.notes ?? '',
+              DateFormat('dd/MM/yyyy').format(tx.date),
+              currency?.format(tx.amount) ?? tx.amount.toStringAsFixed(2),
+            ].join(' '));
+            return haystack.contains(query);
+          }).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -60,6 +90,31 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             ],
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Rechercher (tiers, categorie, remarque, montant...)',
+                isDense: true,
+                border: const OutlineInputBorder(),
+                suffixIcon: _search.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () => setState(() {
+                          _searchController.clear();
+                          _search = '';
+                        }),
+                      ),
+              ),
+              onChanged: (v) => setState(() => _search = v),
+            ),
+          ),
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(context),
@@ -67,7 +122,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         label: const Text('Ajouter'),
       ),
       body: rows.isEmpty
-          ? const Center(child: Text('Aucune transaction'))
+          ? Center(
+              child: Text(query.isEmpty ? 'Aucune transaction' : 'Aucun resultat'),
+            )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
               // (~1050px) to read comfortably - below that it's cramped
@@ -607,6 +664,16 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
             a.id == _toAccountId)
         .toList();
     final categories = widget.repo.getCategories();
+    final categoriesById = {for (final c in categories) c.id: c};
+    // "Parent:Child" full paths, sorted by that same path - groups every
+    // subcategory under its parent alphabetically (matching how MMEX itself
+    // lists categories), instead of the raw CATEGNAME-only order the
+    // repository returns (which scatters same-named leaves across
+    // unrelated parents).
+    final sortedCategories = [...categories]..sort((a, b) =>
+        categoryFullPath(a.id, categoriesById)
+            .toLowerCase()
+            .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
     final payees = widget.repo.getPayees(onlyActive: false);
     final isTransfer = _transCode == TransCode.transfer;
 
@@ -690,8 +757,8 @@ class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
                 label: 'Categorie',
-                options: categories,
-                labelOf: (c) => c.name,
+                options: sortedCategories,
+                labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 onCreate: (text) async {

@@ -50,7 +50,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
         payees[bill.payeeId]?.name,
         accounts[bill.accountId]?.name,
         accounts[bill.toAccountId]?.name,
-        categories[bill.categoryId]?.name,
+        categoryFullPath(bill.categoryId, categories),
         bill.notes,
       ].whereType<String>().join(' ').toLowerCase();
       return haystack.contains(query);
@@ -122,9 +122,11 @@ class _RecurringScreenState extends State<RecurringScreen> {
                         final title = isTransfer
                             ? '${accounts[bill.accountId]?.name ?? '?'} → ${accounts[bill.toAccountId]?.name ?? '?'}'
                             : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
+                        final categoryLabel = categoryFullPath(bill.categoryId, categories);
                         final subtitleLine1 = isTransfer
                             ? 'Virement'
-                            : '${accounts[bill.accountId]?.name ?? ''} - ${categories[bill.categoryId]?.name ?? 'Non categorise'}';
+                            : '${accounts[bill.accountId]?.name ?? ''} - '
+                                '${categoryLabel.isEmpty ? 'Non categorise' : categoryLabel}';
                         return Card(
                           child: Opacity(
                             opacity: bill.paused ? 0.55 : 1,
@@ -291,6 +293,11 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
             a.id == _toAccountId)
         .toList();
     final categories = widget.repo.getCategories();
+    final categoriesById = {for (final c in categories) c.id: c};
+    final sortedCategories = [...categories]..sort((a, b) =>
+        categoryFullPath(a.id, categoriesById)
+            .toLowerCase()
+            .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
     final payees = widget.repo.getPayees(onlyActive: false);
     final isTransfer = _transCode == TransCode.transfer;
 
@@ -374,8 +381,8 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
                 label: 'Categorie',
-                options: categories,
-                labelOf: (c) => c.name,
+                options: sortedCategories,
+                labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 onCreate: (text) async {

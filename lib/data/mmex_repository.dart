@@ -131,8 +131,120 @@ class MmexRepository {
     );
   }
 
+  void renameCategory(int categoryId, String newName) {
+    db.execute(
+      'UPDATE CATEGORY_V1 SET CATEGNAME = ? WHERE CATEGID = ?',
+      [newName, categoryId],
+    );
+  }
+
+  /// Reparents a subcategory under a different top-level category (or, if
+  /// [newParentId] is null, promotes it to top-level itself). Every
+  /// transaction/bill/budget/payee already pointing at this category keeps
+  /// pointing at the same CATEGID, so they move along with it automatically
+  /// - only which parent it's nested under changes.
+  void moveCategory(int categoryId, int? newParentId) {
+    db.execute(
+      'UPDATE CATEGORY_V1 SET PARENTID = ? WHERE CATEGID = ?',
+      [newParentId ?? -1, categoryId],
+    );
+  }
+
+  /// Toggles a category between active and archived (MMEX's ACTIVE flag):
+  /// an archived category is hidden from pickers and this screen's default
+  /// view, but its existing transactions/history are untouched - the safe
+  /// alternative to deleting when [categoryInUse] blocks a hard delete.
+  void setCategoryActive(int categoryId, bool active) {
+    db.execute(
+      'UPDATE CATEGORY_V1 SET ACTIVE = ? WHERE CATEGID = ?',
+      [active ? 1 : 0, categoryId],
+    );
+  }
+
+  /// Everything that would block a hard [deleteCategory] call: any
+  /// subcategory still under it, or any row elsewhere that still points at
+  /// it. Checked up front so the UI can explain *why* delete is disabled
+  /// instead of just failing (a foreign key isn't actually enforced by the
+  /// .mmb schema, so deleteCategory itself wouldn't fail - it would just
+  /// silently orphan those rows, which is the thing this method exists to
+  /// prevent the UI from ever doing).
+  CategoryUsage categoryUsage(int categoryId) {
+    final children = db.query(
+      'SELECT COUNT(*) AS n FROM CATEGORY_V1 WHERE PARENTID = ?',
+      [categoryId],
+    );
+    final transactions = db.query(
+      'SELECT COUNT(*) AS n FROM CHECKINGACCOUNT_V1 WHERE CATEGID = ?',
+      [categoryId],
+    );
+    final bills = db.query(
+      'SELECT COUNT(*) AS n FROM BILLSDEPOSITS_V1 WHERE CATEGID = ?',
+      [categoryId],
+    );
+    final budgets = db.query(
+      'SELECT COUNT(*) AS n FROM BUDGETTABLE_V1 WHERE CATEGID = ?',
+      [categoryId],
+    );
+    final payees = db.query(
+      'SELECT COUNT(*) AS n FROM PAYEE_V1 WHERE CATEGID = ?',
+      [categoryId],
+    );
+    int count(List<Map<String, Object?>> rows) => (rows.first['n'] as int?) ?? 0;
+    return CategoryUsage(
+      childCategoryCount: count(children),
+      transactionCount: count(transactions),
+      recurringCount: count(bills),
+      budgetEntryCount: count(budgets),
+      payeeDefaultCount: count(payees),
+    );
+  }
+
   void deleteCategory(int categoryId) {
     db.execute('DELETE FROM CATEGORY_V1 WHERE CATEGID = ?', [categoryId]);
+  }
+
+  /// Merges [fromId] into [toId]: every transaction, recurring bill, payee
+  /// default category, and budget entry pointing at [fromId] is repointed
+  /// to [toId], then [fromId] is deleted. Only meant for leaf categories
+  /// (see [CategoryUsage.childCategoryCount]) - the caller should keep a
+  /// category with subcategories out of the merge target picker, since
+  /// there's no single sensible answer for what should happen to its
+  /// children otherwise.
+  void mergeCategories({required int fromId, required int toId}) {
+    if (fromId == toId) return;
+    db.transaction(() {
+      db.execute(
+        'UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE CATEGID = ?',
+        [toId, fromId],
+      );
+      db.execute(
+        'UPDATE BILLSDEPOSITS_V1 SET CATEGID = ? WHERE CATEGID = ?',
+        [toId, fromId],
+      );
+      db.execute(
+        'UPDATE PAYEE_V1 SET CATEGID = ? WHERE CATEGID = ?',
+        [toId, fromId],
+      );
+      // One budget entry per (year, category) - if the target already has
+      // one for a year the source also has, keep the target's and drop the
+      // source's instead of ending up with two rows for the same category.
+      final conflicting = db.query(
+        'SELECT s.BUDGETENTRYID AS id FROM BUDGETTABLE_V1 s '
+        'WHERE s.CATEGID = ? AND EXISTS ('
+        '  SELECT 1 FROM BUDGETTABLE_V1 t '
+        '  WHERE t.CATEGID = ? AND t.BUDGETYEARID = s.BUDGETYEARID'
+        ')',
+        [fromId, toId],
+      );
+      for (final row in conflicting) {
+        db.execute('DELETE FROM BUDGETTABLE_V1 WHERE BUDGETENTRYID = ?', [row['id']]);
+      }
+      db.execute(
+        'UPDATE BUDGETTABLE_V1 SET CATEGID = ? WHERE CATEGID = ?',
+        [toId, fromId],
+      );
+      db.execute('DELETE FROM CATEGORY_V1 WHERE CATEGID = ?', [fromId]);
+    });
   }
 
   // ---- Payees ----------------------------------------------------
