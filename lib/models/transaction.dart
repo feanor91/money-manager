@@ -89,15 +89,21 @@ class MoneyTransaction {
     }
   }
 
-  MoneyTransaction copyWith({DateTime? date}) {
+  MoneyTransaction copyWith({DateTime? date, double? amount}) {
     return MoneyTransaction(
       id: id,
       accountId: accountId,
       toAccountId: toAccountId,
       payeeId: payeeId,
       transCode: transCode,
-      amount: amount,
-      toAmount: toAmount,
+      amount: amount ?? this.amount,
+      // A non-transfer transaction always has toAmount == amount (see
+      // fromRow/insertTransaction) - kept in sync here too so this stays
+      // true after an inline amount edit. Transfers never reach this: the
+      // ledger's inline amount edit is deliberately withdrawal/deposit
+      // only, since a transfer's two legs can differ (currency conversion)
+      // and editing just one side blind would be wrong.
+      toAmount: amount ?? toAmount,
       status: status,
       categoryId: categoryId,
       date: date ?? this.date,

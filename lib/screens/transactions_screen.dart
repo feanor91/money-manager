@@ -14,6 +14,7 @@ import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+import 'recurring_screen.dart' show RecurringEditorSheet;
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
@@ -52,6 +53,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final accountsById = {for (final a in accounts) a.id: a};
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final recurringTxIds = repo.recurringTransactionIds();
+    final recurringOccurrences = repo.recurringTransactionOccurrences();
     final allRows = accountId == null
         ? const <TransactionWithBalance>[]
         : repo.getTransactionsWithRunningBalance(accountId);
@@ -119,7 +122,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context, defaultAccountId: accountId),
+        onPressed: () => _showAddChoice(context, accountId),
         icon: const Icon(Icons.add),
         label: const Text('Ajouter'),
       ),
@@ -140,6 +143,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   categoriesById: categories,
                   payeesById: payees,
                   currency: currency,
+                  recurringTxIds: recurringTxIds,
+                  recurringOccurrences: recurringOccurrences,
                   onTapRow: (tx) => _openEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
@@ -147,6 +152,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   },
                   onEditDate: (tx, date) {
                     repo.updateTransaction(tx.copyWith(date: date));
+                    dbProvider.touch();
+                  },
+                  onEditAmount: (tx, amount) {
+                    repo.updateTransaction(tx.copyWith(amount: amount));
                     dbProvider.touch();
                   },
                 );
@@ -160,6 +169,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   categoriesById: categories,
                   payeesById: payees,
                   currency: currency,
+                  recurringTxIds: recurringTxIds,
+                  recurringOccurrences: recurringOccurrences,
                   onTapRow: (tx) => _openEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
@@ -167,6 +178,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   },
                   onEditDate: (tx, date) {
                     repo.updateTransaction(tx.copyWith(date: date));
+                    dbProvider.touch();
+                  },
+                  onEditAmount: (tx, amount) {
+                    repo.updateTransaction(tx.copyWith(amount: amount));
                     dbProvider.touch();
                   },
                 ),
@@ -187,6 +202,49 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         repo: repo,
         defaultAccountId: defaultAccountId,
       ),
+    );
+    dbProvider.touch();
+  }
+
+  /// Lets the FAB create either a one-off transaction or a recurring bill
+  /// without leaving this screen - avoids a trip to the "Récurrentes" tab
+  /// just to set up something recurring noticed while looking at the ledger.
+  Future<void> _showAddChoice(BuildContext context, int? accountId) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.receipt_long_outlined),
+              title: const Text('Nouvelle transaction'),
+              onTap: () => Navigator.of(context).pop('transaction'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.autorenew),
+              title: const Text('Nouvelle opération récurrente'),
+              onTap: () => Navigator.of(context).pop('recurring'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    if (choice == 'transaction') {
+      await _openEditor(context, defaultAccountId: accountId);
+    } else {
+      await _openRecurringEditor(context, defaultAccountId: accountId);
+    }
+  }
+
+  Future<void> _openRecurringEditor(BuildContext context, {int? defaultAccountId}) async {
+    final dbProvider = context.read<DatabaseProvider>();
+    final repo = dbProvider.repository!;
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => RecurringEditorSheet(repo: repo, defaultAccountId: defaultAccountId),
     );
     dbProvider.touch();
   }
@@ -231,6 +289,9 @@ class _LedgerTable extends StatelessWidget {
   final ValueChanged<MoneyTransaction> onTapRow;
   final void Function(MoneyTransaction, bool) onToggleReconciled;
   final void Function(MoneyTransaction tx, DateTime date) onEditDate;
+  final void Function(MoneyTransaction tx, double amount) onEditAmount;
+  final Set<int> recurringTxIds;
+  final Map<int, ({int index, int total})> recurringOccurrences;
 
   const _LedgerTable({
     required this.rows,
@@ -241,6 +302,9 @@ class _LedgerTable extends StatelessWidget {
     required this.onTapRow,
     required this.onToggleReconciled,
     required this.onEditDate,
+    required this.onEditAmount,
+    required this.recurringTxIds,
+    required this.recurringOccurrences,
     this.currency,
   });
 
@@ -317,6 +381,40 @@ class _LedgerTable extends StatelessWidget {
       helpText: 'Modifier la date',
     );
     if (picked != null && picked != tx.date) onEditDate(tx, picked);
+  }
+
+  /// Same idea as [_editDate]: a quick way to fix the amount without
+  /// opening the full editor, e.g. right when reconciling and noticing the
+  /// bank cleared a slightly different amount than what was entered.
+  /// Deliberately not offered for transfers - see [MoneyTransaction.copyWith].
+  Future<void> _editAmount(BuildContext context, MoneyTransaction tx) async {
+    final controller = TextEditingController(
+        text: tx.amount.toStringAsFixed(2).replaceAll('.', ','));
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Modifier le montant'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Montant'),
+          onSubmitted: (v) => Navigator.of(context)
+              .pop(double.tryParse(v.replaceAll(',', '.'))),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () => Navigator.of(context)
+                .pop(double.tryParse(controller.text.replaceAll(',', '.'))),
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result > 0 && result != tx.amount) {
+      onEditAmount(tx, result);
+    }
   }
 
   Widget _row(BuildContext context, TransactionWithBalance row, int index) {
@@ -397,28 +495,75 @@ class _LedgerTable extends StatelessWidget {
                 child: cell(_colDate, DateFormat('dd/MM/yy').format(tx.date)),
               ),
               const SizedBox(width: _colGap),
-              cell(_colTiers, tiers),
+              SizedBox(
+                width: _colTiers,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (recurringTxIds.contains(tx.id)) ...[
+                      Tooltip(
+                        message: recurringOccurrences[tx.id] != null
+                            ? 'Générée par une opération récurrente '
+                                '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
+                            : 'Générée par une opération récurrente',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.autorenew, size: 13, color: scheme.primary),
+                            if (recurringOccurrences[tx.id] != null)
+                              Text(
+                                ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
+                                style: TextStyle(fontSize: 10, color: scheme.primary),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 3),
+                    ],
+                    Expanded(
+                      child: Text(
+                        tiers,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontStyle: isFuture ? FontStyle.italic : FontStyle.normal,
+                          fontWeight: isFuture
+                              ? FontWeight.normal
+                              : (reconciled ? FontWeight.normal : FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
               const SizedBox(width: _colGap),
               cell(_colStatut, reconciled ? 'R' : '', align: TextAlign.center),
               const SizedBox(width: _colGap),
               cell(_colCategorie, categorie),
               const SizedBox(width: _colGap),
-              cell(
-                _colMontant,
-                debit == null
-                    ? ''
-                    : (currency?.format(debit) ?? debit.toStringAsFixed(2)),
-                align: TextAlign.right,
-                color: debit == null ? null : AppTheme.negative,
+              InkWell(
+                onTap: isTransfer ? null : () => _editAmount(context, tx),
+                child: cell(
+                  _colMontant,
+                  debit == null
+                      ? ''
+                      : (currency?.format(debit) ?? debit.toStringAsFixed(2)),
+                  align: TextAlign.right,
+                  color: debit == null ? null : AppTheme.negative,
+                ),
               ),
               const SizedBox(width: _colGap),
-              cell(
-                _colMontant,
-                credit == null
-                    ? ''
-                    : (currency?.format(credit) ?? credit.toStringAsFixed(2)),
-                align: TextAlign.right,
-                color: credit == null ? null : AppTheme.positive,
+              InkWell(
+                onTap: isTransfer ? null : () => _editAmount(context, tx),
+                child: cell(
+                  _colMontant,
+                  credit == null
+                      ? ''
+                      : (currency?.format(credit) ?? credit.toStringAsFixed(2)),
+                  align: TextAlign.right,
+                  color: credit == null ? null : AppTheme.positive,
+                ),
               ),
               const SizedBox(width: _colGap),
               cell(
@@ -453,6 +598,9 @@ class _LedgerCards extends StatelessWidget {
   final ValueChanged<MoneyTransaction> onTapRow;
   final void Function(MoneyTransaction, bool) onToggleReconciled;
   final void Function(MoneyTransaction tx, DateTime date) onEditDate;
+  final void Function(MoneyTransaction tx, double amount) onEditAmount;
+  final Set<int> recurringTxIds;
+  final Map<int, ({int index, int total})> recurringOccurrences;
 
   const _LedgerCards({
     required this.rows,
@@ -463,6 +611,9 @@ class _LedgerCards extends StatelessWidget {
     required this.onTapRow,
     required this.onToggleReconciled,
     required this.onEditDate,
+    required this.onEditAmount,
+    required this.recurringTxIds,
+    required this.recurringOccurrences,
     this.currency,
   });
 
@@ -475,6 +626,36 @@ class _LedgerCards extends StatelessWidget {
       helpText: 'Modifier la date',
     );
     if (picked != null && picked != tx.date) onEditDate(tx, picked);
+  }
+
+  Future<void> _editAmount(BuildContext context, MoneyTransaction tx) async {
+    final controller = TextEditingController(
+        text: tx.amount.toStringAsFixed(2).replaceAll('.', ','));
+    final result = await showDialog<double>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Modifier le montant'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(labelText: 'Montant'),
+          onSubmitted: (v) => Navigator.of(context)
+              .pop(double.tryParse(v.replaceAll(',', '.'))),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () => Navigator.of(context)
+                .pop(double.tryParse(controller.text.replaceAll(',', '.'))),
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+    if (result != null && result > 0 && result != tx.amount) {
+      onEditAmount(tx, result);
+    }
   }
 
   @override
@@ -554,23 +735,52 @@ class _LedgerCards extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  Text(
-                    '${debit != null ? '-' : '+'}${currency?.format(amount) ?? amount.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      color: amountColor,
-                      fontWeight: FontWeight.w700,
-                      fontStyle: fontStyle,
+                  InkWell(
+                    onTap: isTransfer ? null : () => _editAmount(context, tx),
+                    child: Text(
+                      '${debit != null ? '-' : '+'}${currency?.format(amount) ?? amount.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: amountColor,
+                        fontWeight: FontWeight.w700,
+                        fontStyle: fontStyle,
+                      ),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                tiers,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontWeight: weight, fontStyle: fontStyle, fontSize: 15),
+              Row(
+                children: [
+                  if (recurringTxIds.contains(tx.id)) ...[
+                    Tooltip(
+                      message: recurringOccurrences[tx.id] != null
+                          ? 'Générée par une opération récurrente '
+                              '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
+                          : 'Générée par une opération récurrente',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.autorenew, size: 13, color: Theme.of(context).colorScheme.primary),
+                          if (recurringOccurrences[tx.id] != null)
+                            Text(
+                              ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
+                              style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.primary),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Expanded(
+                    child: Text(
+                      tiers,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontWeight: weight, fontStyle: fontStyle, fontSize: 15),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 2),
               Row(

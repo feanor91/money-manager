@@ -368,24 +368,40 @@ class _TotalBalanceCard extends StatelessWidget {
               style: const TextStyle(
                   color: Colors.white70, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
-          Text(
-            currency?.format(total) ?? total.toStringAsFixed(2),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 34,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -1,
-            ),
-          ),
           if (forecastBalance != null) ...[
-            const SizedBox(height: 4),
             Text(
-              '$forecastLabel : ${currency?.format(forecastBalance!) ?? forecastBalance!.toStringAsFixed(2)}',
+              currency?.format(forecastBalance!) ?? forecastBalance!.toStringAsFixed(2),
+              style: TextStyle(
+                color: forecastBalance! < 0 ? AppTheme.negative : Colors.white,
+                fontSize: 28,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -1,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(forecastLabel ?? '',
+                style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            const SizedBox(height: 6),
+            Text(
+              'Solde actuel : ${currency?.format(total) ?? total.toStringAsFixed(2)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: total < 0 ? AppTheme.negative : Colors.white70,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ],
+          ] else
+            Text(
+              currency?.format(total) ?? total.toStringAsFixed(2),
+              style: TextStyle(
+                color: total < 0 ? AppTheme.negative : Colors.white,
+                fontSize: 34,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -1,
+              ),
+            ),
         ],
       ),
     );

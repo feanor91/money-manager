@@ -31,6 +31,46 @@ class MmexRepository {
         UNIQUE(ACCOUNTID, CATEGID)
       )
     ''');
+    // MMEX's own NUMOCCURRENCES column counts *down* to zero as a limited
+    // recurring bill fires (see catchUpBillDeposit) - it never records the
+    // original total, so "3 restantes" alone can't say "out of how many".
+    // This table remembers that original total the first time a bill gets
+    // a limited duration, so the UI can show "3/12" instead.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BILL_OCCURRENCE_TOTALS (
+        BILLID INTEGER PRIMARY KEY,
+        TOTAL INTEGER NOT NULL
+      )
+    ''');
+    // MMEX's CHECKINGACCOUNT_V1 has no column linking a real transaction
+    // back to the recurring template it was generated from - this table
+    // fills that gap so the ledger can show a "recurring" badge (and,
+    // for limited-duration bills, "2/4") on transactions recorded via
+    // recordBillOccurrence/catchUpBillDeposit. Only covers transactions
+    // recorded from here on; existing history (or transactions a user
+    // typed by hand even if they match a recurring pattern) is never
+    // retroactively linked.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_TRANSACTION_BILL_LINKS (
+        TRANSID INTEGER PRIMARY KEY,
+        BILLID INTEGER NOT NULL
+      )
+    ''');
+    // Added after this table's first release - ALTER TABLE (not part of
+    // the CREATE above) so databases that already have the old 2-column
+    // version pick up the new ones too; harmless once they're already
+    // there, since _tryAddColumn swallows the "duplicate column" error.
+    _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_INDEX', 'INTEGER');
+    _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_TOTAL', 'INTEGER');
+  }
+
+  void _tryAddColumn(String table, String column, String type) {
+    try {
+      db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+    } catch (_) {
+      // Column already exists - fine, that's the common case after the
+      // first run.
+    }
   }
 
   /// Adds [days] *calendar* days to [date] - never use `date.add(Duration(days:
@@ -393,6 +433,55 @@ class MmexRepository {
 
   void deleteTransaction(int transId) {
     db.execute('DELETE FROM CHECKINGACCOUNT_V1 WHERE TRANSID = ?', [transId]);
+    db.execute('DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+  }
+
+  /// Links [transId] back to bill [billId] it was just recorded from, along
+  /// with its place in a limited-duration bill's fixed sequence (e.g. the
+  /// 1st of 4) when known - see [recordBillOccurrence]/[catchUpBillDeposit]
+  /// for how [occurrenceIndex]/[occurrenceTotal] are worked out, since the
+  /// bill's own remaining count keeps moving as further occurrences fire
+  /// and (for a multi-occurrence catch-up) can't just be read once.
+  void _linkTransactionToBill(
+    int transId,
+    int billId, {
+    required int? occurrenceIndex,
+    required int? occurrenceTotal,
+  }) {
+    db.execute(
+      'INSERT OR REPLACE INTO APP_TRANSACTION_BILL_LINKS '
+      '(TRANSID, BILLID, OCCURRENCE_INDEX, OCCURRENCE_TOTAL) VALUES (?, ?, ?, ?)',
+      [transId, billId, occurrenceIndex, occurrenceTotal],
+    );
+  }
+
+  /// Ids of transactions recorded from a recurring template (see
+  /// [recordBillOccurrence]/[catchUpBillDeposit]) - used to badge them in
+  /// the ledger. See [APP_TRANSACTION_BILL_LINKS] in [ensureAppSchema] for
+  /// why this can't just be read off the transaction itself.
+  Set<int> recurringTransactionIds() {
+    final rows = db.query('SELECT TRANSID FROM APP_TRANSACTION_BILL_LINKS');
+    return {for (final row in rows) row['TRANSID'] as int};
+  }
+
+  /// This transaction's place in its recurring template's fixed sequence
+  /// (e.g. "the 2nd of 4") - only present for limited-duration bills whose
+  /// original total was known at the time this transaction was recorded
+  /// (see [_linkTransactionToBill]). Null for everything else: unlimited
+  /// recurring bills, "every X .../dans X ..." interval periods, or
+  /// transactions recorded before this feature existed.
+  Map<int, ({int index, int total})> recurringTransactionOccurrences() {
+    final rows = db.query(
+      'SELECT TRANSID, OCCURRENCE_INDEX, OCCURRENCE_TOTAL FROM APP_TRANSACTION_BILL_LINKS '
+      'WHERE OCCURRENCE_INDEX IS NOT NULL AND OCCURRENCE_TOTAL IS NOT NULL',
+    );
+    return {
+      for (final row in rows)
+        row['TRANSID'] as int: (
+          index: row['OCCURRENCE_INDEX'] as int,
+          total: row['OCCURRENCE_TOTAL'] as int,
+        ),
+    };
   }
 
   /// Toggles a transaction's reconciled ("pointe") state.
@@ -896,6 +985,29 @@ class MmexRepository {
 
   void deleteBillDeposit(int bdId) {
     db.execute('DELETE FROM BILLSDEPOSITS_V1 WHERE BDID = ?', [bdId]);
+    db.execute('DELETE FROM APP_BILL_OCCURRENCE_TOTALS WHERE BILLID = ?', [bdId]);
+  }
+
+  /// Remembers [total] as the original occurrence count for [billId] the
+  /// first time it gets a limited duration - a no-op if one's already
+  /// recorded, so later edits to the remaining count (which is all
+  /// [BillDeposit.numOccurrences] tracks) don't overwrite the original
+  /// total. See [ensureAppSchema].
+  void ensureBillOccurrenceTotal(int billId, int total) {
+    db.execute(
+      'INSERT OR IGNORE INTO APP_BILL_OCCURRENCE_TOTALS (BILLID, TOTAL) VALUES (?, ?)',
+      [billId, total],
+    );
+  }
+
+  /// Original occurrence totals recorded via [ensureBillOccurrenceTotal],
+  /// keyed by bill id - only present for bills that have had a limited
+  /// duration since this feature was added.
+  Map<int, int> billOccurrenceTotals() {
+    final rows = db.query('SELECT BILLID, TOTAL FROM APP_BILL_OCCURRENCE_TOTALS');
+    return {
+      for (final row in rows) row['BILLID'] as int: row['TOTAL'] as int,
+    };
   }
 
   /// Recurring templates whose next occurrence is due on or before [asOf] -
@@ -924,6 +1036,14 @@ class MmexRepository {
       notes: bill.notes,
       reconciled: reconciled,
     );
+    final total = billOccurrenceTotals()[bill.id];
+    final hasFixedCount = !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
+    _linkTransactionToBill(
+      transId,
+      bill.id,
+      occurrenceIndex: (hasFixedCount && total != null) ? total - bill.numOccurrences + 1 : null,
+      occurrenceTotal: hasFixedCount ? total : null,
+    );
     // The recorded date may be earlier than the template's own scheduled
     // occurrence (recording a bill a little early/late) - always advance
     // from at least the template's own anchor so the schedule can't get
@@ -945,8 +1065,16 @@ class MmexRepository {
   List<int> catchUpBillDeposit(BillDeposit bill, DateTime asOf, {bool reconciled = false}) {
     final advance = _advanceSchedule(bill, asOf);
     final ids = <int>[];
+    final total = billOccurrenceTotals()[bill.id];
+    final hasFixedCount = !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
+    // Catching up several missed occurrences in one call still assigns
+    // each a distinct, increasing index (1st, 2nd, ...) - bill.numOccurrences
+    // itself only updates once at the end (see _applyScheduleAdvance
+    // below), so it can't be re-read per iteration the way
+    // recordBillOccurrence does for a single occurrence.
+    var remaining = bill.numOccurrences;
     for (final occurrence in advance.occurrences) {
-      ids.add(insertTransaction(
+      final transId = insertTransaction(
         accountId: bill.accountId,
         payeeId: bill.payeeId,
         transCode: bill.transCode,
@@ -957,7 +1085,15 @@ class MmexRepository {
         toAmount: bill.toAmount,
         notes: bill.notes,
         reconciled: reconciled,
-      ));
+      );
+      _linkTransactionToBill(
+        transId,
+        bill.id,
+        occurrenceIndex: (hasFixedCount && total != null) ? total - remaining + 1 : null,
+        occurrenceTotal: hasFixedCount ? total : null,
+      );
+      if (hasFixedCount) remaining--;
+      ids.add(transId);
     }
     if (advance.occurrences.isNotEmpty) {
       _applyScheduleAdvance(bill, advance);

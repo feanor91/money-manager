@@ -38,6 +38,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
         .toList();
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final occurrenceTotals = repo.billOccurrenceTotals();
 
     bool matchesBill(BillDeposit bill) {
       if (_accountFilter != null &&
@@ -124,6 +125,12 @@ class _RecurringScreenState extends State<RecurringScreen> {
                             ? '${accounts[bill.accountId]?.name ?? '?'} → ${accounts[bill.toAccountId]?.name ?? '?'}'
                             : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
                         final categoryLabel = categoryFullPath(bill.categoryId, categories);
+                        final occurrenceTotal = occurrenceTotals[bill.id];
+                        final remainingLabel = (!periodUsesXParam(bill.period) &&
+                                bill.numOccurrences >= 0 &&
+                                occurrenceTotal != null)
+                            ? ' (${bill.numOccurrences}/$occurrenceTotal)'
+                            : '';
                         final subtitleLine1 = isTransfer
                             ? (categoryLabel.isEmpty ? 'Virement' : 'Virement - $categoryLabel')
                             : '${accounts[bill.accountId]?.name ?? ''} - '
@@ -172,8 +179,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                     ),
                                   ),
                                   Text(
-                                    currency?.format(signed) ??
-                                        signed.toStringAsFixed(2),
+                                    '${currency?.format(signed) ?? signed.toStringAsFixed(2)}'
+                                    '$remainingLabel',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
                                       color: overdue
@@ -220,23 +227,32 @@ class _RecurringScreenState extends State<RecurringScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _RecurringEditorSheet(existing: existing, repo: repo),
+      builder: (_) => RecurringEditorSheet(existing: existing, repo: repo),
     );
     dbProvider.touch();
   }
 }
 
-class _RecurringEditorSheet extends StatefulWidget {
+/// Public (not file-private) so [TransactionsScreen] can also open it - lets
+/// you create a recurring bill straight from the ledger without switching
+/// to the "Récurrentes" tab first.
+class RecurringEditorSheet extends StatefulWidget {
   final BillDeposit? existing;
   final MmexRepository repo;
+  final int? defaultAccountId;
 
-  const _RecurringEditorSheet({this.existing, required this.repo});
+  const RecurringEditorSheet({
+    super.key,
+    this.existing,
+    required this.repo,
+    this.defaultAccountId,
+  });
 
   @override
-  State<_RecurringEditorSheet> createState() => _RecurringEditorSheetState();
+  State<RecurringEditorSheet> createState() => _RecurringEditorSheetState();
 }
 
-class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
+class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
   final _formKey = GlobalKey<FormState>();
   late int? _accountId;
   late int? _toAccountId;
@@ -258,7 +274,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
   void initState() {
     super.initState();
     final bill = widget.existing;
-    _accountId = bill?.accountId;
+    _accountId = bill?.accountId ?? widget.defaultAccountId;
     _toAccountId = bill?.toAccountId;
     _categoryId = bill?.categoryId;
     _payeeId = bill?.payeeId;
@@ -545,7 +561,7 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
         ? int.parse(_occurrencesController.text)
         : (_limitedOccurrences ? int.parse(_occurrencesController.text) : -1);
     if (widget.existing == null) {
-      widget.repo.insertBillDeposit(
+      final id = widget.repo.insertBillDeposit(
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
         payeeId: isTransfer ? -1 : (_payeeId ?? -1),
@@ -559,6 +575,9 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
         numOccurrences: numOccurrences,
         notes: _notesController.text,
       );
+      if (_limitedOccurrences && !periodUsesXParam(_period)) {
+        widget.repo.ensureBillOccurrenceTotal(id, numOccurrences);
+      }
     } else {
       widget.repo.updateBillDeposit(BillDeposit(
         id: widget.existing!.id,
@@ -575,6 +594,9 @@ class _RecurringEditorSheetState extends State<_RecurringEditorSheet> {
         numOccurrences: numOccurrences,
         categoryId: _categoryId,
       ));
+      if (_limitedOccurrences && !periodUsesXParam(_period)) {
+        widget.repo.ensureBillOccurrenceTotal(widget.existing!.id, numOccurrences);
+      }
     }
     context.read<DatabaseProvider>().touch();
     Navigator.of(context).pop();
