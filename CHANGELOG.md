@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.12] - 2026-07-28
+
+- feat(categories): category management screen, transaction search, fix auto-execute mapping
+
 ## [1.0.11] - 2026-07-27
 
 - ci: skip build/release pipeline for doc-only commits
