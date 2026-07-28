@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.15] - 2026-07-28
+
+- fix(persistence): save/delete on transactions & recurring bills never wrote back to disk
+
 ## [1.0.14] - 2026-07-28
 
 - feat(transactions): auto-confirm date picker, reconciled checkbox, account preselect; fix French accents app-wide
