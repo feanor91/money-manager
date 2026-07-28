@@ -9,6 +9,49 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Système de budget simple et efficace~~ - **fait**. Refonte complète en
+  enveloppes par compte : suggestions automatiques (opérations récurrentes
+  + moyenne sur 1 an, avec alerte si une catégorie n'a plus bougé depuis
+  >90 jours), jauges verticales groupées par catégorie mère, suivi des
+  revenus (dépôts + virements entrants hors épargne), simulation d'achat
+  partagée avec le graphique de prévision, et "reste à vivre" basé sur le
+  vrai solde prévisionnel du compte (pas un calcul de budget). Table
+  `APP_BUDGET_ENVELOPES` créée dynamiquement à l'ouverture de n'importe
+  quel fichier `.mmb`.
+- ~~Bug de perte de données silencieuse~~ - **fait/corrigé**. Les boutons
+  Enregistrer/Supprimer des fiches transaction et opération récurrente
+  n'appelaient jamais l'écriture sur le fichier réel (web, File System
+  Access) - les modifications restaient en mémoire et disparaissaient à
+  la fermeture de l'onglet. Idem pour la création de catégorie via le
+  FAB. Corrigé partout, plus une bannière rouge app-wide si un
+  enregistrement échoue pour une autre raison (permission révoquée,
+  fichier verrouillé par un autre programme...), avec bouton "Réessayer"
+  au lieu d'un échec invisible.
+- ~~Verrouillage PIN trop agressif~~ - **fait**. Ne se redéclenche plus au
+  simple changement d'onglet/fenêtre (web) - seulement sur un vrai
+  rechargement de page ou une mise en arrière-plan réelle (mobile).
+- ~~Accents français dans toute l'interface~~ - **fait**. Passe sur
+  l'ensemble des chaînes utilisateur (~90 occurrences, une quinzaine de
+  fichiers) - identifiants Dart non touchés.
+- ~~Petites ergonomies de saisie~~ - **fait**. Sélection de date qui valide
+  au clic (plus de bouton OK séparé) ; case "Pointée" dès la création
+  d'une transaction ; compte présélectionné sur celui affiché ; montant
+  éditable directement dans le grand livre (comme la date), hors
+  virements.
+- ~~Compteur d'occurrences restantes~~ - **fait**. Les opérations
+  récurrentes à durée limitée affichent "(restant/total)" à côté du
+  montant (table `APP_BILL_OCCURRENCE_TOTALS`, puisque `NUMOCCURRENCES`
+  de MMEX ne garde que le compte restant). Le grand livre affiche aussi
+  un badge ↻ avec "n/total" sur les transactions générées depuis une
+  récurrence (table `APP_TRANSACTION_BILL_LINKS`) - uniquement pour les
+  transactions enregistrées après ce changement, aucun lien rétroactif
+  possible sur l'historique.
+- ~~Création rapide d'opération récurrente~~ - **fait**. Le bouton "+" du
+  grand livre des transactions propose "Nouvelle transaction" ou
+  "Nouvelle opération récurrente" sans changer d'onglet.
+- ~~En-tête du tableau de bord~~ - **fait**. La prévision est maintenant la
+  valeur mise en avant (grande), le solde du jour en dessous en plus
+  petit ; toute valeur négative s'affiche en rouge.
 - ~~Modes d'exécution auto des opérations récurrentes inversés~~ - **fait**.
   Vérifié dans le vrai code source MMEX (v1.9.2, `REPEAT_AUTO` +
   `billsdepositsdialog.cpp`) : +100 = "en attente de saisie du paiement"
@@ -85,11 +128,11 @@ courses, pas des engagements.
 
 ## Demandées
 
-- **Système de budget simple et efficace** - le suivi actuel (Budget par
-  catégorie) est basique ; à repenser une fois qu'on sait ce qu'on veut en
-  tirer (alertes de dépassement ? report d'un mois sur l'autre ? budget
-  par enveloppe ?). Prérequis naturel avant d'intégrer le budget dans la
-  prévision de solde (voir README, limitations connues).
+- **Mode simulation de budget** - modifier temporairement les montants
+  d'enveloppes pour voir l'effet en direct, sans les enregistrer pour de
+  bon. Plusieurs pistes proposées (mode brouillon, scénarios nommés,
+  curseur global en %, simulation ponctuelle façon achat simulé) - jamais
+  tranché, à redemander avant de s'y lancer.
 - **Application de bureau plus complète** - une version desktop (Windows/
   macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
   d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
