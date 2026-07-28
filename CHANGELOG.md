@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.16] - 2026-07-28
+
+- feat(transactions,recurring): inline amount edit, recurring badge with occurrence count, quick recurring creation from ledger
+
 ## [1.0.15] - 2026-07-28
 
 - fix(persistence): save/delete on transactions & recurring bills never wrote back to disk
