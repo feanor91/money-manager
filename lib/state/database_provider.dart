@@ -406,7 +406,7 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> _swapDatabase(MmexDatabase db) async {
     _db?.dispose();
     _db = db;
-    _repository = MmexRepository(db);
+    _repository = MmexRepository(db)..ensureAppSchema();
     currentLabel = db.label;
 
     if (!_selectedAccountLoaded) {

@@ -145,3 +145,50 @@ int encodeRepeats(RecurrencePeriod period, RecurrenceAutoExecute autoExecute) {
       return base + 200;
   }
 }
+
+/// How much of a category's ongoing monthly cost one occurrence of this
+/// period represents - used to auto-derive a budget envelope's target
+/// straight from existing recurring transactions instead of asking the
+/// user to type the same amount twice (see
+/// MmexRepository.categoryMonthlyRecurringTotals). [numOccurrences] is
+/// only meaningful for the "every X ..." periods (see [periodUsesXParam])
+/// where it holds the interval, not a count.
+///
+/// The two "dans X ..." one-shot periods return 0: they fire exactly
+/// twice then stop (see [periodIsFixedTwoShot]), so they're not a stable
+/// ongoing cost worth folding into a monthly budget target. "Aucune"
+/// (a one-off, never repeats) returns 0 for the same reason.
+double recurrencePeriodToMonthlyFactor(RecurrencePeriod period, int numOccurrences) {
+  switch (period) {
+    case RecurrencePeriod.daily:
+      return 30;
+    case RecurrencePeriod.weekly:
+      return 52 / 12;
+    case RecurrencePeriod.biWeekly:
+      return 26 / 12;
+    case RecurrencePeriod.fourWeeks:
+      return 13 / 12;
+    case RecurrencePeriod.monthly:
+    case RecurrencePeriod.monthlyLastDay:
+    case RecurrencePeriod.monthlyLastBusinessDay:
+      return 1;
+    case RecurrencePeriod.biMonthly:
+      return 1 / 2;
+    case RecurrencePeriod.quarterly:
+      return 1 / 3;
+    case RecurrencePeriod.fourMonths:
+      return 1 / 4;
+    case RecurrencePeriod.halfYearly:
+      return 1 / 6;
+    case RecurrencePeriod.yearly:
+      return 1 / 12;
+    case RecurrencePeriod.everyXDays:
+      return numOccurrences > 0 ? 30 / numOccurrences : 0;
+    case RecurrencePeriod.everyXMonths:
+      return numOccurrences > 0 ? 1 / numOccurrences : 0;
+    case RecurrencePeriod.none:
+    case RecurrencePeriod.inXDays:
+    case RecurrencePeriod.inXMonths:
+      return 0;
+  }
+}

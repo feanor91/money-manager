@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'app.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
+import 'state/purchase_simulation_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +26,7 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider.value(value: dbProvider),
         ChangeNotifierProvider.value(value: pinLockProvider),
+        ChangeNotifierProvider(create: (_) => PurchaseSimulationProvider()),
       ],
       child: const MoneyManagerApp(),
     ),

@@ -64,8 +64,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             final tiers = isTransfer
                 ? '${accountsById[tx.accountId]?.name ?? ''} ${accountsById[tx.toAccountId]?.name ?? ''}'
                 : (payees[tx.payeeId]?.name ?? '');
+            final txCategoryLabel = categoryFullPath(tx.categoryId, categories);
             final categorie =
-                isTransfer ? 'Virement' : categoryFullPath(tx.categoryId, categories);
+                isTransfer && txCategoryLabel.isEmpty ? 'Virement' : txCategoryLabel;
             final haystack = foldDiacritics([
               tiers,
               categorie,
@@ -332,9 +333,8 @@ class _LedgerTable extends StatelessWidget {
     final tiers = isTransfer
         ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
         : (payeesById[tx.payeeId]?.name ?? 'Payé inconnu');
-    final categorie = isTransfer
-        ? 'Virement'
-        : categoryFullPath(tx.categoryId, categoriesById);
+    final categoryLabel = categoryFullPath(tx.categoryId, categoriesById);
+    final categorie = isTransfer && categoryLabel.isEmpty ? 'Virement' : categoryLabel;
 
     Widget cell(double width, String text,
         {TextAlign align = TextAlign.left, Color? color, FontWeight? weight}) {
@@ -501,8 +501,9 @@ class _LedgerCards extends StatelessWidget {
     final tiers = isTransfer
         ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
         : (payeesById[tx.payeeId]?.name ?? 'Payé inconnu');
+    final transferCategoryLabel = categoryFullPath(tx.categoryId, categoriesById);
     final categorie = isTransfer
-        ? 'Virement'
+        ? (transferCategoryLabel.isEmpty ? 'Virement' : transferCategoryLabel)
         : categoryFullPath(tx.categoryId, categoriesById);
 
     return Material(

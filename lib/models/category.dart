@@ -58,6 +58,20 @@ class CategoryUsage {
       payeeDefaultCount > 0;
 }
 
+/// Sums [rawSpend] for [categoryId] together with every direct child it
+/// has (MMEX categories only nest one level deep, so this doesn't need to
+/// recurse) - a budget envelope on a parent category ("Alimentation")
+/// should capture spending recorded against its subcategories too
+/// ("Alimentation:Restaurant"), not just the parent's own direct
+/// transactions.
+double rolledUpSpend(int categoryId, Map<int, double> rawSpend, List<Category> allCategories) {
+  var total = rawSpend[categoryId] ?? 0;
+  for (final c in allCategories) {
+    if (c.parentId == categoryId) total += rawSpend[c.id] ?? 0;
+  }
+  return total;
+}
+
 /// "Parent:Child" style path MMEX uses to display a category, walking up
 /// the parent chain (guards against accidental cycles with a hop limit).
 String categoryFullPath(int? categoryId, Map<int, Category> categoriesById) {

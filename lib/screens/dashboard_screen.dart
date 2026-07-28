@@ -7,7 +7,7 @@ import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/bento_card.dart';
-import '../widgets/category_spend_bar.dart';
+import '../widgets/budget_preview_card.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
@@ -86,25 +86,6 @@ class DashboardScreen extends StatelessWidget {
       for (final a in accounts) a.id: repo.forecastAccountBalance(a.id, forecastDate)
     };
     final categories = {for (final c in repo.getCategories()) c.id: c};
-    final spendByCategory =
-        repo.categorySpendForMonth(now, accountId: selectedAccountId);
-    final budgetYears = repo.getBudgetYears();
-    final budgetByCategory = <int, double>{};
-    if (budgetYears.isNotEmpty) {
-      for (final entry in repo.getBudgetEntries(budgetYears.first.id)) {
-        budgetByCategory[entry.categoryId] =
-            (budgetByCategory[entry.categoryId] ?? 0) + entry.monthlyAmount;
-      }
-    }
-    final spendItems = spendByCategory.entries
-        .where((e) => categories.containsKey(e.key))
-        .map((e) => CategorySpend(
-              category: categories[e.key]!,
-              spent: e.value,
-              budget: budgetByCategory[e.key],
-            ))
-        .toList();
-
     final recentTx =
         repo.getTransactions(accountId: selectedAccountId, limit: 6);
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
@@ -284,8 +265,12 @@ class DashboardScreen extends StatelessWidget {
                           );
                     final spendCard = SizedBox(
                       height: 320,
-                      child: CategorySpendCard(
-                          items: spendItems, currency: currency),
+                      child: BudgetPreviewCard(
+                        repository: repo,
+                        currency: currency,
+                        accountId: selectedAccountId,
+                        forecastDay: dbProvider.forecastDay,
+                      ),
                     );
                     final recentCard = SizedBox(
                       height: 320,

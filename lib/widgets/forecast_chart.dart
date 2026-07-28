@@ -1,11 +1,15 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../data/mmex_repository.dart';
+import '../models/category.dart';
 import '../models/currency.dart';
+import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
+import 'searchable_select_field.dart';
 
 /// Adds [days] *calendar* days to [date] - never `date.add(Duration(days:
 /// n))` for this. `Duration` addition is elapsed-time arithmetic in local
@@ -99,10 +103,6 @@ class _ForecastChartState extends State<ForecastChart> {
   /// data - the duration/simulation controls stay the same either way.
   bool _showAsTable = false;
 
-  /// Simulated "what-if" purchase: null means no simulation active.
-  double? _simAmount;
-  int _simInstallments = 1;
-
   // `accountBalance(asOf:)` scans the account's whole transaction history -
   // too expensive to redo on every rebuild. It only actually changes once
   // per calendar day, or when the account's data changes - and
@@ -131,10 +131,20 @@ class _ForecastChartState extends State<ForecastChart> {
 
   @override
   Widget build(BuildContext context) {
+    final sim = context.watch<PurchaseSimulationProvider>();
     final now = DateTime.now();
     final points = _buildPoints(now);
-    final simulatedPoints = _buildSimulatedPoints(points);
+    final simulatedPoints = _buildSimulatedPoints(points, sim.amount, sim.installments);
     final currency = widget.currency;
+
+    String? simCategoryLabel;
+    if (sim.categoryId != null) {
+      final categoriesById = {
+        for (final c in widget.repository.getCategories(onlyActive: false)) c.id: c
+      };
+      final path = categoryFullPath(sim.categoryId, categoriesById);
+      if (path.isNotEmpty) simCategoryLabel = path;
+    }
 
     return BentoCard(
       title: 'Prevision de solde',
@@ -173,12 +183,12 @@ class _ForecastChartState extends State<ForecastChart> {
                 onPressed: () => _openSimulationDialog(context),
                 icon: Icon(
                   Icons.add_shopping_cart,
-                  color: _simAmount != null ? AppTheme.accent : null,
+                  color: sim.isActive ? AppTheme.accent : null,
                 ),
               ),
             ],
           ),
-          if (_simAmount != null) ...[
+          if (sim.isActive) ...[
             const SizedBox(height: 4),
             Row(
               children: [
@@ -186,10 +196,12 @@ class _ForecastChartState extends State<ForecastChart> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    _simInstallments > 1
-                        ? 'Simulation : ${currency?.format(_simAmount!) ?? _simAmount!.toStringAsFixed(2)} '
-                            'en $_simInstallments fois'
-                        : 'Simulation : ${currency?.format(_simAmount!) ?? _simAmount!.toStringAsFixed(2)} comptant',
+                    [
+                      sim.installments > 1
+                          ? 'Simulation : ${currency?.format(sim.amount!) ?? sim.amount!.toStringAsFixed(2)} en ${sim.installments} fois'
+                          : 'Simulation : ${currency?.format(sim.amount!) ?? sim.amount!.toStringAsFixed(2)} comptant',
+                      if (simCategoryLabel != null) '($simCategoryLabel)',
+                    ].join(' '),
                     style: Theme.of(context).textTheme.bodySmall,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -199,10 +211,7 @@ class _ForecastChartState extends State<ForecastChart> {
                   tooltip: 'Effacer la simulation',
                   icon: const Icon(Icons.close, size: 16),
                   visualDensity: VisualDensity.compact,
-                  onPressed: () => setState(() {
-                    _simAmount = null;
-                    _simInstallments = 1;
-                  }),
+                  onPressed: () => context.read<PurchaseSimulationProvider>().clear(),
                 ),
               ],
             ),
@@ -210,7 +219,7 @@ class _ForecastChartState extends State<ForecastChart> {
           const SizedBox(height: 8),
           Expanded(
             child: _showAsTable
-                ? _buildOperationsList(points, currency)
+                ? _buildOperationsList(points, currency, sim.amount, sim.installments)
                 : _buildChart(points, simulatedPoints, currency),
           ),
         ],
@@ -240,7 +249,12 @@ class _ForecastChartState extends State<ForecastChart> {
   /// [TransactionTile] - each row also shows that day's running projected
   /// balance (shared across every operation on the same day, since the
   /// underlying data is bucketed by day, not by individual transaction).
-  Widget _buildOperationsList(List<_Point> points, CurrencyFormat? currency) {
+  Widget _buildOperationsList(
+    List<_Point> points,
+    CurrencyFormat? currency,
+    double? simAmount,
+    int simInstallments,
+  ) {
     if (points.isEmpty) return const SizedBox.shrink();
 
     final grouped = _groupedOccurrences(points);
@@ -251,9 +265,9 @@ class _ForecastChartState extends State<ForecastChart> {
         for (final o in occurrences)
           _ForecastRow(date: o.date, label: o.label, amount: o.signedAmount, simulated: false),
     ];
-    if (_simAmount != null) {
-      final perInstallment = _simAmount! / _simInstallments;
-      for (var i = 0; i < _simInstallments; i++) {
+    if (simAmount != null) {
+      final perInstallment = simAmount / simInstallments;
+      for (var i = 0; i < simInstallments; i++) {
         rows.add(_ForecastRow(
           date: _addMonths(points.first.day, i),
           label: 'Achat simule',
@@ -324,11 +338,20 @@ class _ForecastChartState extends State<ForecastChart> {
   }
 
   Future<void> _openSimulationDialog(BuildContext context) async {
+    final sim = context.read<PurchaseSimulationProvider>();
     final amountController = TextEditingController(
-      text: _simAmount != null ? _simAmount!.toStringAsFixed(2) : '',
+      text: sim.amount != null ? sim.amount!.toStringAsFixed(2) : '',
     );
-    var installments = _simInstallments;
-    var multiple = _simInstallments > 1;
+    var installments = sim.installments;
+    var multiple = sim.installments > 1;
+    var categoryId = sim.categoryId;
+
+    final categories = widget.repository.getCategories();
+    final categoriesById = {for (final c in categories) c.id: c};
+    final sortedCategories = [...categories]..sort((a, b) =>
+        categoryFullPath(a.id, categoriesById)
+            .toLowerCase()
+            .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
 
     final result = await showDialog<bool>(
       context: context,
@@ -344,6 +367,16 @@ class _ForecastChartState extends State<ForecastChart> {
                 autofocus: true,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 decoration: const InputDecoration(labelText: 'Montant'),
+              ),
+              const SizedBox(height: 12),
+              SearchableSelectField<Category>(
+                label: 'Categorie budgetaire (optionnel)',
+                options: sortedCategories,
+                labelOf: (c) => categoryFullPath(c.id, categoriesById),
+                initialValue: categoryId == null
+                    ? null
+                    : categoriesById[categoryId],
+                onSelected: (c) => setDialogState(() => categoryId = c?.id),
               ),
               const SizedBox(height: 12),
               SwitchListTile(
@@ -378,10 +411,11 @@ class _ForecastChartState extends State<ForecastChart> {
                   Navigator.of(context).pop(false);
                   return;
                 }
-                setState(() {
-                  _simAmount = amount;
-                  _simInstallments = multiple ? installments : 1;
-                });
+                sim.set(
+                  amount: amount,
+                  installments: multiple ? installments : 1,
+                  categoryId: categoryId,
+                );
                 Navigator.of(context).pop(true);
               },
               child: const Text('Appliquer'),
@@ -425,13 +459,12 @@ class _ForecastChartState extends State<ForecastChart> {
   /// today in full, an installment plan spreads it evenly across up to 12
   /// consecutive monthly instalments starting today. Purely a display
   /// overlay - never persisted.
-  List<_Point>? _buildSimulatedPoints(List<_Point> basePoints) {
-    final amount = _simAmount;
+  List<_Point>? _buildSimulatedPoints(List<_Point> basePoints, double? amount, int installments) {
     if (amount == null || basePoints.isEmpty) return null;
 
-    final perInstallment = amount / _simInstallments;
+    final perInstallment = amount / installments;
     final impactDays = <DateTime>{
-      for (var i = 0; i < _simInstallments; i++) _addMonths(basePoints.first.day, i),
+      for (var i = 0; i < installments; i++) _addMonths(basePoints.first.day, i),
     };
 
     var extra = 0.0;

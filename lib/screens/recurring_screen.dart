@@ -124,7 +124,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                             : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
                         final categoryLabel = categoryFullPath(bill.categoryId, categories);
                         final subtitleLine1 = isTransfer
-                            ? 'Virement'
+                            ? (categoryLabel.isEmpty ? 'Virement' : 'Virement - $categoryLabel')
                             : '${accounts[bill.accountId]?.name ?? ''} - '
                                 '${categoryLabel.isEmpty ? 'Non categorise' : categoryLabel}';
                         return Card(

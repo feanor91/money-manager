@@ -14,6 +14,25 @@ class MmexRepository {
 
   MmexRepository(this.db);
 
+  /// Creates this app's own tables if they don't exist yet - kept
+  /// separate from MMEX's own schema (prefixed APP_ so it's obviously not
+  /// part of MMEX itself if the file is ever opened in real MMEX desktop).
+  /// Called once whenever a database is opened (see DatabaseProvider);
+  /// safe to call repeatedly, CREATE TABLE IF NOT EXISTS is a no-op once
+  /// the table's already there.
+  void ensureAppSchema() {
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BUDGET_ENVELOPES (
+        ENVELOPEID INTEGER PRIMARY KEY AUTOINCREMENT,
+        ACCOUNTID INTEGER NOT NULL,
+        CATEGID INTEGER NOT NULL,
+        AMOUNT REAL NOT NULL,
+        ACTIVE INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(ACCOUNTID, CATEGID)
+      )
+    ''');
+  }
+
   /// Adds [days] *calendar* days to [date] - never use `date.add(Duration(days:
   /// n))` for this. `Duration` addition is elapsed-time arithmetic in local
   /// time, so it drifts by an hour across a DST transition (France's
@@ -702,6 +721,13 @@ class MmexRepository {
   Map<int, double> categorySpendForMonth(DateTime month, {int? accountId}) {
     final start = DateTime(month.year, month.month, 1);
     final end = DateTime(month.year, month.month + 1, 1);
+    return categorySpendForPeriod(start, end, accountId: accountId);
+  }
+
+  /// Same as [categorySpendForMonth] but over an arbitrary [start, end)
+  /// window instead of a fixed calendar month - e.g. a budget window that
+  /// starts mid-month, see BudgetScreen and models/budget_period.dart.
+  Map<int, double> categorySpendForPeriod(DateTime start, DateTime end, {int? accountId}) {
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
@@ -726,6 +752,40 @@ class MmexRepository {
       totals[categId] = (totals[categId] ?? 0) + amount;
     }
     return totals;
+  }
+
+  /// Most recent withdrawal date per category within [start, end) for
+  /// [accountId] - used to flag a history-based budget suggestion whose
+  /// evidence is stale (see BudgetScreen's suggestions dialog): a category
+  /// that hasn't seen a real transaction in months is a weaker basis for
+  /// "budget this much every month" than one spent in recently.
+  Map<int, DateTime> lastSpendDatePerCategory(DateTime start, DateTime end, {int? accountId}) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "TRANSCODE = 'Withdrawal'",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    if (accountId != null) {
+      where.add('ACCOUNTID = ?');
+      params.add(accountId);
+    }
+    final rows = db.query(
+      'SELECT CATEGID, MAX(TRANSDATE) AS lastDate FROM CHECKINGACCOUNT_V1 '
+      'WHERE ${where.join(' AND ')} GROUP BY CATEGID',
+      params,
+    );
+    final result = <int, DateTime>{};
+    for (final row in rows) {
+      final categId = row['CATEGID'] as int?;
+      final dateStr = row['lastDate'] as String?;
+      if (categId == null || dateStr == null) continue;
+      final date = DateTime.tryParse(dateStr);
+      if (date != null) result[categId] = date;
+    }
+    return result;
   }
 
   // ---- Recurring transactions (bills/deposits) ----------------------
@@ -1191,40 +1251,182 @@ class MmexRepository {
     return d;
   }
 
-  // ---- Budgets ----------------------------------------------------
+  // ---- Budget envelopes (this app's own table, not MMEX's schema) ----
+  //
+  // MMEX's own budgeting model (BudgetYear/BudgetEntry above) is
+  // year/period-based and has no per-account column - this app's own
+  // simplified budget (BudgetScreen: one envelope per account+category,
+  // always a constant monthly amount) doesn't fit that shape, so it's
+  // backed by its own dedicated table instead (see [ensureAppSchema]).
 
-  List<BudgetYear> getBudgetYears() {
-    final rows = db.query('SELECT * FROM BUDGETYEAR_V1 ORDER BY BUDGETYEARNAME DESC');
-    return rows.map(BudgetYear.fromRow).toList();
-  }
-
-  List<BudgetEntry> getBudgetEntries(int budgetYearId) {
+  List<BudgetEnvelope> getBudgetEnvelopes(int accountId) {
     final rows = db.query(
-      'SELECT * FROM BUDGETTABLE_V1 WHERE BUDGETYEARID = ? AND ACTIVE = 1',
-      [budgetYearId],
+      'SELECT * FROM APP_BUDGET_ENVELOPES WHERE ACCOUNTID = ? AND ACTIVE = 1',
+      [accountId],
     );
-    return rows.map(BudgetEntry.fromRow).toList();
+    return rows.map(BudgetEnvelope.fromRow).toList();
   }
 
-  void upsertBudgetEntry({
+  void upsertBudgetEnvelope({
     int? id,
-    required int budgetYearId,
+    required int accountId,
     required int categoryId,
-    required BudgetPeriod period,
     required double amount,
   }) {
     if (id != null) {
-      db.execute(
-        'UPDATE BUDGETTABLE_V1 SET PERIOD = ?, AMOUNT = ? WHERE BUDGETENTRYID = ?',
-        [_periodToString(period), amount, id],
-      );
+      db.execute('UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?', [amount, id]);
     } else {
+      // ON CONFLICT covers the (rare, but possible via the suggestions
+      // dialog racing a manual add) case of already having an envelope
+      // for this exact account+category - update it in place instead of
+      // erroring on the UNIQUE constraint.
       db.execute(
-        'INSERT INTO BUDGETTABLE_V1 (BUDGETYEARID, CATEGID, PERIOD, AMOUNT, ACTIVE) '
-        'VALUES (?, ?, ?, ?, 1)',
-        [budgetYearId, categoryId, _periodToString(period), amount],
+        'INSERT INTO APP_BUDGET_ENVELOPES (ACCOUNTID, CATEGID, AMOUNT, ACTIVE) VALUES (?, ?, ?, 1) '
+        'ON CONFLICT(ACCOUNTID, CATEGID) DO UPDATE SET AMOUNT = excluded.AMOUNT, ACTIVE = 1',
+        [accountId, categoryId, amount],
       );
     }
+  }
+
+  void deleteBudgetEnvelope(int id) {
+    db.execute('DELETE FROM APP_BUDGET_ENVELOPES WHERE ENVELOPEID = ?', [id]);
+  }
+
+  /// Wipes every envelope for [accountId] only - other accounts' budgets
+  /// are untouched, since envelopes are scoped per account (see
+  /// getBudgetEnvelopes).
+  void resetBudgetEnvelopes(int accountId) {
+    db.execute('DELETE FROM APP_BUDGET_ENVELOPES WHERE ACCOUNTID = ?', [accountId]);
+  }
+
+  /// categoryId -> monthly-equivalent total of every active (non-paused),
+  /// still-recurring withdrawal bill in that category - the basis for an
+  /// "auto" envelope (see BudgetScreen): a category that already has a
+  /// recurring bill doesn't need its budget target typed in separately,
+  /// the schedule already says how much it costs every month.
+  Map<int, double> categoryMonthlyRecurringTotals({int? accountId}) {
+    final totals = <int, double>{};
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      if (bill.transCode != TransCode.withdrawal) continue;
+      if (accountId != null && bill.accountId != accountId) continue;
+      final categoryId = bill.categoryId;
+      if (categoryId == null) continue;
+      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      if (factor <= 0) continue;
+      totals[categoryId] = (totals[categoryId] ?? 0) + bill.amount * factor;
+    }
+    return totals;
+  }
+
+  /// Real income (deposits) recorded for [accountId] within [start, end) -
+  /// the counterpart to categorySpendForPeriod, for the always-shown
+  /// "Revenus" gauge on the budget screen (see BudgetScreen).
+  /// True if [name] is (a fold-cased match for) "Epargne" - used to keep
+  /// savings transfers out of the income totals below: moving money into a
+  /// savings account isn't new income, so a transfer categorised that way
+  /// (directly, or under a parent category named that) doesn't count as
+  /// income for the account receiving it either. Not imported from
+  /// utils/list_utils.dart's foldDiacritics on purpose - the data layer
+  /// stays free of UI-layer imports, this one check doesn't need it.
+  bool _isSavingsCategoryName(String name) {
+    final normalized = name
+        .trim()
+        .toLowerCase()
+        .replaceAll('é', 'e')
+        .replaceAll('è', 'e')
+        .replaceAll('ê', 'e');
+    return normalized == 'epargne';
+  }
+
+  bool _isSavingsCategory(int? categoryId, Map<int, Category> categoriesById) {
+    if (categoryId == null) return false;
+    final category = categoriesById[categoryId];
+    if (category == null) return false;
+    if (_isSavingsCategoryName(category.name)) return true;
+    final parent = category.parentId == null ? null : categoriesById[category.parentId];
+    return parent != null && _isSavingsCategoryName(parent.name);
+  }
+
+  /// Every category id that's ever actually appeared on a transaction for
+  /// [accountId] - used to keep a category picker scoped to what's
+  /// genuinely relevant to the account being budgeted for (see
+  /// BudgetScreen's "Budgeter une sous-categorie" flow), instead of every
+  /// category defined anywhere in the file regardless of which account
+  /// it's ever been used on.
+  Set<int> categoriesUsedByAccount(int accountId) {
+    final rows = db.query(
+      'SELECT DISTINCT CATEGID FROM CHECKINGACCOUNT_V1 WHERE ACCOUNTID = ? AND CATEGID IS NOT NULL',
+      [accountId],
+    );
+    return {
+      for (final row in rows)
+        if (row['CATEGID'] != null) row['CATEGID'] as int,
+    };
+  }
+
+  /// Real income for [accountId] within [start, end): actual deposits,
+  /// plus incoming transfers from another account (money arriving here,
+  /// whatever it's categorised as) - except a transfer categorised as
+  /// "Epargne" (see [_isSavingsCategory]), since routing money into
+  /// savings isn't new income.
+  double incomeForPeriod(DateTime start, DateTime end, {int? accountId}) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "(TRANSCODE = 'Deposit' OR TRANSCODE = 'Transfer')",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    if (accountId != null) {
+      where.add('(ACCOUNTID = ? OR TOACCOUNTID = ?)');
+      params.addAll([accountId, accountId]);
+    }
+    final rows = db.query(
+      'SELECT TRANSCODE, ACCOUNTID, TOACCOUNTID, TRANSAMOUNT, TOTRANSAMOUNT, CATEGID '
+      'FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')}',
+      params,
+    );
+    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+
+    var total = 0.0;
+    for (final row in rows) {
+      if (_isSavingsCategory(row['CATEGID'] as int?, categoriesById)) continue;
+      if (row['TRANSCODE'] == 'Deposit') {
+        if (accountId != null && row['ACCOUNTID'] != accountId) continue;
+        total += (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      } else if (row['TRANSCODE'] == 'Transfer') {
+        if (accountId != null && row['TOACCOUNTID'] != accountId) continue;
+        total += (row['TOTRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      }
+    }
+    return total;
+  }
+
+  /// Monthly-equivalent total of every active, still-recurring deposit
+  /// (or incoming, non-savings transfer) bill for [accountId] - expected
+  /// income, same idea as [categoryMonthlyRecurringTotals] but for income
+  /// instead of spending (and not broken down by category - income isn't
+  /// budgeted per category here, just as a single expected total).
+  double monthlyRecurringIncome({int? accountId}) {
+    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+    var total = 0.0;
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      if (_isSavingsCategory(bill.categoryId, categoriesById)) continue;
+      final isIncoming = bill.transCode == TransCode.deposit ||
+          (bill.transCode == TransCode.transfer &&
+              (accountId == null || bill.toAccountId == accountId));
+      if (!isIncoming) continue;
+      if (bill.transCode == TransCode.deposit && accountId != null && bill.accountId != accountId) {
+        continue;
+      }
+      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      if (factor <= 0) continue;
+      total += (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) * factor;
+    }
+    return total;
   }
 
   // ---- Currencies ----------------------------------------------------
@@ -1260,24 +1462,6 @@ class MmexRepository {
   /// avoids that entirely.
   String _isoDateExclusiveUpper(DateTime date) => _isoDate(_addDays(date, 1));
 
-  String _periodToString(BudgetPeriod period) {
-    switch (period) {
-      case BudgetPeriod.weekly:
-        return 'Weekly';
-      case BudgetPeriod.biWeekly:
-        return 'Bi-Weekly';
-      case BudgetPeriod.monthly:
-        return 'Monthly';
-      case BudgetPeriod.quarterly:
-        return 'Quarterly';
-      case BudgetPeriod.halfYearly:
-        return 'Half-Yearly';
-      case BudgetPeriod.yearly:
-        return 'Yearly';
-      case BudgetPeriod.none:
-        return 'None';
-    }
-  }
 }
 
 /// A single dated, labelled, signed occurrence of a recurring transaction -
