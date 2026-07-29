@@ -197,7 +197,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _TransactionEditorSheet(
+      builder: (_) => TransactionEditorSheet(
         existing: existing,
         repo: repo,
         defaultAccountId: defaultAccountId,
@@ -829,19 +829,23 @@ class _LedgerCards extends StatelessWidget {
   }
 }
 
-class _TransactionEditorSheet extends StatefulWidget {
+/// The full transaction edit form, as a modal bottom sheet - shared between
+/// the ledger (tapping a row) and anywhere else that needs to edit a real
+/// transaction the exact same way (e.g. the database diagnostics screen),
+/// so both stay behaviourally identical rather than drifting apart.
+class TransactionEditorSheet extends StatefulWidget {
   final MoneyTransaction? existing;
   final MmexRepository repo;
   final int? defaultAccountId;
 
-  const _TransactionEditorSheet({this.existing, required this.repo, this.defaultAccountId});
+  const TransactionEditorSheet({super.key, this.existing, required this.repo, this.defaultAccountId});
 
   @override
-  State<_TransactionEditorSheet> createState() =>
+  State<TransactionEditorSheet> createState() =>
       _TransactionEditorSheetState();
 }
 
-class _TransactionEditorSheetState extends State<_TransactionEditorSheet> {
+class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   final _formKey = GlobalKey<FormState>();
   late int? _accountId;
   late int? _toAccountId;

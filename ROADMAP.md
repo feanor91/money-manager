@@ -153,6 +153,16 @@ courses, pas des engagements.
   demande explicite après plusieurs essais - seule l'enveloppe de la
   catégorie mère est éditable/supprimable depuis là, les sous-catégories
   restent en lecture seule dans la répartition.
+- ~~Outil de diagnostic de la base~~ - **fait**. Paramètres > Diagnostic
+  de la base : rapport en lecture seule (aucune correction automatique,
+  volontairement - vu l'historique du bug de perte de données silencieuse
+  ci-dessus) qui liste transactions fantômes/statuts non reconnus,
+  références orphelines (catégorie/tiers/compte supprimé sur une
+  transaction, une opération récurrente ou une enveloppe de budget),
+  catégories mal formées (parent disparu, catégorie sur plus d'un niveau
+  d'imbrication - MMEX n'en gère qu'un seul), opérations récurrentes
+  épuisées mais toujours présentes, doublons probables (même compte/date/
+  montant/tiers) et virements sans destination valide.
 
 ## Demandées
 
@@ -165,7 +175,6 @@ courses, pas des engagements.
   macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
   d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
   reste à définir ce que "plus complet" veut dire concrètement.
-- 
 
 ## Suggestions (à valider avant de s'y lancer)
 
@@ -181,12 +190,6 @@ courses, pas des engagements.
 - **Bouton "Annuler la suppression"** pour une transaction (actuellement
   la suppression est immédiate et définitive, pas de confirmation ni de
   filet de rattrapage au-delà des sauvegardes automatiques).
-- **Petit outil de diagnostic de la base** - un écran (ou une commande)
-  listant les anomalies détectables (transactions `DELETEDTIME` fantômes,
-  catégories orphelines, etc.) - on en a débusqué plusieurs à la main
-  pendant le développement (voir historique des échanges sur le graphique
-  de prévision), un outil dédié éviterait de recommencer ce travail
-  d'enquête à chaque nouveau souci de solde qui ne correspond pas.
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
 
 ## Priorité basse

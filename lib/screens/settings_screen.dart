@@ -7,6 +7,7 @@ import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
 import 'categories_screen.dart';
+import 'database_diagnostics_screen.dart';
 import 'pin_lock_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -57,6 +58,18 @@ class SettingsScreen extends StatelessWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const CategoriesScreen()),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.fact_check_outlined),
+              title: const Text('Diagnostic de la base'),
+              subtitle: const Text('Recherche de références orphelines, doublons, incohérences...'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DatabaseDiagnosticsScreen()),
               ),
             ),
           ),
