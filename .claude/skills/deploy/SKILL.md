@@ -106,6 +106,7 @@ silently or fall back to some other path.
 ## 6. Report back
 
 One short summary covering:
+
 - What got committed (or "nothing to commit" if the tree was already clean)
 - The push result (and that the release pipeline is now running in the
   background, if this was a real push)
