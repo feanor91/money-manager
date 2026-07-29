@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.17] - 2026-07-29
+
+- feat(budget): redesign as ranked bar chart, rename/delete envelopes, add transaction tooltips
+- docs: add CLAUDE.md with project conventions and gotchas
+
 ## [1.0.16] - 2026-07-28
 
 - feat(transactions,recurring): inline amount edit, recurring badge with occurrence count, quick recurring creation from ledger
