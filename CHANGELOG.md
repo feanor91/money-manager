@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.18] - 2026-07-29
+
+- feat(diagnostics): add read-only database integrity report
+
 ## [1.0.17] - 2026-07-29
 
 - feat(budget): redesign as ranked bar chart, rename/delete envelopes, add transaction tooltips
