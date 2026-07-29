@@ -11,8 +11,8 @@ import '../models/transaction.dart';
 import '../state/database_provider.dart';
 import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
-import '../utils/list_utils.dart';
 import '../widgets/envelope_gauge.dart';
+import '../widgets/hover_tooltip.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 
@@ -42,6 +42,11 @@ class _MemberEnvelope {
   final double forecastExtra;
   final bool isAuto;
 
+  /// This envelope's own custom label, if the user set one - see
+  /// [BudgetEnvelope.name]. Prefer [displayName] for anything shown to the
+  /// user; this raw field is for pre-filling the rename field itself.
+  final String? name;
+
   const _MemberEnvelope({
     required this.entryId,
     required this.category,
@@ -50,19 +55,22 @@ class _MemberEnvelope {
     required this.spentSimulated,
     required this.forecastExtra,
     required this.isAuto,
+    this.name,
   });
+
+  String get displayName => name?.isNotEmpty == true ? name! : category.name;
 }
 
-/// One gauge on the budget screen, always a top-level category - envelopes
+/// One bar on the budget screen, always a top-level category - envelopes
 /// on its subcategories are folded into it rather than shown as their own
-/// separate bars (see [_MemberEnvelope]), so the gauge row stays scannable
+/// separate bars (see [_MemberEnvelope]), so the chart stays scannable
 /// even with many subcategories budgeted individually. [spentActual] is
 /// real recorded spending rolled up across the whole group (the top
 /// category plus every one of its children, whether or not that child has
 /// its own envelope). [forecastExtra] is the summed remaining gap for
 /// every "auto" member in the still-ongoing window - shown as a lighter,
 /// distinct fill so a recurring bill not yet paid this month doesn't read
-/// as "nothing planned" (see EnvelopeGauge).
+/// as "nothing planned" (see [_CategoryBarRow]).
 class _EnvelopeItem {
   final Category topCategory;
   final List<_MemberEnvelope> members;
@@ -79,6 +87,16 @@ class _EnvelopeItem {
   double get forecastExtra => members.fold(0.0, (s, m) => s + m.forecastExtra);
   bool get isAuto => members.any((m) => m.isAuto);
   double get spentTotal => spentActual + spentSimulated;
+
+  /// The group's own custom name, if the top category has its own envelope
+  /// and it was renamed - falls back to the top category's name (also the
+  /// case when only subcategories are budgeted, not the top category itself).
+  String get displayName {
+    for (final m in members) {
+      if (m.category.id == topCategory.id) return m.displayName;
+    }
+    return topCategory.name;
+  }
 }
 
 class BudgetScreen extends StatefulWidget {
@@ -91,19 +109,73 @@ class BudgetScreen extends StatefulWidget {
 class _BudgetScreenState extends State<BudgetScreen> {
   DateTime _cursor = DateTime.now();
   int? _selectedCategoryId;
-  final _gaugeScrollController = ScrollController();
 
-  @override
-  void dispose() {
-    _gaugeScrollController.dispose();
-    super.dispose();
-  }
-
-  void _scrollGauges(double delta) {
-    if (!_gaugeScrollController.hasClients) return;
-    final position = _gaugeScrollController.position;
-    final target = (position.pixels + delta).clamp(position.minScrollExtent, position.maxScrollExtent);
-    _gaugeScrollController.animateTo(target, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+  /// Opens a category's full detail (breakdown, sub-categories, recent
+  /// transactions, and the inline name/amount editor) as a bottom sheet -
+  /// a fixed spot near the bottom of the screen every time, unlike an
+  /// earlier attempt that inserted it inline right under the tapped bar:
+  /// that made the sheet's on-screen position (and how far you'd have to
+  /// scroll to reach it) depend on which row was tapped, which is exactly
+  /// what was rejected in favour of this.
+  Future<void> _openEnvelopeDetail({
+    required BuildContext context,
+    required MmexRepository repo,
+    required BudgetWindow window,
+    required List<Category> categories,
+    required Map<int, double> rawSpend,
+    required Set<int> usedCategoryIds,
+    required int accountId,
+    required CurrencyFormat? currency,
+    required Map<int, Category> categoriesById,
+    required Map<int, double> recurringTotals,
+    required DatabaseProvider dbProvider,
+    required _EnvelopeItem item,
+  }) async {
+    setState(() => _selectedCategoryId = item.topCategory.id);
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.85),
+          child: SingleChildScrollView(
+            child: _EnvelopeDetail(
+              item: item,
+              repo: repo,
+              window: window,
+              categories: categories,
+              rawSpend: rawSpend,
+              usedCategoryIds: usedCategoryIds,
+              accountId: accountId,
+              currency: currency,
+              onAddMember: () {
+                final coveredIds = item.members.map((m) => m.category.id).toSet();
+                final candidates = [
+                  item.topCategory,
+                  ...categories.where(
+                      (c) => c.parentId == item.topCategory.id && usedCategoryIds.contains(c.id)),
+                ].where((c) => c.active && !coveredIds.contains(c.id)).toList();
+                _addEnvelope(
+                  context: sheetContext,
+                  repo: repo,
+                  accountId: accountId,
+                  candidateCategories: candidates,
+                  categoriesById: categoriesById,
+                  recurringTotals: recurringTotals,
+                  onDone: () => dbProvider.touch(),
+                );
+              },
+              onDone: () {
+                dbProvider.touch();
+                Navigator.of(sheetContext).pop();
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    if (mounted) setState(() => _selectedCategoryId = null);
   }
 
   @override
@@ -198,6 +270,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
           spentSimulated: spentSimulated,
           forecastExtra: forecastExtra,
           isAuto: auto,
+          name: e.name,
         ));
       }
       members.sort((a, b) => b.target.compareTo(a.target));
@@ -214,6 +287,17 @@ class _BudgetScreenState extends State<BudgetScreen> {
     }
     items.sort((a, b) => b.target.compareTo(a.target));
 
+    // Ranked by actual spend (not target) for the bar chart below - "where
+    // does my money actually go" is the point of that view, distinct from
+    // [items]' own target-based order (used elsewhere, e.g. detail lookup).
+    // Every bar's length is plotted on this same shared scale so categories
+    // are directly comparable, instead of each bar being self-scaled to its
+    // own target as the old vertical gauges were.
+    final barItems = [...items]..sort((a, b) => b.spentTotal.compareTo(a.spentTotal));
+    final maxScaleRaw = items.fold(
+        0.0, (m, i) => [m, i.spentTotal, i.target].reduce((a, b) => a > b ? a : b));
+    final maxScale = maxScaleRaw <= 0 ? 1.0 : maxScaleRaw;
+
     // Real income this window, and the expected/forecast income from
     // still-active recurring deposits (salary, etc.) - always shown as
     // the very first gauge, not tied to any envelope, so the budget
@@ -229,8 +313,6 @@ class _BudgetScreenState extends State<BudgetScreen> {
     // real balance + every recurring transaction still due before the
     // reset date otherwise).
     final remaining = accountId == null ? 0.0 : repo.forecastAccountBalance(accountId, window.end);
-
-    final selectedItem = findById(items, _selectedCategoryId, (i) => i.topCategory.id);
 
     void Function()? openAddDialog = accountId == null
         ? null
@@ -327,59 +409,40 @@ class _BudgetScreenState extends State<BudgetScreen> {
             _RemainingCard(remaining: remaining, resetDate: window.end, currency: currency),
             const SizedBox(height: 20),
             if (accountId != null) ...[
-              SizedBox(
-                height: EnvelopeGauge.height + 60,
-                child: ListView.separated(
-                  controller: _gaugeScrollController,
-                  scrollDirection: Axis.horizontal,
-                  itemCount: items.length + 1,
-                  separatorBuilder: (_, __) => const SizedBox(width: 14),
-                  itemBuilder: (context, i) {
-                    if (i == 0) {
-                      return _IncomeGaugeColumn(
-                        income: income,
-                        expected: expectedIncome,
-                        currency: currency,
-                      );
-                    }
-                    final item = items[i - 1];
-                    return _GaugeColumn(
-                      item: item,
-                      currency: currency,
-                      selected: item.topCategory.id == _selectedCategoryId,
-                      onTap: () => setState(() {
-                        _selectedCategoryId =
-                            _selectedCategoryId == item.topCategory.id ? null : item.topCategory.id;
-                      }),
-                    );
-                  },
-                ),
+              _CategoryBarRow(
+                label: 'Revenus',
+                spent: income,
+                target: expectedIncome,
+                moreIsBetter: true,
+                currency: currency,
               ),
-              // Explicit arrows rather than relying on mouse-wheel/trackpad
-              // gestures over the row - wheel scrolling here isn't
-              // intuitive (it's already the page's own vertical scroll) -
-              // but only shown when the row actually overflows, otherwise
-              // they'd sit there doing nothing.
-              LayoutBuilder(builder: (context, constraints) {
-                const columnWidth = 60.0;
-                const separatorWidth = 14.0;
-                final gaugeCount = items.length + 1;
-                final contentWidth = gaugeCount * columnWidth + (gaugeCount - 1) * separatorWidth;
-                if (contentWidth <= constraints.maxWidth) return const SizedBox.shrink();
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      onPressed: () => _scrollGauges(-160),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      onPressed: () => _scrollGauges(160),
-                    ),
-                  ],
-                );
-              }),
+              for (final item in barItems) ...[
+                const SizedBox(height: 18),
+                _CategoryBarRow(
+                  icon: item.isAuto ? Icons.autorenew : null,
+                  label: item.displayName,
+                  spent: item.spentTotal,
+                  target: item.target,
+                  forecastExtra: item.forecastExtra,
+                  maxScale: maxScale,
+                  currency: currency,
+                  selected: item.topCategory.id == _selectedCategoryId,
+                  onTap: () => _openEnvelopeDetail(
+                    context: context,
+                    repo: repo,
+                    window: window,
+                    categories: categories,
+                    rawSpend: rawSpend,
+                    usedCategoryIds: usedCategoryIds,
+                    accountId: accountId,
+                    currency: currency,
+                    categoriesById: categoriesById,
+                    recurringTotals: recurringTotals,
+                    dbProvider: dbProvider,
+                    item: item,
+                  ),
+                ),
+              ],
             ],
             if (items.isEmpty)
               Padding(
@@ -404,65 +467,6 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   ),
                 ),
               ),
-            if (selectedItem != null) ...[
-              const SizedBox(height: 20),
-              _EnvelopeDetail(
-                key: ValueKey(selectedItem.topCategory.id),
-                item: selectedItem,
-                repo: repo,
-                window: window,
-                categories: categories,
-                rawSpend: rawSpend,
-                usedCategoryIds: usedCategoryIds,
-                accountId: accountId,
-                currency: currency,
-                onAddMember: () {
-                  final coveredIds = selectedItem.members.map((m) => m.category.id).toSet();
-                  final candidates = [
-                    selectedItem.topCategory,
-                    ...categories.where((c) =>
-                        c.parentId == selectedItem.topCategory.id && usedCategoryIds.contains(c.id)),
-                  ].where((c) => c.active && !coveredIds.contains(c.id)).toList();
-                  _addEnvelope(
-                    context: context,
-                    repo: repo,
-                    accountId: accountId!,
-                    candidateCategories: candidates,
-                    categoriesById: categoriesById,
-                    recurringTotals: recurringTotals,
-                    onDone: () => dbProvider.touch(),
-                  );
-                },
-                onEditMember: (member) => _editEnvelope(
-                  context: context,
-                  repo: repo,
-                  accountId: accountId!,
-                  member: member,
-                  onDone: () => dbProvider.touch(),
-                ),
-                onDeleteMember: (member) async {
-                  final confirmed = await showDialog<bool>(
-                    context: context,
-                    builder: (context) => AlertDialog(
-                      title: const Text('Supprimer l\'enveloppe'),
-                      content: Text('Supprimer l\'enveloppe "${member.category.name}" ?'),
-                      actions: [
-                        TextButton(
-                            onPressed: () => Navigator.of(context).pop(false),
-                            child: const Text('Annuler')),
-                        FilledButton(
-                            onPressed: () => Navigator.of(context).pop(true),
-                            child: const Text('Supprimer')),
-                      ],
-                    ),
-                  );
-                  if (confirmed == true) {
-                    repo.deleteBudgetEnvelope(member.entryId);
-                    dbProvider.touch();
-                  }
-                },
-              ),
-            ],
           ],
         ),
       ),
@@ -954,58 +958,6 @@ Future<void> _openSuggestions({
   onDone();
 }
 
-Future<void> _editEnvelope({
-  required BuildContext context,
-  required MmexRepository repo,
-  required int accountId,
-  required _MemberEnvelope member,
-  required VoidCallback onDone,
-}) async {
-  final amountController = TextEditingController(text: member.target.toStringAsFixed(2));
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: Text('Modifier "${member.category.name}"'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: amountController,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Montant mensuel'),
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          ),
-          if (member.isAuto) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Cette enveloppe est actuellement calculée automatiquement depuis des '
-              'opérations récurrentes actives - ce montant ne sera utilisé que si elles '
-              'sont un jour supprimées.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
-        FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('Enregistrer'),
-        ),
-      ],
-    ),
-  );
-  if (confirmed != true || !context.mounted) return;
-  repo.upsertBudgetEnvelope(
-    id: member.entryId,
-    accountId: accountId,
-    categoryId: member.category.id,
-    amount: double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0,
-  );
-  onDone();
-}
-
 class _PeriodNav extends StatelessWidget {
   final BudgetWindow window;
   final bool canGoForward;
@@ -1080,160 +1032,190 @@ class _RemainingCard extends StatelessWidget {
   }
 }
 
-/// The always-first gauge on the budget screen: real income received this
-/// window against expected income (still-active recurring deposits, e.g.
-/// salary) - same size/shape as an [EnvelopeGauge] for visual consistency,
-/// but its own colour logic since "more than expected" is good here, the
-/// opposite of an over-budget envelope.
-class _IncomeGaugeColumn extends StatelessWidget {
-  final double income;
-  final double expected;
-  final CurrencyFormat? currency;
-
-  const _IncomeGaugeColumn({required this.income, required this.expected, this.currency});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final ratio = expected > 0 ? income / expected : (income > 0 ? 1.0 : 0.0);
-    final fillRatio = ratio.clamp(0, 1).toDouble();
-    final exceeded = expected > 0 && income > expected;
-    String fmt(double v) => currency?.format(v) ?? v.toStringAsFixed(0);
-
-    return SizedBox(
-      width: 60,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 18),
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.topCenter,
-              children: [
-                Container(
-                  width: EnvelopeGauge.width,
-                  height: EnvelopeGauge.height,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    color: scheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.positive, width: 1.5),
-                  ),
-                  child: Stack(
-                    children: [
-                      if (fillRatio < 1)
-                        Align(
-                          alignment: Alignment.bottomCenter,
-                          child: Container(color: forecastColor.withValues(alpha: 0.22)),
-                        ),
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: FractionallySizedBox(
-                          heightFactor: fillRatio,
-                          widthFactor: 1,
-                          child: Container(color: AppTheme.positive),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (exceeded)
-                  Positioned(
-                    top: -18,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                      decoration: BoxDecoration(
-                        color: AppTheme.positive.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '+${(income - expected).toStringAsFixed(0)}',
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.positive),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Revenus',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.positive),
-          ),
-          Text(
-            '${fmt(income)}/${fmt(expected)}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _GaugeColumn extends StatelessWidget {
-  final _EnvelopeItem item;
-  final CurrencyFormat? currency;
+/// One ranked horizontal bar in the budget screen's spend-by-category
+/// chart. Bar length is the category's actual spend plotted on a scale
+/// shared across every row (via [maxScale]) so categories are directly
+/// comparable at a glance - unlike the old vertical gauges, which were
+/// each self-scaled to their own target. A tick mark on the track still
+/// shows where that target sits, and going over it triggers the same red
+/// pulsing halo + overage badge used to mean "needs attention" elsewhere
+/// (see [PulsingHalo]).
+///
+/// Also doubles as the always-first income row ([moreIsBetter]: true,
+/// [maxScale] left null so the bar is self-scaled against its own target
+/// instead, like a plain progress bar - income figures aren't on the same
+/// scale as category spend, so plotting it against [maxScale] would be
+/// meaningless). Exceeding income is good news, not an alarm: no glow,
+/// and the badge/tick colour flips to positive.
+class _CategoryBarRow extends StatelessWidget {
+  final IconData? icon;
+  final String label;
+  final double spent;
+  final double target;
+  final double forecastExtra;
+  final double? maxScale;
+  final bool moreIsBetter;
   final bool selected;
-  final VoidCallback onTap;
+  final CurrencyFormat? currency;
+  final VoidCallback? onTap;
 
-  const _GaugeColumn({
-    required this.item,
-    required this.selected,
-    required this.onTap,
+  const _CategoryBarRow({
+    required this.label,
+    required this.spent,
+    required this.target,
+    this.icon,
+    this.forecastExtra = 0,
+    this.maxScale,
+    this.moreIsBetter = false,
+    this.selected = false,
     this.currency,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      width: 60,
-      child: Column(
-        children: [
-          EnvelopeGauge(
-            spent: item.spentTotal,
-            target: item.target,
-            forecastExtra: item.forecastExtra,
-            selected: selected,
-            onTap: onTap,
-          ),
-          const SizedBox(height: 6),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (item.isAuto)
-                Padding(
-                  padding: const EdgeInsets.only(right: 3),
-                  child: Icon(Icons.autorenew, size: 11, color: scheme.primary),
-                ),
-              Flexible(
-                child: Text(
-                  item.topCategory.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: item.isAuto ? scheme.primary : null,
+    final ratio = target > 0 ? spent / target : (spent > 0 ? 2.0 : 0.0);
+    final overTarget = target > 0 && spent > target;
+    // "Alarm" (red, glowing) only for a genuine overspend - exceeding an
+    // income target is the opposite of a problem.
+    final alarm = overTarget && !moreIsBetter;
+    final barColor = alarm
+        ? AppTheme.negative
+        : (!moreIsBetter && ratio >= 0.8 ? AppTheme.warning : AppTheme.positive);
+    String fmt(double v) => currency?.format(v) ?? v.toStringAsFixed(0);
+
+    final fillRatio = maxScale != null
+        ? (maxScale! > 0 ? (spent / maxScale!).clamp(0, 1).toDouble() : 0.0)
+        : ratio.clamp(0, 1).toDouble();
+    final forecastRatio = (!alarm && target > 0 && forecastExtra > 0)
+        ? (maxScale != null
+            ? (maxScale! > 0 ? ((spent + forecastExtra) / maxScale!).clamp(0, 1).toDouble() : 0.0)
+            : ((spent + forecastExtra) / target).clamp(0, 1).toDouble())
+        : fillRatio;
+    final targetRatio = (maxScale != null && target > 0 && maxScale! > 0)
+        ? (target / maxScale!).clamp(0, 1).toDouble()
+        : null;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 116,
+              child: Row(
+                children: [
+                  if (icon != null) ...[
+                    Icon(icon, size: 14, color: scheme.primary),
+                    const SizedBox(width: 4),
+                  ],
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
-          ),
-          Text(
-            '${(currency?.format(item.spentTotal) ?? item.spentTotal.toStringAsFixed(0))}/'
-            '${currency?.format(item.target) ?? item.target.toStringAsFixed(0)}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.onSurfaceVariant),
-          ),
-        ],
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final trackWidth = constraints.maxWidth;
+                  Widget fill = FractionallySizedBox(
+                    widthFactor: fillRatio,
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      decoration: BoxDecoration(color: barColor, borderRadius: BorderRadius.circular(6)),
+                    ),
+                  );
+                  if (alarm) fill = PulsingHalo(borderRadius: 6, child: fill);
+                  return SizedBox(
+                    height: 22,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                        if (forecastRatio > fillRatio)
+                          FractionallySizedBox(
+                            widthFactor: forecastRatio,
+                            alignment: Alignment.centerLeft,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: forecastColor.withValues(alpha: 0.45),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                          ),
+                        Align(alignment: Alignment.centerLeft, child: fill),
+                        if (targetRatio != null)
+                          Positioned(
+                            left: (trackWidth * targetRatio).clamp(0, trackWidth) - 1,
+                            top: -3,
+                            bottom: -3,
+                            child: Container(width: 2, color: scheme.onSurface.withValues(alpha: 0.55)),
+                          ),
+                        if (overTarget)
+                          Positioned(
+                            left: (trackWidth * fillRatio).clamp(0, trackWidth) - 14,
+                            top: -20,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: (alarm ? AppTheme.negative : AppTheme.positive).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '+${(spent - target).toStringAsFixed(0)}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: alarm ? AppTheme.negative : AppTheme.positive,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            SizedBox(
+              width: 92,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    fmt(spent),
+                    style: TextStyle(fontWeight: FontWeight.w700, color: alarm ? AppTheme.negative : null),
+                  ),
+                  if (target > 0)
+                    Text(
+                      '/ ${fmt(target)}',
+                      style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1294,7 +1276,7 @@ class _AmountSummary extends StatelessWidget {
   }
 }
 
-class _EnvelopeDetail extends StatelessWidget {
+class _EnvelopeDetail extends StatefulWidget {
   final _EnvelopeItem item;
   final MmexRepository repo;
   final BudgetWindow window;
@@ -1304,11 +1286,12 @@ class _EnvelopeDetail extends StatelessWidget {
   final int? accountId;
   final CurrencyFormat? currency;
   final VoidCallback onAddMember;
-  final ValueChanged<_MemberEnvelope> onEditMember;
-  final ValueChanged<_MemberEnvelope> onDeleteMember;
+
+  /// Called after the top envelope (name/amount) is saved or deleted from
+  /// this card, so the caller can persist the change (dbProvider.touch()).
+  final VoidCallback onDone;
 
   const _EnvelopeDetail({
-    super.key,
     required this.item,
     required this.repo,
     required this.window,
@@ -1316,14 +1299,87 @@ class _EnvelopeDetail extends StatelessWidget {
     required this.rawSpend,
     required this.usedCategoryIds,
     required this.onAddMember,
-    required this.onEditMember,
-    required this.onDeleteMember,
+    required this.onDone,
     this.accountId,
     this.currency,
   });
 
   @override
+  State<_EnvelopeDetail> createState() => _EnvelopeDetailState();
+}
+
+class _EnvelopeDetailState extends State<_EnvelopeDetail> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _amountController;
+
+  /// The envelope entry for the top category itself, if one exists yet -
+  /// distinct from its subcategories' own entries, which are display-only
+  /// here (the user explicitly asked to only edit the title/amount of the
+  /// top envelope from this card, not its subcategories).
+  _MemberEnvelope? get _topMember {
+    for (final m in widget.item.members) {
+      if (m.category.id == widget.item.topCategory.id) return m;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.item.displayName);
+    _amountController = TextEditingController(text: (_topMember?.target ?? 0).toStringAsFixed(2));
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final top = _topMember;
+    // An empty field, or one left equal to the category's own name, means
+    // "no custom label" - store null so it keeps following the category's
+    // name automatically (e.g. if that's later renamed via Categories).
+    final typedName = _nameController.text.trim();
+    final customName =
+        (typedName.isEmpty || typedName == widget.item.topCategory.name) ? null : typedName;
+    widget.repo.upsertBudgetEnvelope(
+      id: top?.entryId,
+      accountId: widget.accountId!,
+      categoryId: widget.item.topCategory.id,
+      amount: double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0,
+      name: customName,
+    );
+    widget.onDone();
+  }
+
+  void _delete() {
+    final top = _topMember;
+    if (top == null) return;
+    widget.repo.deleteBudgetEnvelope(top.entryId);
+    // The card stays open (e.g. subcategories may still be budgeted under
+    // this same top category) - reset the fields to a blank "not budgeted
+    // yet" state rather than leaving the just-deleted values on screen.
+    setState(() {
+      _nameController.text = widget.item.topCategory.name;
+      _amountController.text = '0.00';
+    });
+    widget.onDone();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final item = widget.item;
+    final repo = widget.repo;
+    final window = widget.window;
+    final categories = widget.categories;
+    final rawSpend = widget.rawSpend;
+    final usedCategoryIds = widget.usedCategoryIds;
+    final accountId = widget.accountId;
+    final currency = widget.currency;
+
     final children = categories.where((c) => c.parentId == item.topCategory.id).toList()
       ..sort((a, b) => (rawSpend[b.id] ?? 0).compareTo(rawSpend[a.id] ?? 0));
     final childIds = children.map((c) => c.id).toSet();
@@ -1352,6 +1408,37 @@ class _EnvelopeDetail extends StatelessWidget {
     final hasChildEnvelopes = item.members.length > 1 ||
         (item.members.length == 1 && item.members.first.category.id != item.topCategory.id);
 
+    final topMember = _topMember;
+
+    // Same [transactions] list already fetched above, just grouped by
+    // category - lets each subcategory row show exactly which operations
+    // make up its total on hover, instead of only the combined list at
+    // the bottom of the card.
+    final transactionsByCategory = <int, List<MoneyTransaction>>{};
+    for (final t in transactions) {
+      transactionsByCategory.putIfAbsent(t.categoryId!, () => []).add(t);
+    }
+
+    Widget buildChildRow(Category c) {
+      final row = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          children: [
+            Expanded(child: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+            Text(fmt(rawSpend[c.id] ?? 0)),
+          ],
+        ),
+      );
+      final txns = transactionsByCategory[c.id];
+      if (txns == null || txns.isEmpty) return row;
+      final message = txns.map((t) {
+        final line =
+            '${dateFormat.format(t.date)} - ${payees[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmt(t.amount)}';
+        return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
+      }).join('\n');
+      return HoverTooltip(message: message, child: row);
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1360,24 +1447,18 @@ class _EnvelopeDetail extends StatelessWidget {
           children: [
             Row(
               children: [
+                if (item.isAuto) ...[
+                  Icon(Icons.autorenew, size: 16, color: scheme.primary),
+                  const SizedBox(width: 6),
+                ],
                 Expanded(
-                  child: Row(
-                    children: [
-                      if (item.isAuto) ...[
-                        Icon(Icons.autorenew, size: 16, color: scheme.primary),
-                        const SizedBox(width: 6),
-                      ],
-                      Flexible(
-                        child: Text(item.topCategory.name,
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                      ),
-                    ],
-                  ),
+                  child: Text(item.displayName,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                 ),
                 IconButton(
                   tooltip: 'Ajouter une sous-catégorie',
                   icon: const Icon(Icons.add, size: 18),
-                  onPressed: onAddMember,
+                  onPressed: widget.onAddMember,
                 ),
               ],
             ),
@@ -1391,12 +1472,49 @@ class _EnvelopeDetail extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
                 ),
               ),
+            const SizedBox(height: 16),
+            // Editing lives directly in this card - no separate popup - per
+            // explicit user feedback: only the top envelope's title/amount
+            // are editable here, subcategories below stay display-only.
+            TextField(
+              controller: _nameController,
+              decoration: const InputDecoration(labelText: 'Nom de l\'enveloppe'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _amountController,
+              decoration: const InputDecoration(labelText: 'Montant mensuel'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            ),
+            if (topMember?.isAuto ?? false) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Cette enveloppe est actuellement calculée automatiquement depuis des '
+                'opérations récurrentes actives - ce montant ne sera utilisé que si elles '
+                'sont un jour supprimées.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: topMember == null ? null : _delete,
+                  child: const Text('Supprimer'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: _save,
+                  child: const Text('Enregistrer'),
+                ),
+              ],
+            ),
             const Divider(height: 20),
             Text('Répartition du budget', style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 4),
             for (final m in item.members)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Row(
                   children: [
                     if (m.isAuto)
@@ -1406,24 +1524,12 @@ class _EnvelopeDetail extends StatelessWidget {
                       ),
                     Expanded(
                       child: Text(
-                        m.category.id == item.topCategory.id ? 'Cette catégorie (sans les sous-cat.)' : m.category.name,
+                        m.category.id == item.topCategory.id ? 'Cette catégorie (sans les sous-cat.)' : m.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     Text(fmt(m.target), style: const TextStyle(fontWeight: FontWeight.w600)),
-                    IconButton(
-                      tooltip: 'Modifier',
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.edit_outlined, size: 16),
-                      onPressed: () => onEditMember(m),
-                    ),
-                    IconButton(
-                      tooltip: 'Supprimer',
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(Icons.delete_outline, size: 16, color: AppTheme.negative),
-                      onPressed: () => onDeleteMember(m),
-                    ),
                   ],
                 ),
               ),
@@ -1431,7 +1537,7 @@ class _EnvelopeDetail extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: TextButton.icon(
-                  onPressed: onAddMember,
+                  onPressed: widget.onAddMember,
                   icon: const Icon(Icons.add, size: 16),
                   label: const Text('Budgeter une sous-catégorie séparément'),
                 ),
@@ -1440,18 +1546,7 @@ class _EnvelopeDetail extends StatelessWidget {
               const Divider(height: 20),
               Text('Sous-catégories (dépenses réelles)', style: Theme.of(context).textTheme.bodySmall),
               const SizedBox(height: 4),
-              for (final c in relevantChildren)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(c.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      ),
-                      Text(fmt(rawSpend[c.id] ?? 0)),
-                    ],
-                  ),
-                ),
+              for (final c in relevantChildren) buildChildRow(c),
             ],
             const Divider(height: 20),
             Text('Opérations de la période', style: Theme.of(context).textTheme.bodySmall),

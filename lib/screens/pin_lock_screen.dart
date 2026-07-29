@@ -136,6 +136,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
           children: [
             TextField(
               controller: _pinController,
+              autofocus: true,
               obscureText: true,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Nouveau code PIN'),

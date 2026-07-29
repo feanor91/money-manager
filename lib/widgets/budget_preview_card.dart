@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../data/mmex_repository.dart';
 import '../models/budget.dart';
 import '../models/budget_period.dart';
 import '../models/category.dart';
 import '../models/currency.dart';
+import '../models/transaction.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
+import 'hover_tooltip.dart';
 
 /// Read-only preview of the budget on the dashboard: the biggest envelopes
 /// this period, each with a small progress bar - no add/edit/delete here,
@@ -54,6 +57,34 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
     final rawSpend =
         repo.categorySpendForPeriod(window.start, window.end, accountId: widget.accountId);
 
+    // Same hover-tooltip principle as the full Budget screen's envelope
+    // detail: group the period's transactions by category so a row can
+    // show exactly which operations make up its total on hover.
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final transactionsByCategory = <int, List<MoneyTransaction>>{};
+    for (final t in repo.getTransactions(
+        accountId: widget.accountId, from: window.start, to: window.end, limit: 500)) {
+      if (t.categoryId == null || t.transCode != TransCode.withdrawal || t.isVoid) continue;
+      transactionsByCategory.putIfAbsent(t.categoryId!, () => []).add(t);
+    }
+    final dateFormat = DateFormat('d MMM', 'fr_FR');
+    String fmtAmount(double v) => widget.currency?.format(v) ?? v.toStringAsFixed(2);
+
+    // A rolled-up row's tooltip covers the category itself plus its direct
+    // children, matching how [rolledUpSpend] computed the row's own total.
+    String? tooltipFor(Category category) {
+      final relevantIds = {category.id, ...categories.where((c) => c.parentId == category.id).map((c) => c.id)};
+      final txns = [
+        for (final id in relevantIds) ...?transactionsByCategory[id],
+      ]..sort((a, b) => b.date.compareTo(a.date));
+      if (txns.isEmpty) return null;
+      return txns.map((t) {
+        final line =
+            '${dateFormat.format(t.date)} - ${payees[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmtAmount(t.amount)}';
+        return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
+      }).join('\n');
+    }
+
     final items = <_PreviewItem>[];
     for (final e in envelopes) {
       final category = categoriesById[e.categoryId];
@@ -61,7 +92,7 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
       final autoTotal = recurringTotals[e.categoryId] ?? 0;
       final target = autoTotal > 0 ? autoTotal : e.amount;
       final spent = rolledUpSpend(e.categoryId, rawSpend, categories);
-      items.add(_PreviewItem(category: category, target: target, spent: spent));
+      items.add(_PreviewItem(category: category, target: target, spent: spent, name: e.name));
     }
     items.sort((a, b) => b.spent.compareTo(a.spent));
     final top = items.take(widget.itemCount).toList();
@@ -108,14 +139,14 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
                 final item = top[index];
                 final ratio = item.target > 0 ? (item.spent / item.target).clamp(0, 1.5) : null;
                 final over = ratio != null && ratio > 1;
-                return Column(
+                final row = Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Expanded(
                           child: Text(
-                            item.category.name,
+                            item.displayName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontWeight: FontWeight.w600),
@@ -144,6 +175,8 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
                     ],
                   ],
                 );
+                final message = tooltipFor(item.category);
+                return message == null ? row : HoverTooltip(message: message, child: row);
               },
             ),
     );
@@ -154,6 +187,9 @@ class _PreviewItem {
   final Category category;
   final double target;
   final double spent;
+  final String? name;
 
-  const _PreviewItem({required this.category, required this.target, required this.spent});
+  const _PreviewItem({required this.category, required this.target, required this.spent, this.name});
+
+  String get displayName => name?.isNotEmpty == true ? name! : category.name;
 }

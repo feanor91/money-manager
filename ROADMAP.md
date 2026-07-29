@@ -11,13 +11,16 @@ courses, pas des engagements.
 
 - ~~Système de budget simple et efficace~~ - **fait**. Refonte complète en
   enveloppes par compte : suggestions automatiques (opérations récurrentes
+  
   + moyenne sur 1 an, avec alerte si une catégorie n'a plus bougé depuis
-  >90 jours), jauges verticales groupées par catégorie mère, suivi des
-  revenus (dépôts + virements entrants hors épargne), simulation d'achat
-  partagée avec le graphique de prévision, et "reste à vivre" basé sur le
-  vrai solde prévisionnel du compte (pas un calcul de budget). Table
-  `APP_BUDGET_ENVELOPES` créée dynamiquement à l'ouverture de n'importe
-  quel fichier `.mmb`.
+    
+    > 90 jours), jauges verticales groupées par catégorie mère, suivi des
+    > revenus (dépôts + virements entrants hors épargne), simulation d'achat
+    > partagée avec le graphique de prévision, et "reste à vivre" basé sur le
+    > vrai solde prévisionnel du compte (pas un calcul de budget). Table
+    > `APP_BUDGET_ENVELOPES` créée dynamiquement à l'ouverture de n'importe
+    > quel fichier `.mmb`.
+
 - ~~Bug de perte de données silencieuse~~ - **fait/corrigé**. Les boutons
   Enregistrer/Supprimer des fiches transaction et opération récurrente
   n'appelaient jamais l'écriture sur le fichier réel (web, File System
@@ -27,17 +30,21 @@ courses, pas des engagements.
   enregistrement échoue pour une autre raison (permission révoquée,
   fichier verrouillé par un autre programme...), avec bouton "Réessayer"
   au lieu d'un échec invisible.
+
 - ~~Verrouillage PIN trop agressif~~ - **fait**. Ne se redéclenche plus au
   simple changement d'onglet/fenêtre (web) - seulement sur un vrai
   rechargement de page ou une mise en arrière-plan réelle (mobile).
+
 - ~~Accents français dans toute l'interface~~ - **fait**. Passe sur
   l'ensemble des chaînes utilisateur (~90 occurrences, une quinzaine de
   fichiers) - identifiants Dart non touchés.
+
 - ~~Petites ergonomies de saisie~~ - **fait**. Sélection de date qui valide
   au clic (plus de bouton OK séparé) ; case "Pointée" dès la création
   d'une transaction ; compte présélectionné sur celui affiché ; montant
   éditable directement dans le grand livre (comme la date), hors
   virements.
+
 - ~~Compteur d'occurrences restantes~~ - **fait**. Les opérations
   récurrentes à durée limitée affichent "(restant/total)" à côté du
   montant (table `APP_BILL_OCCURRENCE_TOTALS`, puisque `NUMOCCURRENCES`
@@ -46,12 +53,15 @@ courses, pas des engagements.
   récurrence (table `APP_TRANSACTION_BILL_LINKS`) - uniquement pour les
   transactions enregistrées après ce changement, aucun lien rétroactif
   possible sur l'historique.
+
 - ~~Création rapide d'opération récurrente~~ - **fait**. Le bouton "+" du
   grand livre des transactions propose "Nouvelle transaction" ou
   "Nouvelle opération récurrente" sans changer d'onglet.
+
 - ~~En-tête du tableau de bord~~ - **fait**. La prévision est maintenant la
   valeur mise en avant (grande), le solde du jour en dessous en plus
   petit ; toute valeur négative s'affiche en rouge.
+
 - ~~Modes d'exécution auto des opérations récurrentes inversés~~ - **fait**.
   Vérifié dans le vrai code source MMEX (v1.9.2, `REPEAT_AUTO` +
   `billsdepositsdialog.cpp`) : +100 = "en attente de saisie du paiement"
@@ -62,6 +72,7 @@ courses, pas des engagements.
   `lib/models/recurrence.dart` (`decodeRepeats`/`encodeRepeats`). Pas de
   migration automatique des opérations déjà enregistrées avec l'ancien
   mapping - à revérifier/réajuster manuellement au cas par cas.
+
 - ~~Écran de gestion des catégories~~ - **fait**. Paramètres > Catégories :
   catégories mères en liste dépliable avec leurs sous-catégories, ajout
   (mère ou enfant), renommage, fusion (les opérations/échéances/budgets/
@@ -72,6 +83,7 @@ courses, pas des engagements.
   la catégorie disparaît des listes de choix sans perdre son historique).
   La fusion est limitée aux catégories sans sous-catégorie (source), pour
   ne pas avoir à décider tout seul du sort de petites-catégories orphelines.
+
 - ~~Périodicités manquantes dans les opérations récurrentes~~ - **fait**.
   En creusant (source MMEX stable v1.9.2, `Model_Billsdeposits.h`), le
   vrai souci était plus profond qu'un simple manque : notre code 4 était
@@ -87,11 +99,13 @@ courses, pas des engagements.
   opérations en retard pouvait générer plus de transactions qu'il ne
   restait d'occurrences à une opération à durée limitée, et la faisait
   ensuite passer illimitée par erreur.
+
 - ~~Précision des dates pour "dernier jour du mois"/"dernier jour ouvré"~~ -
   **fait**. Chaque occurrence est désormais explicitement calée sur le
   vrai dernier jour calendaire du mois cible (et recule au vendredi si
   "dernier jour ouvré" tombe un week-end), au lieu de dériver depuis le
   jour d'origine.
+
 - ~~Opérations récurrentes en pause~~ - **fait**. Case à cocher par
   opération, stockée dans `INFOTABLE_V1` (table clé-valeur déjà présente
   dans tout fichier `.mmb`, comme `BASECURRENCYID`) sous une clé dédiée -
@@ -99,6 +113,7 @@ courses, pas des engagements.
   fichier et reste inoffensif pour MMEX desktop. Exclue de l'ajout
   automatique et du prévisionnel ; remontée en tête de liste pour rester
   facile à retrouver/réactiver.
+
 - ~~Prévision de solde repensée~~ - **fait**. Le graphique part maintenant
   toujours d'aujourd'hui vers le futur (fini la navigation vers le passé),
   avec une durée choisie dans une liste (1/2/3/6 mois, 1 an) au lieu des
@@ -107,11 +122,13 @@ courses, pas des engagements.
   repères visuels (traits rouges, infobulle au survol avec le total si
   plusieurs opérations tombent le même jour) pour les opérations
   récurrentes à venir.
+
 - ~~Solde prévisionnel à date fixe~~ - **fait**. Les bulles de compte et
   la bande de solde en haut du tableau de bord affichent maintenant, en
   plus du solde du jour, le solde projeté à un jour du mois configurable
   (Paramètres, "Jour de prévision du solde", 24 par défaut - la veille
   d'une paye le 25).
+
 - ~~Thème clair/sombre~~ - **fait**, et élargi. 4 palettes de couleurs
   (Indigo/Emeraude/Ardoise/Ambre) pilotent l'échelle de surfaces "tonale"
   Material 3, donc le fond et les cartes se teintent vraiment (pas
@@ -121,10 +138,21 @@ courses, pas des engagements.
   gris tres fonce, pas noir pur. Au passage, deux fonds de ligne codes en
   dur en blanc (grand livre des transactions, liste des comptes) qui
   cassaient le rendu en mode sombre ont ete corriges.
+
 - ~~Vue tableau pour la prévision de solde~~ - **fait**. Bascule
   graphique/liste a cote du choix de duree : la liste presente chaque
   operation prevue (style grand livre des transactions), avec le solde
   du jour courant.
+
+- ~~Renommer/supprimer une enveloppe de budget~~ - **fait**. Chaque
+  enveloppe peut avoir un libellé personnalisé, distinct du nom de la
+  catégorie sous-jacente (par défaut, elle suit le nom de la catégorie -
+  colonne `NAME` sur `APP_BUDGET_ENVELOPES`). L'édition (nom + montant) et
+  la suppression se font directement dans la carte de détail déjà
+  affichée en cliquant sur une enveloppe - pas de popup séparée, sur
+  demande explicite après plusieurs essais - seule l'enveloppe de la
+  catégorie mère est éditable/supprimable depuis là, les sous-catégories
+  restent en lecture seule dans la répartition.
 
 ## Demandées
 
@@ -137,6 +165,7 @@ courses, pas des engagements.
   macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
   d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
   reste à définir ce que "plus complet" veut dire concrètement.
+- 
 
 ## Suggestions (à valider avant de s'y lancer)
 
@@ -168,10 +197,10 @@ courses, pas des engagements.
   forcer les widgets Material génériques (le calendrier de `showDatePicker`
   notamment, qui s'affichait en anglais) en français via `locale: Locale('fr')`
   - ça ne couvre pas le texte de l'appli elle-même. Passage en `l10n`
-  standard Flutter à prévoir si l'app doit un jour servir à quelqu'un
-  d'autre que son utilisateur actuel - gros travail mécanique (extraire
-  toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
-  qu'il n'y a qu'un seul utilisateur francophone.
+    standard Flutter à prévoir si l'app doit un jour servir à quelqu'un
+    d'autre que son utilisateur actuel - gros travail mécanique (extraire
+    toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
+    qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Notes
 

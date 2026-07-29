@@ -8,6 +8,10 @@ import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import 'mmex_database.dart';
 
+/// Sentinel distinguishing "caller didn't pass this optional param" from
+/// "caller explicitly passed null" - see [MmexRepository.upsertBudgetEnvelope].
+const Object _unset = Object();
+
 /// Typed CRUD access to an open MMEX database.
 class MmexRepository {
   final MmexDatabase db;
@@ -62,6 +66,10 @@ class MmexRepository {
     // there, since _tryAddColumn swallows the "duplicate column" error.
     _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_INDEX', 'INTEGER');
     _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_TOTAL', 'INTEGER');
+    // Optional custom label for an envelope, distinct from its category's
+    // own name - null means "use the category name" (the default when an
+    // envelope is created, manually or via suggestions).
+    _tryAddColumn('APP_BUDGET_ENVELOPES', 'NAME', 'TEXT');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1408,9 +1416,17 @@ class MmexRepository {
     required int accountId,
     required int categoryId,
     required double amount,
+    Object? name = _unset,
   }) {
     if (id != null) {
-      db.execute('UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?', [amount, id]);
+      if (identical(name, _unset)) {
+        db.execute('UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?', [amount, id]);
+      } else {
+        db.execute(
+          'UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ?, NAME = ? WHERE ENVELOPEID = ?',
+          [amount, name, id],
+        );
+      }
     } else {
       // ON CONFLICT covers the (rare, but possible via the suggestions
       // dialog racing a manual add) case of already having an envelope

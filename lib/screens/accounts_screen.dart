@@ -29,7 +29,6 @@ class _AccountsScreenState extends State<AccountsScreen> {
         accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F5F9),
       appBar: AppBar(title: const Text('Comptes')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(context, repo),

@@ -13,12 +13,19 @@ class BudgetEnvelope {
   final double amount;
   final bool active;
 
+  /// Custom display label for this envelope, independent of its category's
+  /// own name - null (the default, set at creation) means "use the
+  /// category's name", so renaming an envelope never touches the category
+  /// itself or anything else that shows it (transactions, recurring bills...).
+  final String? name;
+
   const BudgetEnvelope({
     required this.id,
     required this.accountId,
     required this.categoryId,
     required this.amount,
     required this.active,
+    this.name,
   });
 
   factory BudgetEnvelope.fromRow(Map<String, Object?> row) {
@@ -28,6 +35,7 @@ class BudgetEnvelope {
       categoryId: row['CATEGID'] as int,
       amount: (row['AMOUNT'] as num?)?.toDouble() ?? 0,
       active: (row['ACTIVE'] as int? ?? 1) == 1,
+      name: row['NAME'] as String?,
     );
   }
 }
