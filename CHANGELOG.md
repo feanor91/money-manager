@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.23] - 2026-07-30
+
+- fix(analyzer): make the category spend analyzer responsive on narrow screens
+
 ## [1.0.22] - 2026-07-30
 
 - fix(android): sign release APKs with a stable key instead of the debug key
