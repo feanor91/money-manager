@@ -19,7 +19,15 @@ AppId={{B6C1A6C4-3B4B-4C7B-9B2A-6F5A0F7E9C21}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\{#MyAppName}
+; Per-user install (no admin/UAC prompt needed) - this is a single-user
+; personal finance app, not shared software. Just as important: a
+; per-machine install (the old {autopf}/PrivilegesRequired admin default)
+; makes {group}/{autodesktop} resolve to the shared Start
+; Menu/Public Desktop instead of the current user's own - which silently
+; doesn't show up at all when that user's real desktop is OneDrive-
+; redirected, since Windows doesn't always merge the two views.
+PrivilegesRequired=lowest
+DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
