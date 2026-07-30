@@ -20,7 +20,15 @@ stop at the first failure - don't skip ahead "to see if the rest still works".
 ## 0. Where things are
 
 - Repo: `D:\Repos\MoneyManager\App`
-- NAS web deploy target: `\\Excelsior\web\mmex`
+- NAS web deploy target: `\\Excelsior\web\mmex` - only reachable from the
+  user's personal PC (home network). **Not reachable from the work PC** -
+  on that machine, steps 4-5 (web build + NAS mirror) are always skipped,
+  and that's expected, not a failure to retry or troubleshoot. Steps 1-3
+  (verify, commit, push) still apply everywhere; the GitHub Actions
+  release pipeline (web+APK artifacts) runs regardless of which machine
+  pushed. Tell the user plainly that the NAS copy was skipped on this
+  machine rather than silently omitting it or trying to reach the path
+  anyway.
 - GitHub remote: `feanor91/money-manager`, branch `main`
 
 ## 1. Verify before touching git
@@ -76,6 +84,9 @@ deploy below is a separate, local-only distribution channel for the web
 build, on top of (not instead of) that automated release.
 
 ## 4. Build the web release
+
+Skip this and step 5 entirely on the work PC (see step 0) - go straight to
+step 6's report once step 3 is done.
 
 ```bash
 flutter build web --release
