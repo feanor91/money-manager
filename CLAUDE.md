@@ -111,6 +111,35 @@ Related: `DatabaseProvider.saveError` surfaces write-*failure* (a red
 banner app-wide) - don't remove that, it's the fix for a previous
 silent-failure incident.
 
+## Android release signing
+
+The release APK is signed with a real, stable keystore - **not** the
+default debug key. Without this, every CI run would sign with a
+different random debug key (auto-generated per runner), and Android
+would refuse to install a new release as an "update" over the last one
+(signature mismatch), forcing a full uninstall before every reinstall -
+this happened for real before the fix.
+
+- The actual keystore lives at
+  `D:\Repos\MoneyManager\android-signing\release.keystore.jks` (sibling
+  to this repo, like `Bdd/` - never inside `App/`, never committed).
+  Losing this file permanently breaks in-place updates for everyone who
+  already has the app installed (they'd all need to uninstall once) -
+  back it up.
+- `android/key.properties` (gitignored) points a **local** build at that
+  keystore - present on this machine, absent on a fresh checkout
+  elsewhere (falls back to the debug key in that case, see
+  `android/app/build.gradle.kts`).
+- CI writes its own `android/key.properties` + `android/release.keystore.jks`
+  fresh on every run, from four repo secrets
+  (`ANDROID_KEYSTORE_BASE64`/`ANDROID_KEYSTORE_PASSWORD`/`ANDROID_KEY_ALIAS`/
+  `ANDROID_KEY_PASSWORD`) - see the "Set up Android release signing" step
+  in `.github/workflows/release.yml`. Never regenerate these secrets
+  without also updating the local keystore file (or vice versa) - they
+  must be the exact same key, or CI-built and locally-built releases
+  will conflict with each other on-device the same way the debug-key bug
+  used to.
+
 ## Known semantics worth remembering
 
 - "Reste à vivre" (budget screen) is the real forecasted account balance

@@ -106,6 +106,26 @@ jobs:
           --build-name=${{ steps.version.outputs.new_version }}
           --build-number=${{ github.run_number }}
 
+      - name: Set up Android release signing
+        # Without this, every CI run signs with a fresh random debug key
+        # (auto-generated per runner) - Android then refuses to install
+        # a new release as an "update" over the previous one, since the
+        # signatures don't match, forcing a full uninstall every time.
+        # See android/app/build.gradle.kts for how key.properties is used.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/release.keystore.jks
+          cat > android/key.properties <<PROPS
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=../release.keystore.jks
+          PROPS
+
       - name: Build APK
         run: >
           flutter build apk --release

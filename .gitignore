@@ -8,6 +8,11 @@ dist/
 .idea/
 android/local.properties
 android/.gradle/
+android/.kotlin/
+# Real Android release signing key - never commit this (see build.gradle.kts).
+android/key.properties
+*.keystore
+*.jks
 ios/Pods/
 web/sqlite3.wasm
 
