@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.21] - 2026-07-30
+
+- fix(installer): install per-user, not per-machine
+- feat(desktop): add Windows platform, installer, portable build, and encrypted portable prefs
+
 ## [1.0.20] - 2026-07-30
 
 - feat(desktop): add Windows platform, installer, portable build, and encrypted portable prefs
