@@ -208,3 +208,15 @@ this happened for real before the fix.
   interaction, a "what should count as X" judgment call), ask first
   rather than guessing - several past features changed shape once the
   user saw a first attempt in practice. See ROADMAP.md's Notes section.
+- **Design for Android from the start, not just desktop/web.** The
+  category spend analyzer (`lib/widgets/category_spend_analyzer.dart`)
+  was built with a fixed-width side panel and a `SegmentedButton` with
+  long labels, side by side - fine on desktop, but on Android the
+  SegmentedButton had no room and wrapped its text vertically letter by
+  letter. Any new dialog/screen with side-by-side panels or multi-segment
+  controls needs a narrow-screen path considered up front. This app
+  already has a convention for it: a `LayoutBuilder` checking
+  `constraints.maxWidth < 640` that swaps to a stacked/simplified layout
+  (see `transactions_screen.dart`'s `_LedgerTable`/`_LedgerCards` split,
+  and the fix applied to the analyzer - stacked panels, `SegmentedButton`
+  → `DropdownButtonFormField` below that breakpoint).
