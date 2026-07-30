@@ -59,10 +59,13 @@ class _RecurringScreenState extends State<RecurringScreen> {
     }
 
     // Paused operations first, so they stay visible/easy to find (and
-    // un-pause) instead of blending into the rest of the list sorted by
-    // next-occurrence date.
+    // un-pause) instead of blending into the rest of the list - everything
+    // else sorted by next-occurrence date, soonest first.
     final bills = allBills.where(matchesBill).toList()
-      ..sort((a, b) => (a.paused == b.paused) ? 0 : (a.paused ? -1 : 1));
+      ..sort((a, b) {
+        if (a.paused != b.paused) return a.paused ? -1 : 1;
+        return a.nextOccurrence.compareTo(b.nextOccurrence);
+      });
 
     return Scaffold(
       appBar: AppBar(title: const Text('Opérations récurrentes')),
