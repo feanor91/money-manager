@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.24] - 2026-07-30
+
+- fix(recurring): sort the recurring operations list chronologically
+
 ## [1.0.23] - 2026-07-30
 
 - fix(analyzer): make the category spend analyzer responsive on narrow screens
