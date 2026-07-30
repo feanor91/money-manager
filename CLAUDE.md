@@ -33,10 +33,22 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
 2. `flutter test`
 3. Kill whatever's on port 8791: PowerShell
    `Get-NetTCPConnection -LocalPort 8791 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`
-4. `flutter run -d web-server --web-port 8791 --web-hostname 0.0.0.0` as a
-   background Bash command, then Monitor/poll its output file for
-   `is being served at` before opening the preview browser.
-5. Verify the change live before calling it done - this user cannot read
+   (kills by port, not process name - safer than searching for `dart.exe`,
+   since the actual process can show up as `dartvm.exe` instead).
+4. `flutter run -d web-server --release --web-port 8791 --web-hostname 0.0.0.0`
+   as a background Bash command, then Monitor/poll its output file for
+   `is being served at` before opening the preview browser. **Always
+   `--release`, never plain debug mode** - debug mode has a click-freezing
+   bug the user has already run into and rejected; release takes longer
+   to compile but there's no hot-reload workflow being lost here anyway
+   (every code change needs a fresh kill+relaunch regardless).
+5. Never rely on a browser refresh alone to pick up code changes - the
+   dev server itself must be killed and relaunched per step 3-4 first.
+6. If scripting a health check against the dev server, use a GET request
+   (or just load the page normally) - a HEAD request (`curl -I`) reliably
+   404s on this server even when the page loads fine via GET, and will
+   send you chasing a fake bug.
+7. Verify the change live before calling it done - this user cannot read
    a diff and judge correctness themselves.
 
 ## Deploy sequence (only when the user explicitly asks to deploy)
@@ -111,6 +123,12 @@ silent-failure incident.
 
 ## Working style feedback
 
+- **UI consistency across equivalent features.** A new edit surface must
+  match the existing ones rather than inventing its own pattern - e.g.
+  transaction and recurring-bill editors are both `showModalBottomSheet`
+  sheets (`TransactionEditorSheet`, `RecurringEditorSheet`), not ad-hoc
+  `AlertDialog`s. Check how the closest existing equivalent is built
+  before adding a new editor/detail surface, and follow it.
 - Confirm date pickers on tap (see `lib/utils/date_picker.dart`) - the
   user explicitly rejected the extra "OK" step `showDatePicker` requires.
 - No mouse-wheel horizontal scroll on the budget gauges - explicit
