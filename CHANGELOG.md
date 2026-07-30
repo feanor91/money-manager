@@ -3,6 +3,15 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.19] - 2026-07-30
+
+- feat(budget): add category spend analyzer for reliable budget adjustments
+- docs(deploy skill): the work PC has no NAS access, skip the web mirror step there
+- docs(claude.md): note the specific debug-mode bug and release-build timing
+- docs(claude.md): add explicit port-free verification step to the dev loop
+- docs(claude.md): spell out the edit-sheet UI pattern in full
+- docs(claude.md): fold in dev-server gotchas from the other machine's session
+
 ## [1.0.18] - 2026-07-29
 
 - feat(diagnostics): add read-only database integrity report
