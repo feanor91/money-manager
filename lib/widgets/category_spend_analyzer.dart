@@ -314,205 +314,247 @@ class _CategorySpendAnalyzerState extends State<CategorySpendAnalyzer> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SizedBox(
-                  width: 260,
-                  child: Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: TextField(
-                          controller: _searchController,
-                          decoration: const InputDecoration(
-                            isDense: true,
-                            prefixIcon: Icon(Icons.search, size: 20),
-                            hintText: 'Rechercher une catégorie',
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (v) => setState(() => _search = v),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            TextButton(
-                              onPressed: () => setState(() {
-                                // Selecting every visible top-level category
-                                // already rolls up all its children (see
-                                // _toggleParent) - no need to also select
-                                // each leaf individually.
-                                for (final p in topCategories) {
-                                  _selected.add(p.id);
-                                  final children =
-                                      byParent[p.id] ?? const <Category>[];
-                                  _selected
-                                      .removeAll(children.map((c) => c.id));
-                                }
-                              }),
-                              child: const Text('Tout cocher'),
-                            ),
-                            TextButton(
-                              onPressed: () =>
-                                  setState(() => _selected.clear()),
-                              child: const Text('Tout décocher'),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: topCategories.length,
-                          itemBuilder: (context, i) {
-                            final parent = topCategories[i];
-                            // .toList() before sorting is required: a parent
-                            // with no children hits the `?? const []`
-                            // fallback, and sorting a const list in place
-                            // throws (caught per-widget by Flutter, which
-                            // silently renders a blank placeholder in
-                            // release mode instead of a visible error) -
-                            // this was the real cause of a very confusing
-                            // "grey box" investigation.
-                            final children = (byParent[parent.id] ?? const [])
-                                .where((c) => usedCategoryIds.contains(c.id))
-                                .toList()
-                              ..sort((a, b) => a.name.compareTo(b.name));
-                            // While searching, force every matching parent
-                            // open so a matched child is actually visible
-                            // without an extra click.
-                            final expanded =
-                                _expandedParents.contains(parent.id) ||
-                                    (query.isNotEmpty && children.any(matches));
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                CheckboxListTile(
-                                  dense: true,
-                                  controlAffinity:
-                                      ListTileControlAffinity.leading,
-                                  contentPadding:
-                                      const EdgeInsets.only(left: 4, right: 4),
-                                  value: _selected.contains(parent.id),
-                                  onChanged: (v) => _toggleParent(
-                                      parent, children, v ?? false),
-                                  title: Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(parent.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis),
-                                      ),
-                                      if (children.isNotEmpty)
-                                        IconButton(
-                                          padding: EdgeInsets.zero,
-                                          constraints: const BoxConstraints(),
-                                          iconSize: 18,
-                                          icon: Icon(expanded
-                                              ? Icons.expand_less
-                                              : Icons.expand_more),
-                                          onPressed: () => setState(() {
-                                            expanded
-                                                ? _expandedParents
-                                                    .remove(parent.id)
-                                                : _expandedParents
-                                                    .add(parent.id);
-                                          }),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                if (expanded)
-                                  for (final child in children)
-                                    Padding(
-                                      padding: const EdgeInsets.only(left: 20),
-                                      child: CheckboxListTile(
-                                        dense: true,
-                                        controlAffinity:
-                                            ListTileControlAffinity.leading,
-                                        contentPadding:
-                                            const EdgeInsets.only(right: 4),
-                                        value: _selected.contains(child.id),
-                                        onChanged: (v) => _toggleChild(
-                                            child, parent.id, v ?? false),
-                                        title: Text(child.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis),
-                                      ),
-                                    ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: _selected.isEmpty
-                        ? const Center(
-                            child: Text('Choisissez au moins une catégorie.'))
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: [
-                                  for (final id in _selected)
-                                    Chip(
-                                      label:
-                                          Text(categoriesById[id]?.name ?? '?'),
-                                      onDeleted: () => setState(() {
-                                        _selected.remove(id);
-                                      }),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              SegmentedButton<_AnalyzerMode>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: _AnalyzerMode.sameMonthAcrossYears,
-                                    label: Text('Même mois, plusieurs années'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _AnalyzerMode.yearAllMonths,
-                                    label: Text('Une année, tous les mois'),
-                                  ),
-                                  ButtonSegment(
-                                    value: _AnalyzerMode.customRange,
-                                    label: Text('Période libre'),
-                                  ),
-                                ],
-                                selected: {_mode},
-                                onSelectionChanged: (s) =>
-                                    setState(() => _mode = s.first),
-                              ),
-                              const SizedBox(height: 16),
-                              if (_mode == _AnalyzerMode.sameMonthAcrossYears)
-                                _buildSameMonthMode(
-                                    context, effectiveIds, payeesById, fmt)
-                              else if (_mode == _AnalyzerMode.yearAllMonths)
-                                _buildYearAllMonthsMode(
-                                    context, effectiveIds, payeesById, fmt)
-                              else
-                                _buildCustomRangeMode(
-                                    context, categoriesById, effectiveIds, fmt),
-                            ],
-                          ),
-                  ),
-                ),
-              ],
-            ),
+            // A phone-width screen can't fit the desktop side-by-side layout
+            // (260px category panel + a right panel with a 3-segment button
+            // whose labels are full sentences) - below that it stacks
+            // vertically and the mode picker switches to a dropdown instead
+            // of forcing each SegmentedButton label to wrap character by
+            // character. Same breakpoint convention as the ledger's
+            // table-vs-cards split in transactions_screen.dart.
+            child: LayoutBuilder(builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 640;
+              final categoryPanel = _buildCategoryPanel(
+                  topCategories, byParent, usedCategoryIds, query, matches);
+              final resultsPanel = _buildResultsPanel(
+                  context, effectiveIds, categoriesById, payeesById, fmt,
+                  narrow: narrow);
+              if (narrow) {
+                return Column(
+                  children: [
+                    SizedBox(height: 220, child: categoryPanel),
+                    const Divider(height: 1),
+                    Expanded(child: resultsPanel),
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: 260, child: categoryPanel),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: resultsPanel),
+                ],
+              );
+            }),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildCategoryPanel(
+    List<Category> topCategories,
+    Map<int?, List<Category>> byParent,
+    Set<int> usedCategoryIds,
+    String query,
+    bool Function(Category) matches,
+  ) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: TextField(
+            controller: _searchController,
+            decoration: const InputDecoration(
+              isDense: true,
+              prefixIcon: Icon(Icons.search, size: 20),
+              hintText: 'Rechercher une catégorie',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (v) => setState(() => _search = v),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              TextButton(
+                onPressed: () => setState(() {
+                  // Selecting every visible top-level category already
+                  // rolls up all its children (see _toggleParent) - no
+                  // need to also select each leaf individually.
+                  for (final p in topCategories) {
+                    _selected.add(p.id);
+                    final children = byParent[p.id] ?? const <Category>[];
+                    _selected.removeAll(children.map((c) => c.id));
+                  }
+                }),
+                child: const Text('Tout cocher'),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _selected.clear()),
+                child: const Text('Tout décocher'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: topCategories.length,
+            itemBuilder: (context, i) {
+              final parent = topCategories[i];
+              // .toList() before sorting is required: a parent with no
+              // children hits the `?? const []` fallback, and sorting a
+              // const list in place throws (caught per-widget by Flutter,
+              // which silently renders a blank placeholder in release mode
+              // instead of a visible error) - this was the real cause of a
+              // very confusing "grey box" investigation.
+              final children = (byParent[parent.id] ?? const [])
+                  .where((c) => usedCategoryIds.contains(c.id))
+                  .toList()
+                ..sort((a, b) => a.name.compareTo(b.name));
+              // While searching, force every matching parent open so a
+              // matched child is actually visible without an extra click.
+              final expanded = _expandedParents.contains(parent.id) ||
+                  (query.isNotEmpty && children.any(matches));
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CheckboxListTile(
+                    dense: true,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding:
+                        const EdgeInsets.only(left: 4, right: 4),
+                    value: _selected.contains(parent.id),
+                    onChanged: (v) =>
+                        _toggleParent(parent, children, v ?? false),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(parent.name,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ),
+                        if (children.isNotEmpty)
+                          IconButton(
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            iconSize: 18,
+                            icon: Icon(expanded
+                                ? Icons.expand_less
+                                : Icons.expand_more),
+                            onPressed: () => setState(() {
+                              expanded
+                                  ? _expandedParents.remove(parent.id)
+                                  : _expandedParents.add(parent.id);
+                            }),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (expanded)
+                    for (final child in children)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 20),
+                        child: CheckboxListTile(
+                          dense: true,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: const EdgeInsets.only(right: 4),
+                          value: _selected.contains(child.id),
+                          onChanged: (v) =>
+                              _toggleChild(child, parent.id, v ?? false),
+                          title: Text(child.name,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  static const _modeLabels = {
+    _AnalyzerMode.sameMonthAcrossYears: 'Même mois, plusieurs années',
+    _AnalyzerMode.yearAllMonths: 'Une année, tous les mois',
+    _AnalyzerMode.customRange: 'Période libre',
+  };
+
+  Widget _buildResultsPanel(
+    BuildContext context,
+    Set<int> effectiveIds,
+    Map<int, Category> categoriesById,
+    Map<int, Payee> payeesById,
+    String Function(double) fmt, {
+    required bool narrow,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: _selected.isEmpty
+          ? const Center(child: Text('Choisissez au moins une catégorie.'))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final id in _selected)
+                        Chip(
+                          label: Text(categoriesById[id]?.name ?? '?'),
+                          onDeleted: () =>
+                              setState(() => _selected.remove(id)),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  // SegmentedButton forces its segments onto a single row
+                  // and shrinks them to fit - with labels this long
+                  // ("Même mois, plusieurs années", ...) a narrow phone
+                  // width leaves each button only a handful of pixels,
+                  // which wraps the text vertically one letter per line.
+                  // A dropdown stays compact regardless of label length.
+                  if (narrow)
+                    DropdownButtonFormField<_AnalyzerMode>(
+                      initialValue: _mode,
+                      isExpanded: true,
+                      decoration: const InputDecoration(isDense: true),
+                      items: [
+                        for (final mode in _AnalyzerMode.values)
+                          DropdownMenuItem(
+                            value: mode,
+                            child: Text(_modeLabels[mode]!),
+                          ),
+                      ],
+                      onChanged: (v) => setState(() => _mode = v!),
+                    )
+                  else
+                    SegmentedButton<_AnalyzerMode>(
+                      segments: [
+                        for (final mode in _AnalyzerMode.values)
+                          ButtonSegment(
+                            value: mode,
+                            label: Text(_modeLabels[mode]!),
+                          ),
+                      ],
+                      selected: {_mode},
+                      onSelectionChanged: (s) =>
+                          setState(() => _mode = s.first),
+                    ),
+                  const SizedBox(height: 16),
+                  if (_mode == _AnalyzerMode.sameMonthAcrossYears)
+                    _buildSameMonthMode(
+                        context, effectiveIds, payeesById, fmt)
+                  else if (_mode == _AnalyzerMode.yearAllMonths)
+                    _buildYearAllMonthsMode(
+                        context, effectiveIds, payeesById, fmt)
+                  else
+                    _buildCustomRangeMode(
+                        context, categoriesById, effectiveIds, fmt),
+                ],
+              ),
     );
   }
 
