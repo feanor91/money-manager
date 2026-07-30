@@ -11,6 +11,7 @@ import '../models/transaction.dart';
 import '../state/database_provider.dart';
 import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/category_spend_analyzer.dart';
 import '../widgets/envelope_gauge.dart';
 import '../widgets/hover_tooltip.dart';
 import '../widgets/responsive_body.dart';
@@ -337,6 +338,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
               existingEnvelopes: envelopes,
               categoriesById: categoriesById,
               recurringTotals: recurringTotals,
+              currency: currency,
               onDone: () => dbProvider.touch(),
             );
 
@@ -611,6 +613,7 @@ Future<void> _openSuggestions({
   required List<BudgetEnvelope> existingEnvelopes,
   required Map<int, Category> categoriesById,
   required Map<int, double> recurringTotals,
+  required CurrencyFormat? currency,
   required VoidCallback onDone,
 }) async {
   final existingCategoryIds = existingEnvelopes.map((e) => e.categoryId).toSet();
@@ -743,7 +746,22 @@ Future<void> _openSuggestions({
           }
 
           return AlertDialog(
-            title: const Text('Enveloppes suggérées'),
+            title: Row(
+              children: [
+                const Expanded(child: Text('Enveloppes suggérées')),
+                IconButton(
+                  tooltip: 'Analyser les dépenses par catégorie',
+                  icon: const Icon(Icons.query_stats),
+                  onPressed: () => openCategorySpendAnalyzer(
+                    context: context,
+                    repo: repo,
+                    accountId: accountId,
+                    categories: categoriesById.values.toList(),
+                    currency: currency,
+                  ),
+                ),
+              ],
+            ),
             content: SizedBox(
               width: 440,
               height: 420,

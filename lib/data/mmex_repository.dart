@@ -1505,11 +1505,15 @@ class MmexRepository {
   /// genuinely relevant to the account being budgeted for (see
   /// BudgetScreen's "Budgeter une sous-categorie" flow), instead of every
   /// category defined anywhere in the file regardless of which account
-  /// it's ever been used on.
+  /// it's ever been used on. Matches on TOACCOUNTID too, not just
+  /// ACCOUNTID - a categorized transfer *received* by this account (e.g.
+  /// a recurring "Virement:Revenus" from another of the user's own
+  /// accounts) is just as relevant here as one sent from it.
   Set<int> categoriesUsedByAccount(int accountId) {
     final rows = db.query(
-      'SELECT DISTINCT CATEGID FROM CHECKINGACCOUNT_V1 WHERE ACCOUNTID = ? AND CATEGID IS NOT NULL',
-      [accountId],
+      'SELECT DISTINCT CATEGID FROM CHECKINGACCOUNT_V1 '
+      'WHERE (ACCOUNTID = ? OR TOACCOUNTID = ?) AND CATEGID IS NOT NULL',
+      [accountId, accountId],
     );
     return {
       for (final row in rows)

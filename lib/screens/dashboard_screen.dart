@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/bento_card.dart';
 import '../widgets/budget_preview_card.dart';
+import '../widgets/category_spend_analyzer.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
@@ -121,6 +122,17 @@ class DashboardScreen extends StatelessWidget {
                     ),
                   ),
               ],
+            ),
+            IconButton(
+              icon: const Icon(Icons.query_stats),
+              tooltip: 'Analyser les dépenses par catégorie',
+              onPressed: () => openCategorySpendAnalyzer(
+                context: context,
+                repo: repo,
+                accountId: selectedAccountId,
+                categories: categories.values.toList(),
+                currency: currency,
+              ),
             ),
             IconButton(
               icon: const Icon(Icons.settings_outlined),
