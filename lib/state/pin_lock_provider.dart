@@ -3,7 +3,8 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import 'app_preferences.dart';
 
 const _prefsKeyPinHash = 'mmex_pin_hash';
 const _prefsKeyPinSalt = 'mmex_pin_salt';
@@ -23,7 +24,7 @@ class PinLockProvider extends ChangeNotifier {
 
   Future<void> load() async {
     if (_loaded) return;
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     _hasPin = prefs.getString(_prefsKeyPinHash) != null;
     _loaded = true;
     notifyListeners();
@@ -33,7 +34,7 @@ class PinLockProvider extends ChangeNotifier {
       sha256.convert(utf8.encode('$salt:$pin')).toString();
 
   Future<void> setPin(String pin) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     final salt =
         List.generate(16, (_) => Random.secure().nextInt(256)).join(',');
     await prefs.setString(_prefsKeyPinSalt, salt);
@@ -44,7 +45,7 @@ class PinLockProvider extends ChangeNotifier {
   }
 
   Future<void> removePin() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.remove(_prefsKeyPinHash);
     await prefs.remove(_prefsKeyPinSalt);
     _hasPin = false;
@@ -53,7 +54,7 @@ class PinLockProvider extends ChangeNotifier {
   }
 
   Future<bool> verify(String pin) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     final salt = prefs.getString(_prefsKeyPinSalt);
     final storedHash = prefs.getString(_prefsKeyPinHash);
     if (salt == null || storedHash == null) return true;

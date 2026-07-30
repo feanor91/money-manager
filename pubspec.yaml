@@ -41,6 +41,7 @@ dependencies:
   web: ^1.1.0
 
   cupertino_icons: ^1.0.8
+  encrypt: ^5.0.3
 
 dev_dependencies:
   flutter_test:
@@ -49,3 +50,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/mmex_blank_schema.sql

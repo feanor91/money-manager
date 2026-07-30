@@ -3,13 +3,14 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/blank_database.dart';
 import '../data/db_backup.dart';
 import '../data/mmex_database.dart';
 import '../data/mmex_repository.dart';
 import '../data/web_file_link.dart';
 import '../theme/app_theme.dart';
+import 'app_preferences.dart';
 
 const _prefsKeyLastPath = 'mmex_last_db_path';
 const _prefsKeySelectedAccount = 'mmex_selected_account_id';
@@ -81,7 +82,7 @@ class DatabaseProvider extends ChangeNotifier {
       hiddenAccountIds.remove(accountId);
     }
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.setStringList(_prefsKeyHiddenAccounts,
         hiddenAccountIds.map((id) => id.toString()).toList());
   }
@@ -112,7 +113,7 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> setAccountOrder(List<int> orderedIds) async {
     accountOrder = orderedIds;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.setStringList(
         _prefsKeyAccountOrder, orderedIds.map((id) => id.toString()).toList());
   }
@@ -127,7 +128,7 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> setForecastDay(int day) async {
     forecastDay = day.clamp(1, 31);
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.setInt(_prefsKeyForecastDay, forecastDay);
   }
 
@@ -140,7 +141,7 @@ class DatabaseProvider extends ChangeNotifier {
   AppPalette palette = AppPalette.indigo;
 
   Future<void> loadPalette() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     final saved = prefs.getString(_prefsKeyPalette);
     palette = AppPalette.values.firstWhere(
       (p) => p.name == saved,
@@ -153,7 +154,7 @@ class DatabaseProvider extends ChangeNotifier {
     palette = newPalette;
     AppTheme.applyPalette(newPalette);
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.setString(_prefsKeyPalette, newPalette.name);
   }
 
@@ -164,7 +165,7 @@ class DatabaseProvider extends ChangeNotifier {
   ThemeMode themeMode = ThemeMode.system;
 
   Future<void> loadThemeMode() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     final saved = prefs.getString(_prefsKeyThemeMode);
     themeMode = ThemeMode.values.firstWhere(
       (m) => m.name == saved,
@@ -175,7 +176,7 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> setThemeMode(ThemeMode mode) async {
     themeMode = mode;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     await prefs.setString(_prefsKeyThemeMode, mode.name);
   }
 
@@ -191,7 +192,7 @@ class DatabaseProvider extends ChangeNotifier {
       // Earlier versions cached a full byte snapshot here, which could show
       // stale (or even already-deleted) data on reload. Clean up any
       // leftover snapshot from before that was removed.
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await AppPreferences.getInstance();
       await prefs.remove('mmex_web_cache_b64');
       await prefs.remove('mmex_web_cache_label');
 
@@ -224,7 +225,7 @@ class DatabaseProvider extends ChangeNotifier {
           return;
       }
     }
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     final lastPath = prefs.getString(_prefsKeyLastPath);
     if (lastPath == null) return;
     await openFromPath(lastPath, persist: false, notFoundMessage: 'lastPath');
@@ -264,7 +265,7 @@ class DatabaseProvider extends ChangeNotifier {
       await _swapDatabase(db);
       _backupNow(db);
       if (persist) {
-        final prefs = await SharedPreferences.getInstance();
+        final prefs = await AppPreferences.getInstance();
         await prefs.setString(_prefsKeyLastPath, path);
       }
       status = DbStatus.ready;
@@ -348,6 +349,36 @@ class DatabaseProvider extends ChangeNotifier {
     }
   }
 
+  /// Desktop only (native file paths required): lets the user pick where
+  /// to create a brand-new, empty-but-functional .mmb file - the "New
+  /// Database" counterpart to [pickDatabaseFile]'s "open an existing one".
+  /// See [initializeBlankSchema] for what actually gets written.
+  Future<void> createNewDatabase() async {
+    if (kIsWeb) return;
+    final path = await FilePicker.saveFile(
+      dialogTitle: 'Créer une nouvelle base de données (.mmb)',
+      fileName: 'MaBanque.mmb',
+      type: FileType.custom,
+      allowedExtensions: ['mmb'],
+    );
+    if (path == null) return;
+    status = DbStatus.loading;
+    notifyListeners();
+    try {
+      final db = await MmexDatabase.openFromPath(path);
+      await initializeBlankSchema(db);
+      await _swapDatabase(db);
+      _backupNow(db);
+      final prefs = await AppPreferences.getInstance();
+      await prefs.setString(_prefsKeyLastPath, path);
+      status = DbStatus.ready;
+    } catch (e) {
+      status = DbStatus.error;
+      errorMessage = e.toString();
+    }
+    notifyListeners();
+  }
+
   Timer? _writeBackDebounce;
 
   /// Set when the last attempt to write back to the real file on disk
@@ -409,7 +440,7 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> selectAccount(int? accountId) async {
     selectedAccountId = accountId;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await AppPreferences.getInstance();
     if (accountId == null) {
       await prefs.remove(_prefsKeySelectedAccount);
     } else {
@@ -444,12 +475,12 @@ class DatabaseProvider extends ChangeNotifier {
     saveError = null;
 
     if (!_selectedAccountLoaded) {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await AppPreferences.getInstance();
       selectedAccountId = prefs.getInt(_prefsKeySelectedAccount);
       _selectedAccountLoaded = true;
     }
     if (!_hiddenAccountsLoaded) {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await AppPreferences.getInstance();
       hiddenAccountIds = (prefs.getStringList(_prefsKeyHiddenAccounts) ?? [])
           .map((s) => int.tryParse(s))
           .whereType<int>()
@@ -457,7 +488,7 @@ class DatabaseProvider extends ChangeNotifier {
       _hiddenAccountsLoaded = true;
     }
     if (!_accountOrderLoaded) {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await AppPreferences.getInstance();
       accountOrder = (prefs.getStringList(_prefsKeyAccountOrder) ?? [])
           .map((s) => int.tryParse(s))
           .whereType<int>()
@@ -465,7 +496,7 @@ class DatabaseProvider extends ChangeNotifier {
       _accountOrderLoaded = true;
     }
     if (!_forecastDayLoaded) {
-      final prefs = await SharedPreferences.getInstance();
+      final prefs = await AppPreferences.getInstance();
       forecastDay = prefs.getInt(_prefsKeyForecastDay) ?? 24;
       _forecastDayLoaded = true;
     }

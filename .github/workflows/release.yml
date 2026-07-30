@@ -33,6 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      final_version: ${{ steps.publish.outputs.final_version }}
 
     steps:
       - name: Checkout
@@ -184,3 +186,69 @@ jobs:
           files: |
             build/app/outputs/flutter-apk/app-release.apk
             money-manager-web.zip
+
+  # Separate job because a Flutter Windows build genuinely needs a Windows
+  # runner - can't happen on the ubuntu-latest box the rest of this
+  # workflow uses. Runs after `release` (needs the version number/tag it
+  # just published) and attaches its own artifacts to that same release
+  # afterwards, rather than creating a second one.
+  build-windows:
+    needs: release
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout released tag
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.final_version }}
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package portable build
+        shell: pwsh
+        run: |
+          $version = "${{ needs.release.outputs.final_version }}"
+          $releaseDir = "build\windows\x64\runner\Release"
+          $portableDir = "dist\portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item "$releaseDir\*" $portableDir -Recurse
+          Set-Content -Path "$portableDir\portable.txt" -Encoding utf8 -Value @"
+          Ce fichier indique a Money Manager de stocker ses preferences (code PIN, dernier fichier ouvert, theme...) dans un fichier local chiffre a cote de cet executable, plutot que dans le profil Windows - ce dossier reste ainsi vraiment portable (fonctionne pareil sur n'importe quel PC / cle USB).
+
+          Ne supprimez pas ce fichier.
+          "@
+          Compress-Archive -Path "$portableDir\*" -DestinationPath "dist\MoneyManager-$version-portable-win64.zip"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.release.outputs.final_version }}"
+          (Get-Content installer\money_manager.iss) `
+            -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$version`"" |
+            Set-Content installer\money_manager.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\money_manager.iss
+
+      - name: Attach Windows artifacts to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.release.outputs.final_version }}
+          files: |
+            dist/MoneyManager-${{ needs.release.outputs.final_version }}-portable-win64.zip
+            dist/MoneyManager-${{ needs.release.outputs.final_version }}-setup-win64.exe

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -59,12 +60,25 @@ class DbPickerScreen extends StatelessWidget {
                       icon: const Icon(Icons.folder_open),
                       label: const Text('Choisir un autre fichier'),
                     ),
-                  ] else
+                  ] else ...[
                     FilledButton.icon(
                       onPressed: () => context.read<DatabaseProvider>().pickDatabaseFile(),
                       icon: const Icon(Icons.folder_open),
                       label: const Text('Choisir un fichier .mmb'),
                     ),
+                    // Desktop only - the web build has no arbitrary
+                    // filesystem access to create a new file at a chosen
+                    // path (see DatabaseProvider.createNewDatabase).
+                    if (!kIsWeb) ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () =>
+                            context.read<DatabaseProvider>().createNewDatabase(),
+                        icon: const Icon(Icons.add_circle_outline),
+                        label: const Text('Créer une nouvelle base'),
+                      ),
+                    ],
+                  ],
                   if (dbProvider.status == DbStatus.error) ...[
                     const SizedBox(height: 16),
                     Row(
