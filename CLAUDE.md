@@ -45,10 +45,16 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
 4. `flutter run -d web-server --release --web-port 8791 --web-hostname 0.0.0.0`
    as a background Bash command, then Monitor/poll its output file for
    `is being served at` before opening the preview browser. **Always
-   `--release`, never plain debug mode** - debug mode has a click-freezing
-   bug the user has already run into and rejected; release takes longer
-   to compile but there's no hot-reload workflow being lost here anyway
-   (every code change needs a fresh kill+relaunch regardless).
+   `--release`, never plain debug mode** - debug mode has repeatedly
+   caused a `mouse_tracker.dart` assertion-failure loop that freezes
+   click handling in the browser, confirmed via DevTools console errors
+   and explicitly rejected by the user as unusable ("le mode debug ne
+   marchait pas top top") - not a one-off fluke, it recurred. Release
+   compiles noticeably slower (roughly 1-4 minutes depending on how much
+   changed/is cached) - mention that when kicking one off so a normal
+   wait isn't mistaken for a hang, and actually check the log/process
+   (CPU usage, elapsed vs. typical duration) before concluding it's stuck
+   rather than just waiting anxiously or restarting prematurely.
 5. Never rely on a browser refresh alone to pick up code changes, and do
    this proactively after every edit rather than waiting to be reminded -
    the dev server itself must be killed and relaunched per step 3-4
