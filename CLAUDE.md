@@ -123,12 +123,39 @@ silent-failure incident.
 
 ## Working style feedback
 
-- **UI consistency across equivalent features.** A new edit surface must
-  match the existing ones rather than inventing its own pattern - e.g.
-  transaction and recurring-bill editors are both `showModalBottomSheet`
-  sheets (`TransactionEditorSheet`, `RecurringEditorSheet`), not ad-hoc
-  `AlertDialog`s. Check how the closest existing equivalent is built
-  before adding a new editor/detail surface, and follow it.
+- **UI consistency across equivalent features.** A feature that is
+  conceptually the same *kind* of thing as something already in the app
+  (e.g. "edit this record") must behave identically, not just look
+  similar - don't invent a new interaction pattern for something that
+  already has an established one elsewhere. This was framed as a general
+  rule after several wrong-guess iterations building the budget envelope
+  edit interaction as something bespoke (AlertDialog vs bottom sheet,
+  confirm-before-delete vs immediate delete, a pencil icon vs tapping the
+  row) when the transaction/recurring-bill editors already fully
+  specified the answer. The reference pattern (as of 2026-07-29,
+  confirmed by the user against "Modifier la transaction"):
+  - The record's full edit form is `showModalBottomSheet(isScrollControlled:
+    true, ...)`, never a centered `AlertDialog` - dismiss-on-outside-tap
+    is the sheet's own default, no explicit "Annuler" button needed.
+  - No pencil/edit icon anywhere - tapping the row itself (in a
+    list/ledger) opens the full edit sheet directly.
+  - A field with its own "quick edit" shortcut (the ledger's Date or
+    Amount columns) opens its own small single-field `AlertDialog` when
+    tapped directly, separately from the rest of the row which still
+    opens the full sheet - this is the **exception**, not the rule. Don't
+    assume a new field needs a quick-edit shortcut unless there's a
+    specific reason (the ledger's case: fixing a date/amount against a
+    bank statement without opening the whole form) - ask if unsure.
+  - Inside the full sheet: fields stacked top to bottom, then at the very
+    bottom a `Row` with `TextButton('Supprimer')` (plain, not styled red)
+    on the left, `Spacer()`, `FilledButton('Enregistrer')` on the right.
+    Delete is immediate, no confirmation dialog - matches how casual the
+    rest of the app is about undo (there is none yet; see ROADMAP.md's
+    "Bouton Annuler la suppression").
+  Before designing a new "add/edit X" surface: find the closest existing
+  equivalent (search for `showModalBottomSheet` and the
+  `Supprimer`/`Enregistrer` row) and copy it structurally rather than
+  reasoning about it from scratch.
 - Confirm date pickers on tap (see `lib/utils/date_picker.dart`) - the
   user explicitly rejected the extra "OK" step `showDatePicker` requires.
 - No mouse-wheel horizontal scroll on the budget gauges - explicit
