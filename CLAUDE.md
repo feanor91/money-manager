@@ -34,7 +34,14 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
 3. Kill whatever's on port 8791: PowerShell
    `Get-NetTCPConnection -LocalPort 8791 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`
    (kills by port, not process name - safer than searching for `dart.exe`,
-   since the actual process can show up as `dartvm.exe` instead).
+   since `flutter run -d web-server` on Windows actually spawns
+   `dartvm.exe`; a name-based kill anchored to `dart` alone silently
+   misses it). Then confirm the port is actually free -
+   `Get-NetTCPConnection -LocalPort 8791 -State Listen` should return
+   nothing - before starting a new server. A stale process left listening
+   keeps answering requests with the *old* build, which reads exactly
+   like "the fix isn't taking effect" and has already cost real debugging
+   time chasing a phantom.
 4. `flutter run -d web-server --release --web-port 8791 --web-hostname 0.0.0.0`
    as a background Bash command, then Monitor/poll its output file for
    `is being served at` before opening the preview browser. **Always
@@ -42,8 +49,10 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
    bug the user has already run into and rejected; release takes longer
    to compile but there's no hot-reload workflow being lost here anyway
    (every code change needs a fresh kill+relaunch regardless).
-5. Never rely on a browser refresh alone to pick up code changes - the
-   dev server itself must be killed and relaunched per step 3-4 first.
+5. Never rely on a browser refresh alone to pick up code changes, and do
+   this proactively after every edit rather than waiting to be reminded -
+   the dev server itself must be killed and relaunched per step 3-4
+   first, every time, or the user is just looking at a stale build.
 6. If scripting a health check against the dev server, use a GET request
    (or just load the page normally) - a HEAD request (`curl -I`) reliably
    404s on this server even when the page loads fine via GET, and will
