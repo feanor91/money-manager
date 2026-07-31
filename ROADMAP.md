@@ -5,12 +5,6 @@ courses, pas des engagements.
 
 ## Demandées
 
-- **Mode simulation de budget** - modifier temporairement les montants
-  d'enveloppes pour voir l'effet en direct, sans les enregistrer pour de
-  bon. Plusieurs pistes proposées (mode brouillon, scénarios nommés,
-  curseur global en %, simulation ponctuelle façon achat simulé) - jamais
-  tranché, à redemander avant de s'y lancer.
-
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
@@ -43,6 +37,29 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Mode simulation de budget~~ - **fait**, sous la forme de scénarios
+  nommés. Nouveau bouton "Simulation" dans l'écran Budget : plusieurs
+  scénarios par compte (créer/renommer/supprimer/rappeler librement),
+  chacun affichant toutes les catégories avec un historique réel -
+  revenus et dépenses ensemble, contrairement aux enveloppes qui ne
+  couvrent que les dépenses - avec la moyenne réelle mensuelle (période
+  3/6/12 mois au choix) à côté d'un montant simulé modifiable librement,
+  enregistré immédiatement mais totalement indépendant du vrai budget
+  (tables `APP_BUDGET_SCENARIOS`/`APP_BUDGET_SCENARIO_AMOUNTS`, jamais
+  `APP_BUDGET_ENVELOPES`). Survoler une barre montre les vraies
+  transactions qui composent sa moyenne, même principe que les
+  info-bulles déjà existantes ailleurs dans l'écran Budget. Au passage :
+  un vrai bug préexistant découvert en écrivant les tests de cette
+  fonctionnalité - "Créer une nouvelle base" (desktop) échouait
+  silencieusement, corrigé (voir plus bas).
+
+- ~~"Créer une nouvelle base" (desktop) cassée silencieusement~~ -
+  **fait/corrigé**. Le découpage du schéma SQL vierge avalait le premier
+  `CREATE TABLE` (celui du compte) avec le bloc de commentaires qui le
+  précède, faisant échouer toute la création de base sans que rien ne
+  soit jamais commité - découvert par hasard en testant le simulateur de
+  budget ci-dessus, sans lien avec la demande initiale.
 
 - ~~Ajouter un graphe de dépenses par catégorie~~ - **fait**, via la refonte
   du budget en enveloppes (voir plus bas) : l'écran Budget affiche un
