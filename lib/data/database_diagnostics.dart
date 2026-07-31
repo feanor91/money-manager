@@ -341,16 +341,21 @@ List<DiagnosticFinding> _checkDuplicateTransactions(MmexRepository repo) {
   final findings = <DiagnosticFinding>[];
   final db = repo.db;
 
-  // Same account, date, amount and payee more than once - a common import
-  // artifact, but also a perfectly normal coincidence (two identical
-  // coffees on the same day), hence "probable" rather than a hard error:
-  // this is a nudge to go look, not a claim something is actually wrong.
+  // Same account, date, amount and payee 3+ times - a common import
+  // artifact, but also a perfectly normal coincidence for this user's own
+  // data (several identical-cost card subscriptions, or transfers to two
+  // different life-insurance policies under the same generic payee, can
+  // legitimately land on the same day for the same amount) - confirmed
+  // 2026-07-31 that *pairs* of identical transactions are common enough
+  // here to be pure noise, not a signal. Only 3-or-more is rare enough to
+  // still be worth a nudge to go look - and still just "probable", not a
+  // claim something is actually wrong.
   final duplicates = db.query('''
     SELECT GROUP_CONCAT(TRANSID) AS ids, COUNT(*) AS n
     FROM CHECKINGACCOUNT_V1
     WHERE (DELETEDTIME IS NULL OR DELETEDTIME = '') AND STATUS != 'V'
     GROUP BY ACCOUNTID, TRANSDATE, TRANSAMOUNT, PAYEEID
-    HAVING COUNT(*) > 1
+    HAVING COUNT(*) > 2
   ''');
   for (final row in duplicates) {
     final ids = (row['ids'] as String).split(',').map(int.parse).toList();
@@ -398,10 +403,22 @@ List<DiagnosticFinding> _checkOrphanedTransfers(MmexRepository repo) {
     ));
   }
 
+  // -1 is MMEX's own "not applicable" sentinel here too (same convention as
+  // PAYEEID's -1 "no payee" above) - confirmed 2026-07-31 against a real
+  // database, where every non-transfer row has TOACCOUNTID = -1 (or, more
+  // rarely, NULL). Checking only "IS NOT NULL" flagged nearly every single
+  // Withdrawal/Deposit as a false positive. 0 gets the same treatment: one
+  // single legacy row (a 2014 transaction, likely from a very old MMEX
+  // version/import) has TOACCOUNTID = 0 instead of -1 - account id 0
+  // doesn't exist either, so it's the same "not applicable" quirk with a
+  // different placeholder, not a real destination, and not user-editable
+  // (the transaction editor doesn't expose this field for non-transfers) -
+  // nothing to fix there, so nothing to flag here.
   final unexpectedDestination = db.query('''
     SELECT TRANSID FROM CHECKINGACCOUNT_V1
     WHERE (DELETEDTIME IS NULL OR DELETEDTIME = '')
       AND TRANSCODE != 'Transfer' AND TOACCOUNTID IS NOT NULL
+      AND TOACCOUNTID NOT IN (-1, 0)
   ''');
   for (final row in unexpectedDestination) {
     findings.add(DiagnosticFinding(

@@ -318,8 +318,13 @@ class _TxRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             SizedBox(
-              width: 52,
-              child: Text(_dateFormat.format(tx.date), style: Theme.of(context).textTheme.bodySmall),
+              width: 62,
+              child: Text(
+                _dateFormat.format(tx.date),
+                style: Theme.of(context).textTheme.bodySmall,
+                softWrap: false,
+                overflow: TextOverflow.clip,
+              ),
             ),
             Expanded(
               child: Text(detail, maxLines: 1, overflow: TextOverflow.ellipsis),
