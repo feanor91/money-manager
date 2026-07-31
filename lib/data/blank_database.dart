@@ -21,10 +21,20 @@ Future<void> initializeBlankSchema(
   int baseCurrencyId = defaultBaseCurrencyId,
 }) async {
   final sql = await rootBundle.loadString('assets/mmex_blank_schema.sql');
+  // Strip comment *lines* before splitting on ';', not after: the file's
+  // leading comment block (see its own header) has no semicolon of its
+  // own, so splitting first left it glued to CREATE TABLE ACCOUNTLIST_V1's
+  // full statement text as one combined fragment - which, starting with
+  // "--", then got silently skipped whole, table and all. Confirmed
+  // 2026-07-31 this meant "Créer une nouvelle base" never actually created
+  // ACCOUNTLIST_V1 at all (every table/index depending on it then failed
+  // too, aborting the whole transaction with nothing committed).
+  final withoutComments =
+      sql.split('\n').where((line) => !line.trim().startsWith('--')).join('\n');
   db.transaction(() {
-    for (final statement in sql.split(';')) {
+    for (final statement in withoutComments.split(';')) {
       final trimmed = statement.trim();
-      if (trimmed.isEmpty || trimmed.startsWith('--')) continue;
+      if (trimmed.isEmpty) continue;
       db.execute(trimmed);
     }
     final today = DateTime.now();
