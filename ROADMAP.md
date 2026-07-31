@@ -26,6 +26,8 @@ courses, pas des engagements.
   la suppression est immédiate et définitive, pas de confirmation ni de
   filet de rattrapage au-delà des sauvegardes automatiques).
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
+- Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie
+- ?...)
 
 ## Priorité basse
 
