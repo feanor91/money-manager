@@ -3,10 +3,6 @@
 Idées et pistes pour la suite, non planifiées ni engagées - une liste de
 courses, pas des engagements.
 
-## Priorité maximale
-
-- Ajouter un graphe de dépenses par catégorie 
-
 ## Demandées
 
 - **Mode simulation de budget** - modifier temporairement les montants
@@ -45,6 +41,15 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Ajouter un graphe de dépenses par catégorie~~ - **fait**, via la refonte
+  du budget en enveloppes (voir plus bas) : l'écran Budget affiche un
+  graphe en barres horizontales classées par dépense réelle, chaque barre
+  à la même échelle pour comparer les catégories d'un coup d'œil (repère
+  visuel pour le montant cible, halo rouge si dépassé). Intégré à l'écran
+  Budget plutôt qu'un écran séparé - à redemander si un graphe indépendant
+  du budget (sans lien avec les enveloppes/objectifs) est en fait ce qui
+  était voulu.
 
 - ~~Application de bureau plus complète~~ - **fait**. Ajout de la cible
   Windows desktop : build portable (ZIP, préférences chiffrées à côté de
