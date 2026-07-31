@@ -7,7 +7,100 @@ courses, pas des engagements.
 
 - Ajouter un graphe de dépenses par catégorie 
 
+## Demandées
+
+- **Mode simulation de budget** - modifier temporairement les montants
+  d'enveloppes pour voir l'effet en direct, sans les enregistrer pour de
+  bon. Plusieurs pistes proposées (mode brouillon, scénarios nommés,
+  curseur global en %, simulation ponctuelle façon achat simulé) - jamais
+  tranché, à redemander avant de s'y lancer.
+- **Application de bureau plus complète** - une version desktop (Windows/
+  macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
+  d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
+  reste à définir ce que "plus complet" veut dire concrètement.
+
+## Suggestions (à valider avant de s'y lancer)
+
+- **Export CSV** des transactions (utile pour la déclaration d'impôts ou
+  un tableur externe) - relativement simple à ajouter vu que le grand
+  livre est déjà entièrement lisible via `MmexRepository`.
+- **Rappels/notifications** pour les opérations récurrentes à venir
+  (notification Android le jour J plutôt que seulement à l'ouverture de
+  l'app).
+- **Déverrouillage biométrique** (empreinte/visage) en plus ou à la place
+  du code PIN, sur Android - `local_auth` package, s'intègre proprement à
+  côté du `PinLockProvider` existant.
+- **Bouton "Annuler la suppression"** pour une transaction (actuellement
+  la suppression est immédiate et définitive, pas de confirmation ni de
+  filet de rattrapage au-delà des sauvegardes automatiques).
+- **Tri/personnalisation des colonnes** du grand livre des transactions.
+
+## Priorité basse
+
+- **Localisation multilingue.** Toute l'interface est actuellement en
+  français en dur dans le code (pas de fichiers `.arb`/`intl_*`).
+  `flutter_localizations` a bien été ajouté depuis, mais uniquement pour
+  forcer les widgets Material génériques (le calendrier de `showDatePicker`
+  notamment, qui s'affichait en anglais) en français via `locale: Locale('fr')`
+  - ça ne couvre pas le texte de l'appli elle-même. Passage en `l10n`
+    standard Flutter à prévoir si l'app doit un jour servir à quelqu'un
+    d'autre que son utilisateur actuel - gros travail mécanique (extraire
+    toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
+    qu'il n'y a qu'un seul utilisateur francophone.
+
 ## Récemment fait
+
+- ~~Historique des transactions plafonné à 300 lignes~~ - **fait/corrigé**.
+  Le grand livre ne pouvait plus remonter au-delà des ~300 dernières
+  transactions d'un compte - au-delà, impossible d'atteindre les
+  opérations plus anciennes. Le vrai problème n'était pas le nombre de
+  lignes affichées (déjà géré efficacement) mais le calcul du solde
+  courant, qui reparcourait tout l'historique du compte à chaque
+  rafraîchissement d'écran, quel que soit le nombre de lignes retournées -
+  confirmé en pratique (blocage du navigateur après suppression du
+  plafond). Corrigé en passant à un affichage par mois : solde de départ
+  calculé via une requête SQL agrégée légère plutôt qu'en reconstruisant
+  chaque transaction depuis le début, mois courant affiché par défaut,
+  flèches précédent/suivant, listes déroulantes mois et année pour
+  naviguer vite loin dans le passé, bouton "Aujourd'hui".
+
+- ~~Diagnostic de la base : plusieurs faux positifs~~ - **fait/corrigé**.
+  Le seuil de "doublons probables" est passé de 2 à 3 transactions
+  identiques le même jour - 2 identiques est un cas normal et fréquent
+  chez cet utilisateur (plusieurs abonnements/versements d'assurance au
+  même montant), pas un signal fiable. `TOACCOUNTID` à -1 *ou* 0 (deux
+  variantes de la convention MMEX "non applicable" sur une opération qui
+  n'est pas un virement, vérifiées empiriquement sur la vraie base) n'est
+  plus signalé à tort comme "compte de destination inattendu" - ça
+  remontait quasiment toutes les opérations normales du compte. Correctif
+  de mise en page au passage (la date d'une ligne se coupait mal sur deux
+  lignes dans certains cas).
+
+- ~~Code PIN et préférences vulnérables à un nettoyage du navigateur~~ -
+  **fait/corrigé**. Chantier important : le code PIN (haché), le nombre de
+  tentatives avant blocage, la durée du blocage, le thème, le jour de
+  prévision du solde, le compte sélectionné/masqués et leur ordre vivent
+  désormais dans un petit fichier chiffré à côté du fichier `.mmb` lui-même
+  (`money_manager_settings.dat`) plutôt que dans le stockage local du
+  navigateur/appareil. Un "clear site data" ou une réinstallation ne les
+  efface donc plus, et un seul réglage protège le fichier partout où il
+  est ouvert (utile ici : la base vit dans un dossier synchronisé
+  Nextcloud). Seul ce qui ne peut techniquement pas être partagé (le
+  chemin du fichier à ouvrir, les autorisations de dossier du navigateur)
+  reste local par appareil - point que CLAUDE.md documente maintenant
+  comme règle par défaut pour tout futur réglage. Un vrai trou de sécurité
+  a été découvert et corrigé en cours de route : l'écran Paramètres, seul
+  de l'appli accessible par une URL dédiée (`/settings`), pouvait être
+  rouvert par un simple rafraîchissement de page sans jamais redemander le
+  code PIN, contournant entièrement la protection - la vérification
+  s'applique maintenant à toute route, pas seulement à l'écran d'accueil.
+
+- ~~Code PIN sans limite de tentatives~~ - **fait**. Blocage temporaire
+  après un nombre configurable d'essais incorrects (5 par défaut), avec
+  une durée de blocage elle aussi configurable (1 minute par défaut) - les
+  deux réglages se modifient depuis l'écran de définition du code PIN, en
+  même temps que le code lui-même. Le blocage est persistant : fermer et
+  rouvrir l'appli, ou changer d'appareil, ne permet pas de le contourner.
 
 - ~~Système de budget simple et efficace~~ - **fait**. Refonte complète en
   enveloppes par compte : suggestions automatiques (opérations récurrentes
@@ -153,6 +246,7 @@ courses, pas des engagements.
   demande explicite après plusieurs essais - seule l'enveloppe de la
   catégorie mère est éditable/supprimable depuis là, les sous-catégories
   restent en lecture seule dans la répartition.
+
 - ~~Outil de diagnostic de la base~~ - **fait**. Paramètres > Diagnostic
   de la base : rapport en lecture seule (aucune correction automatique,
   volontairement - vu l'historique du bug de perte de données silencieuse
@@ -163,47 +257,6 @@ courses, pas des engagements.
   d'imbrication - MMEX n'en gère qu'un seul), opérations récurrentes
   épuisées mais toujours présentes, doublons probables (même compte/date/
   montant/tiers) et virements sans destination valide.
-
-## Demandées
-
-- **Mode simulation de budget** - modifier temporairement les montants
-  d'enveloppes pour voir l'effet en direct, sans les enregistrer pour de
-  bon. Plusieurs pistes proposées (mode brouillon, scénarios nommés,
-  curseur global en %, simulation ponctuelle façon achat simulé) - jamais
-  tranché, à redemander avant de s'y lancer.
-- **Application de bureau plus complète** - une version desktop (Windows/
-  macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
-  d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
-  reste à définir ce que "plus complet" veut dire concrètement.
-
-## Suggestions (à valider avant de s'y lancer)
-
-- **Export CSV** des transactions (utile pour la déclaration d'impôts ou
-  un tableur externe) - relativement simple à ajouter vu que le grand
-  livre est déjà entièrement lisible via `MmexRepository`.
-- **Rappels/notifications** pour les opérations récurrentes à venir
-  (notification Android le jour J plutôt que seulement à l'ouverture de
-  l'app).
-- **Déverrouillage biométrique** (empreinte/visage) en plus ou à la place
-  du code PIN, sur Android - `local_auth` package, s'intègre proprement à
-  côté du `PinLockProvider` existant.
-- **Bouton "Annuler la suppression"** pour une transaction (actuellement
-  la suppression est immédiate et définitive, pas de confirmation ni de
-  filet de rattrapage au-delà des sauvegardes automatiques).
-- **Tri/personnalisation des colonnes** du grand livre des transactions.
-
-## Priorité basse
-
-- **Localisation multilingue.** Toute l'interface est actuellement en
-  français en dur dans le code (pas de fichiers `.arb`/`intl_*`).
-  `flutter_localizations` a bien été ajouté depuis, mais uniquement pour
-  forcer les widgets Material génériques (le calendrier de `showDatePicker`
-  notamment, qui s'affichait en anglais) en français via `locale: Locale('fr')`
-  - ça ne couvre pas le texte de l'appli elle-même. Passage en `l10n`
-    standard Flutter à prévoir si l'app doit un jour servir à quelqu'un
-    d'autre que son utilisateur actuel - gros travail mécanique (extraire
-    toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
-    qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Notes
 
