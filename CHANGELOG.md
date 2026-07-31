@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.26] - 2026-07-31
+
+- docs(roadmap): actually log the scenario simulator (missed in the last commit)
+- docs: note a pending simulator tweak, log this session's changes
+- feat(budget): add named what if scenario simulator
+- fix(desktop): correct SQL comment-stripping that silently broke create new database
+
 ## [1.0.25] - 2026-07-31
 
 - docs(roadmap): list outstanding requests before the changelog, log this session's work
