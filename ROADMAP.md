@@ -14,10 +14,6 @@ courses, pas des engagements.
   bon. Plusieurs pistes proposées (mode brouillon, scénarios nommés,
   curseur global en %, simulation ponctuelle façon achat simulé) - jamais
   tranché, à redemander avant de s'y lancer.
-- **Application de bureau plus complète** - une version desktop (Windows/
-  macOS/Linux, Flutter le permet déjà techniquement) avec plus d'écrans
-  d'aide et de suivi que ce que l'interface mobile/web actuelle propose -
-  reste à définir ce que "plus complet" veut dire concrètement.
 
 ## Suggestions (à valider avant de s'y lancer)
 
@@ -49,6 +45,17 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Application de bureau plus complète~~ - **fait**. Ajout de la cible
+  Windows desktop : build portable (ZIP, préférences chiffrées à côté de
+  l'exécutable via un marqueur `portable.txt`) et installeur classique
+  (Inno Setup, installation par utilisateur - pas de droits admin
+  nécessaires, pas de raccourci perdu sur un bureau OneDrive), tous deux
+  générés automatiquement par la pipeline CI et attachés à chaque
+  release GitHub. Nouveau flux "Créer une nouvelle base" (desktop
+  uniquement, nécessite un vrai chemin de fichier) : génère une base MMEX
+  minimale mais fonctionnelle à partir d'un schéma vierge intégré à
+  l'appli, avec des catégories par défaut traduites en français.
 
 - ~~Historique des transactions plafonné à 300 lignes~~ - **fait/corrigé**.
   Le grand livre ne pouvait plus remonter au-delà des ~300 dernières
