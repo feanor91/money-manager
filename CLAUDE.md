@@ -91,6 +91,58 @@ shape on someone's already-open file. Existing examples:
 `APP_BUDGET_ENVELOPES`, `APP_BILL_OCCURRENCE_TOTALS`,
 `APP_TRANSACTION_BILL_LINKS`.
 
+## Where app preferences/settings live
+
+**Default rule going forward: any new preference or setting belongs in the
+database's companion settings file, not in `AppPreferences`/device-local
+storage - unless it falls in the narrow "must stay local" exception below.**
+This was an explicit decision (2026-07-31) reversing the previous
+per-device-preference design, after the user pointed out that a
+device/browser-local PIN is pointless security: clearing browser site data
+(or reinstalling the app) silently wipes it with no warning, and each
+device/browser needed its own separate PIN and settings for what's
+conceptually the same file.
+
+- The companion file (`money_manager_settings.dat`, AES-encrypted like the
+  portable-desktop prefs file - see `EncryptedFilePreferences` in
+  `lib/state/app_preferences.dart`, shared by both) sits in the **same
+  folder as the currently open `.mmb` file** - native via a plain sibling
+  path (`lib/data/db_companion_settings.dart`'s `forNativePath`), web via
+  the directory handle already requested alongside the main file (see
+  `WebFileLink.ensureDirectoryPermission`/`readCompanionFile`/
+  `writeCompanionFile`). Because it lives next to the database rather than
+  in this device's own storage, it automatically follows the database
+  everywhere that folder is synced to (this user's case: a Nextcloud-synced
+  folder) - one PIN, one set of preferences, on every device/browser that
+  opens that file, and it survives a "clear site data"/reinstall that would
+  wipe device-local storage.
+- Currently living there: PIN hash/salt + lockout settings
+  (`PinLockProvider`), palette, theme mode, forecast day, selected account,
+  hidden accounts, account display order (all in `DatabaseProvider`).
+- **Must stay in `AppPreferences` (device-local) - not a style choice, a
+  hard technical necessity**: which database path to reopen at startup, and
+  (web) this browser's own remembered file/directory permissions. Both are
+  inherently per-device (a synced folder mounts at a different local path
+  per device; web File System Access permissions can't be exported/shared
+  across browsers by design) and have to be resolved *before* the companion
+  file's location is even known - there's no chicken-and-egg way around
+  this.
+- Consequence: `PinLockProvider` no longer has a standalone `load()` -
+  `DatabaseProvider` calls `attachDatabase()` on it (wired in main.dart)
+  every time the open database changes, and `app.dart`'s `_RootGate` now
+  loads the database *before* checking the PIN gate (reversed from before),
+  since there's nowhere to check a PIN against until a database - and
+  therefore its companion file - is open. A first frame before any database
+  opens (the picker screen) briefly shows the default theme/palette even if
+  a database opened moments later customises it - unavoidable, since
+  there's nowhere else to read a customised theme from that early.
+- Web-specific edge case: if a database is open but its companion folder
+  permission isn't available (declined, or lapsed), whether a PIN is even
+  configured is genuinely unknown - `PinGateStatus.needsCompanionAccess`
+  fails *closed* (blocks entry, offers a retry button) rather than silently
+  proceeding as if no PIN existed. Don't "fix" this by making it fail open;
+  that's the whole security property this design exists for.
+
 ## The #1 recurring bug class: forgetting to persist
 
 On web, every repository mutation (insert/update/delete/reconcile/...)

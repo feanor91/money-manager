@@ -13,13 +13,20 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('fr_FR');
 
-  final dbProvider = DatabaseProvider();
-  await dbProvider.loadPalette();
-  await dbProvider.loadThemeMode();
-  unawaited(dbProvider.restoreLastDatabase());
-
   final pinLockProvider = PinLockProvider();
-  await pinLockProvider.load();
+  final dbProvider = DatabaseProvider(
+    onDatabaseContextChanged: ({
+      required databaseReady,
+      required companionPrefs,
+      companionUnreachable = false,
+    }) =>
+        pinLockProvider.attachDatabase(
+      databaseReady: databaseReady,
+      companionPrefs: companionPrefs,
+      companionUnreachable: companionUnreachable,
+    ),
+  );
+  unawaited(dbProvider.restoreLastDatabase());
 
   runApp(
     MultiProvider(

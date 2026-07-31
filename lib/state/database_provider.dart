@@ -6,19 +6,22 @@ import 'package:flutter/material.dart' show ThemeMode;
 
 import '../data/blank_database.dart';
 import '../data/db_backup.dart';
+import '../data/db_companion_settings.dart';
 import '../data/mmex_database.dart';
 import '../data/mmex_repository.dart';
 import '../data/web_file_link.dart';
 import '../theme/app_theme.dart';
 import 'app_preferences.dart';
 
+/// Device/browser-local - deliberately the only thing left in
+/// AppPreferences by this provider. Everything else (theme, forecast day,
+/// selected/hidden accounts, account order, PIN) lives in the current
+/// database's companion settings file instead (see db_companion_settings.dart
+/// and CLAUDE.md) - but *which* database to reopen, and (web) this browser's
+/// own file/folder permissions, are inherently per-device and have to be
+/// resolved before that companion file's location is even known, so they
+/// can't move there.
 const _prefsKeyLastPath = 'mmex_last_db_path';
-const _prefsKeySelectedAccount = 'mmex_selected_account_id';
-const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
-const _prefsKeyAccountOrder = 'mmex_account_order';
-const _prefsKeyForecastDay = 'mmex_forecast_day';
-const _prefsKeyPalette = 'mmex_app_palette';
-const _prefsKeyThemeMode = 'mmex_app_theme_mode';
 
 enum DbStatus {
   none,
@@ -44,6 +47,21 @@ enum DbStatus {
 /// goes through the live file, so the app can never show stale or
 /// already-deleted data.
 class DatabaseProvider extends ChangeNotifier {
+  /// Called whenever this provider's notion of "which database, with which
+  /// companion settings" changes - see [_applyCompanionSettings]. Wired in
+  /// main.dart to PinLockProvider.attachDatabase, so the PIN gate always
+  /// reflects whichever database is actually open right now rather than a
+  /// stale one.
+  final void Function({
+    required bool databaseReady,
+    required AppPreferences? companionPrefs,
+    bool companionUnreachable,
+  }) onDatabaseContextChanged;
+
+  DatabaseProvider({required this.onDatabaseContextChanged}) {
+    AppTheme.applyPalette(palette);
+  }
+
   MmexDatabase? _db;
   MmexRepository? _repository;
   WebFileLink? _webFileLink;
@@ -61,17 +79,51 @@ class DatabaseProvider extends ChangeNotifier {
   /// copie" may or may not be necessary.
   bool get isDirectlyPersisted => !kIsWeb || _webFileLink != null;
 
-  /// Account currently "in focus" on the dashboard. Persisted so it
-  /// survives app restarts.
-  int? selectedAccountId;
-  bool _selectedAccountLoaded = false;
+  /// The current database's companion settings (see
+  /// db_companion_settings.dart) - null if none is open, or (web) if its
+  /// companion file isn't reachable yet (see [companionNeedsAccess]).
+  AppPreferences? companionSettings;
 
-  /// Accounts hidden from the dashboard and account-selection lists. This
-  /// is a local app preference (not written into the .mmb file itself), so
-  /// it only applies on this device/browser. Only the Accounts screen can
-  /// toggle it back.
+  /// Web only: true when a database is open through a File System Access
+  /// handle but its companion settings file isn't reachable yet (folder
+  /// permission never granted or since revoked) - the UI should offer
+  /// [retryCompanionAccess] rather than silently proceeding as if nothing
+  /// were configured.
+  bool companionNeedsAccess = false;
+
+  /// Web only: re-requests the companion folder permission (see
+  /// WebFileLink.ensureDirectoryPermission) and retries loading the
+  /// companion settings - must be called directly from a user gesture.
+  Future<void> retryCompanionAccess() async {
+    final link = _webFileLink;
+    if (link == null) return;
+    final granted = await link.ensureDirectoryPermission();
+    if (!granted) return;
+    final prefs = await DatabaseCompanionSettings.forWebLink(link);
+    await _applyCompanionSettings(prefs, webLinkAvailableButUnreachable: prefs == null);
+    notifyListeners();
+  }
+
+  /// Account currently "in focus" on the dashboard. Persisted (in the
+  /// current database's companion settings) so it's remembered next time
+  /// this same database is opened.
+  int? selectedAccountId;
+
+  Future<void> selectAccount(int? accountId) async {
+    selectedAccountId = accountId;
+    notifyListeners();
+    final prefs = companionSettings;
+    if (prefs == null) return;
+    if (accountId == null) {
+      await prefs.remove(_prefsKeySelectedAccount);
+    } else {
+      await prefs.setInt(_prefsKeySelectedAccount, accountId);
+    }
+  }
+
+  /// Accounts hidden from the dashboard and account-selection lists. Only
+  /// the Accounts screen can toggle it back.
   Set<int> hiddenAccountIds = {};
-  bool _hiddenAccountsLoaded = false;
 
   bool isAccountHidden(int accountId) => hiddenAccountIds.contains(accountId);
 
@@ -82,17 +134,17 @@ class DatabaseProvider extends ChangeNotifier {
       hiddenAccountIds.remove(accountId);
     }
     notifyListeners();
-    final prefs = await AppPreferences.getInstance();
+    final prefs = companionSettings;
+    if (prefs == null) return;
     await prefs.setStringList(_prefsKeyHiddenAccounts,
         hiddenAccountIds.map((id) => id.toString()).toList());
   }
 
   /// Custom account display order (list of account ids), used by the
-  /// dashboard's drag-and-drop carousel. A local app preference, like
-  /// [hiddenAccountIds]. Accounts not present in this list (new ones, or
-  /// before it's ever been set) fall back to their natural order.
+  /// dashboard's drag-and-drop carousel. Accounts not present in this list
+  /// (new ones, or before it's ever been set) fall back to their natural
+  /// order.
   List<int> accountOrder = [];
-  bool _accountOrderLoaded = false;
 
   /// Sorts [accounts] according to the saved drag-and-drop order, appending
   /// any account not yet present in that order (e.g. newly created) at the
@@ -113,70 +165,53 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> setAccountOrder(List<int> orderedIds) async {
     accountOrder = orderedIds;
     notifyListeners();
-    final prefs = await AppPreferences.getInstance();
+    final prefs = companionSettings;
+    if (prefs == null) return;
     await prefs.setStringList(
         _prefsKeyAccountOrder, orderedIds.map((id) => id.toString()).toList());
   }
 
   /// Day of month for the extra "solde previsionnel" figure shown on each
   /// account card (e.g. 24, the day before a salary lands on the 25th) -
-  /// configurable since that date is different for everyone. A local app
-  /// preference, like [hiddenAccountIds].
+  /// configurable since that date is different for everyone.
   int forecastDay = 24;
-  bool _forecastDayLoaded = false;
 
   Future<void> setForecastDay(int day) async {
     forecastDay = day.clamp(1, 31);
     notifyListeners();
-    final prefs = await AppPreferences.getInstance();
+    final prefs = companionSettings;
+    if (prefs == null) return;
     await prefs.setInt(_prefsKeyForecastDay, forecastDay);
   }
 
-  /// Accent-color palette (see [AppTheme.applyPalette]). A pure device/UI
-  /// preference, unrelated to any specific database, so - unlike the
-  /// account-scoped settings above - it's loaded eagerly via [loadPalette]
-  /// at app startup (see main.dart) rather than lazily on first database
-  /// open, so the right colours are already in place for the very first
-  /// frame (PIN screen, database picker, etc.).
+  /// Accent-color palette (see [AppTheme.applyPalette]). Starts at the
+  /// default until a database's companion settings load (there is, by
+  /// construction, nowhere else to read a customised palette from before
+  /// then) - so the very first frame (database picker, etc.) may briefly
+  /// show the default palette even if a database opened moments later
+  /// customises it.
   AppPalette palette = AppPalette.indigo;
-
-  Future<void> loadPalette() async {
-    final prefs = await AppPreferences.getInstance();
-    final saved = prefs.getString(_prefsKeyPalette);
-    palette = AppPalette.values.firstWhere(
-      (p) => p.name == saved,
-      orElse: () => AppPalette.indigo,
-    );
-    AppTheme.applyPalette(palette);
-  }
 
   Future<void> setPalette(AppPalette newPalette) async {
     palette = newPalette;
     AppTheme.applyPalette(newPalette);
     notifyListeners();
-    final prefs = await AppPreferences.getInstance();
+    final prefs = companionSettings;
+    if (prefs == null) return;
     await prefs.setString(_prefsKeyPalette, newPalette.name);
   }
 
   /// Light/dark override - defaults to following the OS/browser setting,
   /// but can be forced either way (e.g. picking "Sombre" from the theme
   /// list even while the system itself is in light mode). Same
-  /// eager-load-at-startup rationale as [palette].
+  /// loaded-with-the-database rationale as [palette].
   ThemeMode themeMode = ThemeMode.system;
-
-  Future<void> loadThemeMode() async {
-    final prefs = await AppPreferences.getInstance();
-    final saved = prefs.getString(_prefsKeyThemeMode);
-    themeMode = ThemeMode.values.firstWhere(
-      (m) => m.name == saved,
-      orElse: () => ThemeMode.system,
-    );
-  }
 
   Future<void> setThemeMode(ThemeMode mode) async {
     themeMode = mode;
     notifyListeners();
-    final prefs = await AppPreferences.getInstance();
+    final prefs = companionSettings;
+    if (prefs == null) return;
     await prefs.setString(_prefsKeyThemeMode, mode.name);
   }
 
@@ -213,10 +248,7 @@ class DatabaseProvider extends ChangeNotifier {
             final bytes = await link.readBytes();
             final db =
                 await MmexDatabase.openFromBytes(bytes, label: link.name);
-            await _swapDatabase(db);
-            _webFileLink = link;
-            _backupNow(db);
-            status = DbStatus.ready;
+            await _finishOpeningWeb(db, link);
           } catch (e) {
             status = DbStatus.error;
             errorMessage = e.toString();
@@ -245,10 +277,7 @@ class DatabaseProvider extends ChangeNotifier {
     try {
       final bytes = await link.readBytes();
       final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
-      await _swapDatabase(db);
-      _webFileLink = link;
-      _backupNow(db);
-      status = DbStatus.ready;
+      await _finishOpeningWeb(db, link);
     } catch (e) {
       status = DbStatus.error;
       errorMessage = e.toString();
@@ -262,13 +291,11 @@ class DatabaseProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final db = await MmexDatabase.openFromPath(path);
-      await _swapDatabase(db);
-      _backupNow(db);
       if (persist) {
         final prefs = await AppPreferences.getInstance();
         await prefs.setString(_prefsKeyLastPath, path);
       }
-      status = DbStatus.ready;
+      await _finishOpeningNative(db);
     } catch (e) {
       status = DbStatus.error;
       errorMessage = notFoundMessage != null
@@ -285,6 +312,12 @@ class DatabaseProvider extends ChangeNotifier {
       final db = await MmexDatabase.openFromBytes(bytes, label: label);
       await _swapDatabase(db);
       _backupNow(db);
+      // No WebFileLink in this fallback path at all (plain <input type=file>
+      // byte read, used when the browser lacks File System Access support,
+      // or on native when this is called some other way) - there's no
+      // mechanism to reach a companion file, so treat it like "no companion
+      // settings possible" rather than a recoverable "needs access" state.
+      await _applyCompanionSettings(null, webLinkAvailableButUnreachable: false);
       status = DbStatus.ready;
     } catch (e) {
       status = DbStatus.error;
@@ -306,10 +339,7 @@ class DatabaseProvider extends ChangeNotifier {
       try {
         final bytes = await link.readBytes();
         final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
-        await _swapDatabase(db);
-        _webFileLink = link;
-        _backupNow(db);
-        status = DbStatus.ready;
+        await _finishOpeningWeb(db, link);
       } catch (e) {
         status = DbStatus.error;
         errorMessage = e.toString();
@@ -367,11 +397,9 @@ class DatabaseProvider extends ChangeNotifier {
     try {
       final db = await MmexDatabase.openFromPath(path);
       await initializeBlankSchema(db);
-      await _swapDatabase(db);
-      _backupNow(db);
       final prefs = await AppPreferences.getInstance();
       await prefs.setString(_prefsKeyLastPath, path);
-      status = DbStatus.ready;
+      await _finishOpeningNative(db);
     } catch (e) {
       status = DbStatus.error;
       errorMessage = e.toString();
@@ -437,17 +465,6 @@ class DatabaseProvider extends ChangeNotifier {
   /// web so changes can be synced back into the real .mmb file by hand.
   List<int>? exportCurrentBytes() => _db?.exportBytes();
 
-  Future<void> selectAccount(int? accountId) async {
-    selectedAccountId = accountId;
-    notifyListeners();
-    final prefs = await AppPreferences.getInstance();
-    if (accountId == null) {
-      await prefs.remove(_prefsKeySelectedAccount);
-    } else {
-      await prefs.setInt(_prefsKeySelectedAccount, accountId);
-    }
-  }
-
   /// A dated snapshot of whatever was just opened, before any edits this
   /// session could touch it - a safety net independent of the user's own
   /// backup habits. Must be called after [_webFileLink] reflects the link
@@ -473,33 +490,78 @@ class DatabaseProvider extends ChangeNotifier {
     _repository = MmexRepository(db)..ensureAppSchema();
     currentLabel = db.label;
     saveError = null;
+  }
 
-    if (!_selectedAccountLoaded) {
-      final prefs = await AppPreferences.getInstance();
+  /// Native/desktop: finishes opening [db] - companion settings come from a
+  /// sibling file next to it, always reachable (no permission to lack).
+  Future<void> _finishOpeningNative(MmexDatabase db) async {
+    await _swapDatabase(db);
+    _backupNow(db);
+    final prefs = await DatabaseCompanionSettings.forNativePath(db.label);
+    await _applyCompanionSettings(prefs);
+    status = DbStatus.ready;
+  }
+
+  /// Web: finishes opening [db] through [link] - companion settings come
+  /// from a file in whatever directory [link] has permission to (may be
+  /// none yet, see [companionNeedsAccess]).
+  Future<void> _finishOpeningWeb(MmexDatabase db, WebFileLink link) async {
+    await _swapDatabase(db);
+    _webFileLink = link;
+    _backupNow(db);
+    final prefs = await DatabaseCompanionSettings.forWebLink(link);
+    await _applyCompanionSettings(prefs, webLinkAvailableButUnreachable: prefs == null);
+    status = DbStatus.ready;
+  }
+
+  /// Central point where every "a database (with these companion settings)
+  /// is now open" transition happens - (re)loads every preference this
+  /// database's companion file holds (or resets to defaults if [prefs] is
+  /// null), and tells [onDatabaseContextChanged] so PinLockProvider's PIN
+  /// gate reflects this exact database rather than whatever the previously
+  /// open one had.
+  Future<void> _applyCompanionSettings(AppPreferences? prefs,
+      {bool webLinkAvailableButUnreachable = false}) async {
+    companionSettings = prefs;
+    companionNeedsAccess = webLinkAvailableButUnreachable && prefs == null;
+
+    if (prefs != null) {
       selectedAccountId = prefs.getInt(_prefsKeySelectedAccount);
-      _selectedAccountLoaded = true;
-    }
-    if (!_hiddenAccountsLoaded) {
-      final prefs = await AppPreferences.getInstance();
       hiddenAccountIds = (prefs.getStringList(_prefsKeyHiddenAccounts) ?? [])
           .map((s) => int.tryParse(s))
           .whereType<int>()
           .toSet();
-      _hiddenAccountsLoaded = true;
-    }
-    if (!_accountOrderLoaded) {
-      final prefs = await AppPreferences.getInstance();
       accountOrder = (prefs.getStringList(_prefsKeyAccountOrder) ?? [])
           .map((s) => int.tryParse(s))
           .whereType<int>()
           .toList();
-      _accountOrderLoaded = true;
-    }
-    if (!_forecastDayLoaded) {
-      final prefs = await AppPreferences.getInstance();
       forecastDay = prefs.getInt(_prefsKeyForecastDay) ?? 24;
-      _forecastDayLoaded = true;
+      palette = AppPalette.values.firstWhere(
+        (p) => p.name == prefs.getString(_prefsKeyPalette),
+        orElse: () => AppPalette.indigo,
+      );
+      themeMode = ThemeMode.values.firstWhere(
+        (m) => m.name == prefs.getString(_prefsKeyThemeMode),
+        orElse: () => ThemeMode.system,
+      );
+    } else {
+      // No companion settings reachable (yet, or ever, for this database) -
+      // reset to defaults rather than keep showing whatever the previously
+      // open database had configured.
+      selectedAccountId = null;
+      hiddenAccountIds = {};
+      accountOrder = [];
+      forecastDay = 24;
+      palette = AppPalette.indigo;
+      themeMode = ThemeMode.system;
     }
+    AppTheme.applyPalette(palette);
+
+    onDatabaseContextChanged(
+      databaseReady: true,
+      companionPrefs: prefs,
+      companionUnreachable: companionNeedsAccess,
+    );
   }
 
   @override
@@ -509,3 +571,10 @@ class DatabaseProvider extends ChangeNotifier {
     super.dispose();
   }
 }
+
+const _prefsKeySelectedAccount = 'mmex_selected_account_id';
+const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
+const _prefsKeyAccountOrder = 'mmex_account_order';
+const _prefsKeyForecastDay = 'mmex_forecast_day';
+const _prefsKeyPalette = 'mmex_app_palette';
+const _prefsKeyThemeMode = 'mmex_app_theme_mode';

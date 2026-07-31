@@ -182,7 +182,7 @@ Future<web.FileSystemDirectoryHandle?> _restoreUsableDirHandle() async {
 
 class _WebFileLinkImpl implements WebFileLink {
   final web.FileSystemFileHandle _handle;
-  final web.FileSystemDirectoryHandle? _dirHandle;
+  web.FileSystemDirectoryHandle? _dirHandle;
 
   _WebFileLinkImpl(this._handle, this._dirHandle);
 
@@ -221,6 +221,71 @@ class _WebFileLinkImpl implements WebFileLink {
     } catch (_) {
       // Folder access revoked, wrong folder picked, quota, etc. - a failed
       // backup must never block the app from working.
+    }
+  }
+
+  @override
+  bool get hasDirectoryHandle => _dirHandle != null;
+
+  @override
+  Future<bool> ensureDirectoryPermission() async {
+    final existing = _dirHandle;
+    if (existing != null) {
+      final permission =
+          await existing.queryPermission(_readWriteDescriptor).toDart;
+      if (permission.toDart == 'granted') return true;
+      try {
+        final requested =
+            await existing.requestPermission(_readWriteDescriptor).toDart;
+        if (requested.toDart == 'granted') return true;
+      } catch (_) {
+        // Falls through to asking for a folder afresh below.
+      }
+    }
+    // No handle remembered at all, or it's been permanently denied - ask
+    // for one fresh. Must be called from a user gesture (the caller's
+    // responsibility, same as pickAndRemember).
+    try {
+      final dir = await _showDirectoryPicker().toDart;
+      _dirHandle = dir;
+      await _storeDirHandle(dir);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<List<int>?> readCompanionFile(String fileName) async {
+    final dir = _dirHandle;
+    if (dir == null) return null;
+    try {
+      final fileHandle = await dir
+          .getFileHandle(fileName, web.FileSystemGetFileOptions(create: false))
+          .toDart;
+      final file = await fileHandle.getFile().toDart;
+      final buffer = await file.arrayBuffer().toDart;
+      return buffer.toDart.asUint8List();
+    } catch (_) {
+      // Doesn't exist yet, permission lapsed, etc.
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> writeCompanionFile(String fileName, List<int> bytes) async {
+    final dir = _dirHandle;
+    if (dir == null) return false;
+    try {
+      final fileHandle = await dir
+          .getFileHandle(fileName, web.FileSystemGetFileOptions(create: true))
+          .toDart;
+      final stream = await fileHandle.createWritable().toDart;
+      await stream.write(Uint8List.fromList(bytes).toJS).toDart;
+      await stream.close().toDart;
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 }

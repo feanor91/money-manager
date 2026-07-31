@@ -67,4 +67,32 @@ abstract class WebFileLink {
   /// an explicit grant, so this fails silently rather than nagging the user
   /// every single time the app opens.
   Future<void> writeBackup(List<int> bytes, String fileName);
+
+  /// True if a directory handle was ever remembered for this link - not
+  /// necessarily still permitted (see [ensureDirectoryPermission]), just
+  /// whether there's something to ask permission *for* without showing the
+  /// folder picker again.
+  bool get hasDirectoryHandle;
+
+  /// Confirms (re-requesting if needed) or, if no directory was ever
+  /// remembered, freshly asks for permission to a folder alongside the
+  /// database - used by settings that must live next to the .mmb file (see
+  /// DatabaseCompanionSettings) rather than in this browser's own local
+  /// storage. Must be called directly from a user gesture (e.g. a button's
+  /// onPressed), same restriction as [pickAndRemember]. Returns false if
+  /// the user declines.
+  Future<bool> ensureDirectoryPermission();
+
+  /// Reads a file directly inside the directory granted via
+  /// [ensureDirectoryPermission]/[pickAndRemember] (not the `backup`
+  /// subfolder [writeBackup] uses) - null if that access isn't available or
+  /// the file doesn't exist yet.
+  Future<List<int>?> readCompanionFile(String fileName);
+
+  /// Writes a file directly inside that same directory, creating it if
+  /// needed. Returns false if directory access isn't available - callers
+  /// should offer [ensureDirectoryPermission] rather than fail silently,
+  /// since (unlike a best-effort backup) this holds settings the user
+  /// deliberately asked to configure.
+  Future<bool> writeCompanionFile(String fileName, List<int> bytes);
 }

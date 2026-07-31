@@ -1,9 +1,9 @@
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:encrypt/encrypt.dart' as enc;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../data/encrypted_settings_codec.dart';
 
 /// Thin facade over local key-value storage, so the rest of the app
 /// doesn't need to know or care whether it's actually talking to the
@@ -21,7 +21,7 @@ abstract class AppPreferences {
     if (existing != null) return existing;
     final portablePath = await _portableStoreFilePath();
     final instance = portablePath != null
-        ? await _EncryptedFilePreferences.load(portablePath)
+        ? await EncryptedFilePreferences.load(portablePath)
         : _SharedPreferencesAdapter(await SharedPreferences.getInstance());
     _instance = instance;
     return instance;
@@ -34,7 +34,7 @@ abstract class AppPreferences {
   /// be running the test.
   @visibleForTesting
   static Future<AppPreferences> forTestingAtPath(String path) =>
-      _EncryptedFilePreferences.load(path);
+      EncryptedFilePreferences.load(path);
 
   /// A "portable" build is one distributed as a folder that runs from
   /// anywhere (a USB stick, a different PC) without installing - detected
@@ -87,29 +87,31 @@ class _SharedPreferencesAdapter implements AppPreferences {
 }
 
 /// Stores every key in a single JSON object, AES-256-CBC encrypted, in a
-/// file next to the portable executable. "Encrypted" here means
-/// resistant to casually being opened in a text editor off the USB stick,
-/// not real security: the key is embedded in the app itself (same
-/// security posture as [PinLockProvider]'s PIN hash - a deterrent, not
-/// cryptographic protection of data at rest, since anyone with the app's
-/// source/binary can derive the key too). That's an acceptable tradeoff
-/// here since the file only ever holds app preferences (last file path,
-/// PIN hash/salt, UI settings) - never the actual financial data, which
-/// stays in the plain .mmb SQLite file as MMEX itself always has it.
-class _EncryptedFilePreferences implements AppPreferences {
-  static final _key = enc.Key.fromUtf8('Mn8rF2kLpX9qT4wZaC7uJ6yH1sE3bV0d');
-
+/// file at an arbitrary given path - used both for the portable-desktop
+/// case above (next to the executable) and for [DatabaseCompanionSettings]
+/// (next to the currently open .mmb file, see lib/data/
+/// db_companion_settings_io.dart), which is why this is public rather than
+/// private to this file. "Encrypted" here means resistant to casually being
+/// opened in a text editor, not real security: the key is embedded in the
+/// app itself (same security posture as [PinLockProvider]'s PIN hash - a
+/// deterrent, not cryptographic protection of data at rest, since anyone
+/// with the app's source/binary can derive the key too). That's an
+/// acceptable tradeoff here since files using this class only ever hold app
+/// preferences/settings (PIN hash/salt, UI settings) - never the actual
+/// financial data, which stays in the plain .mmb SQLite file as MMEX itself
+/// always has it.
+class EncryptedFilePreferences implements AppPreferences {
   final File _file;
   final Map<String, Object?> _data;
 
-  _EncryptedFilePreferences._(this._file, this._data);
+  EncryptedFilePreferences._(this._file, this._data);
 
-  static Future<_EncryptedFilePreferences> load(String path) async {
+  static Future<EncryptedFilePreferences> load(String path) async {
     final file = File(path);
     var data = <String, Object?>{};
     if (await file.exists()) {
       try {
-        data = _decrypt(await file.readAsBytes());
+        data = decryptSettingsBytes(await file.readAsBytes());
       } catch (_) {
         // Corrupted or foreign file - start fresh rather than crash the
         // whole app over a preferences file, which is recoverable/
@@ -117,22 +119,11 @@ class _EncryptedFilePreferences implements AppPreferences {
         data = {};
       }
     }
-    return _EncryptedFilePreferences._(file, data);
-  }
-
-  static Map<String, Object?> _decrypt(Uint8List raw) {
-    if (raw.length <= 16) return {};
-    final iv = enc.IV(raw.sublist(0, 16));
-    final encrypter = enc.Encrypter(enc.AES(_key, mode: enc.AESMode.cbc));
-    final plain = encrypter.decrypt(enc.Encrypted(raw.sublist(16)), iv: iv);
-    return (jsonDecode(plain) as Map).cast<String, Object?>();
+    return EncryptedFilePreferences._(file, data);
   }
 
   Future<bool> _persist() async {
-    final iv = enc.IV.fromSecureRandom(16);
-    final encrypter = enc.Encrypter(enc.AES(_key, mode: enc.AESMode.cbc));
-    final cipher = encrypter.encrypt(jsonEncode(_data), iv: iv);
-    await _file.writeAsBytes([...iv.bytes, ...cipher.bytes], flush: true);
+    await _file.writeAsBytes(encryptSettingsBytes(_data), flush: true);
     return true;
   }
 

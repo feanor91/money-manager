@@ -36,25 +36,46 @@ class MoneyManagerApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      // Kept only so a stale bookmarked/history "/settings" URL from before
+      // this fix still resolves to something rather than a blank/error
+      // route - normal in-app navigation no longer uses it (see
+      // dashboard_screen.dart, a plain MaterialPageRoute push like every
+      // other screen). Never reachable unprotected either way: see
+      // [builder] below.
       routes: {
         '/settings': (_) => const SettingsScreen(),
       },
-      home: const _RootGate(),
+      home: const HomeShell(),
+      // Wraps *every* route this MaterialApp ever builds - home, "/settings",
+      // or any future one - not just "/". This is deliberate: on web, a
+      // browser refresh while the address bar shows a named route (e.g.
+      // "/settings") rebuilds the app starting directly at that route,
+      // bypassing `home` entirely. A gate that only lived at `home` (as a
+      // wrapper `_RootGate` widget once did here) would only ever run for
+      // the "/" route, silently skipping the PIN/database check on any
+      // other URL - confirmed 2026-07-31: refreshing on Paramètres reopened
+      // it without asking for the PIN, while refreshing elsewhere correctly
+      // did. Putting the gate in `builder` instead makes it structurally
+      // impossible for any current or future route to bypass it.
+      builder: (context, child) => _PinGate(child: child),
     );
   }
 }
 
 /// Shows the PIN screen while locked, the database picker until a database
-/// is loaded, then the main app - in that order, so the PIN gate is checked
-/// before anything about the database (or its content) is ever shown.
-class _RootGate extends StatefulWidget {
-  const _RootGate();
+/// is loaded, then whatever route was actually requested - in that order,
+/// so the PIN gate is checked before anything about the database (or its
+/// content) is ever shown, regardless of which route triggered this build.
+class _PinGate extends StatefulWidget {
+  final Widget? child;
+
+  const _PinGate({required this.child});
 
   @override
-  State<_RootGate> createState() => _RootGateState();
+  State<_PinGate> createState() => _PinGateState();
 }
 
-class _RootGateState extends State<_RootGate> with WidgetsBindingObserver {
+class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
@@ -84,14 +105,23 @@ class _RootGateState extends State<_RootGate> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    final pinLock = context.watch<PinLockProvider>();
-    if (!pinLock.isUnlocked) {
-      return const PinUnlockScreen();
-    }
+    // Database first: the PIN (and every other preference) now lives in
+    // that database's own companion settings file, so there is nothing to
+    // check the PIN gate against until a database is open - see
+    // PinLockProvider.attachDatabase and CLAUDE.md.
     final dbProvider = context.watch<DatabaseProvider>();
-    if (dbProvider.isReady) {
-      return const HomeShell();
+    if (!dbProvider.isReady) {
+      return const DbPickerScreen();
     }
-    return const DbPickerScreen();
+    final pinLock = context.watch<PinLockProvider>();
+    switch (pinLock.status) {
+      case PinGateStatus.needsCompanionAccess:
+        return const PinCompanionAccessScreen();
+      case PinGateStatus.locked:
+        return const PinUnlockScreen();
+      case PinGateStatus.none:
+      case PinGateStatus.unlocked:
+        return widget.child!;
+    }
   }
 }

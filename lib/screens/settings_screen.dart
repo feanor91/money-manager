@@ -24,30 +24,38 @@ class SettingsScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.lock_outline),
-              title: const Text('Code PIN'),
-              subtitle: Text(pinLock.hasPin
-                  ? 'Activé - demandé à chaque ouverture de l\'appli'
-                  : 'Désactivé - aucune protection à l\'ouverture'),
-              trailing: Wrap(
-                spacing: 4,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const PinSetupScreen())),
-                    child: Text(pinLock.hasPin ? 'Modifier' : 'Définir'),
-                  ),
-                  if (pinLock.hasPin)
-                    TextButton(
-                      onPressed: () =>
-                          context.read<PinLockProvider>().removePin(),
-                      child: const Text('Supprimer'),
+            child: dbProvider.companionSettings == null
+                ? const ListTile(
+                    leading: Icon(Icons.lock_outline),
+                    title: Text('Code PIN'),
+                    subtitle: Text(
+                        'Indisponible - ce navigateur ne permet pas d\'enregistrer '
+                        'de réglages à côté de cette base.'),
+                  )
+                : ListTile(
+                    leading: const Icon(Icons.lock_outline),
+                    title: const Text('Code PIN'),
+                    subtitle: Text(pinLock.hasPin
+                        ? 'Activé - demandé à chaque ouverture de l\'appli'
+                        : 'Désactivé - aucune protection à l\'ouverture'),
+                    trailing: Wrap(
+                      spacing: 4,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const PinSetupScreen())),
+                          child: Text(pinLock.hasPin ? 'Modifier' : 'Définir'),
+                        ),
+                        if (pinLock.hasPin)
+                          TextButton(
+                            onPressed: () =>
+                                context.read<PinLockProvider>().removePin(),
+                            child: const Text('Supprimer'),
+                          ),
+                      ],
                     ),
-                ],
-              ),
-            ),
+                  ),
           ),
           const SizedBox(height: 12),
           Card(
