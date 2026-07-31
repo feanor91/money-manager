@@ -361,21 +361,91 @@ class MmexRepository {
     return rows.map(MoneyTransaction.fromRow).toList();
   }
 
-  /// Every transaction touching [accountId], each paired with the running
-  /// account balance immediately after it - the same "Solde" column MMEX's
-  /// own ledger view shows. Computed chronologically from the account's
-  /// initial balance, then returned newest-first for display. [limit]
-  /// only caps how many rows are returned, not how many are used to work
-  /// out the balance (the full history is always walked).
-  List<TransactionWithBalance> getTransactionsWithRunningBalance(int accountId, {int limit = 300}) {
+  /// Earliest/latest transaction year touching [accountId] - a single cheap
+  /// SQL `MIN`/`MAX`, not a full history walk. Used to bound the ledger's
+  /// year picker to years that actually have something in them, rather than
+  /// a hardcoded range that's either too short (an older account) or full
+  /// of empty years (a newer one). Null if the account has no transactions
+  /// at all yet.
+  ({int min, int max})? transactionYearRange(int accountId) {
+    final row = db.query(
+      'SELECT MIN(TRANSDATE) AS minDate, MAX(TRANSDATE) AS maxDate FROM CHECKINGACCOUNT_V1 '
+      "WHERE (ACCOUNTID = ? OR TOACCOUNTID = ?) AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      [accountId, accountId],
+    ).first;
+    final minYear = DateTime.tryParse(row['minDate'] as String? ?? '')?.year;
+    final maxYear = DateTime.tryParse(row['maxDate'] as String? ?? '')?.year;
+    if (minYear == null || maxYear == null) return null;
+    return (min: minYear, max: maxYear);
+  }
+
+  /// Every transaction touching [accountId] within [from, to) (either or
+  /// both may be omitted for "since the beginning"/"through the latest"),
+  /// each paired with the running account balance immediately after it -
+  /// the same "Solde" column MMEX's own ledger view shows. [to] is an
+  /// *exclusive* upper bound (the first day NOT included) - for "the whole
+  /// month of March" pass `from: DateTime(y, 3)`, `to: DateTime(y, 4)`.
+  ///
+  /// The balance just before [from] is computed with a single SQL `SUM`
+  /// instead of walking every prior transaction into a Dart object one by
+  /// one - confirmed 2026-07-31 that the latter (this method's previous
+  /// design: always walk *every* transaction ever recorded for the account,
+  /// regardless of how many were actually going to be shown) could freeze
+  /// the tab once an account had years of history. Callers (see
+  /// transactions_screen.dart) are expected to pass a bounded window - e.g.
+  /// one month - rather than relying on this method to stay cheap with no
+  /// bounds at all; passing neither [from] nor [to] still works but is
+  /// exactly as expensive as before.
+  List<TransactionWithBalance> getTransactionsWithRunningBalance(
+    int accountId, {
+    DateTime? from,
+    DateTime? to,
+  }) {
     final accountRows = db.query('SELECT INITIALBAL FROM ACCOUNTLIST_V1 WHERE ACCOUNTID = ?', [accountId]);
     var running = (accountRows.isEmpty ? 0 : accountRows.first['INITIALBAL'] as num?)?.toDouble() ?? 0;
 
+    if (from != null) {
+      // Mirrors MoneyTransaction.signedAmountFor's sign rules exactly (see
+      // its doc comment) - kept in sync with that if those rules ever
+      // change. Voided transactions never affect the balance, same as MMEX.
+      final priorSumRow = db.query(
+        '''
+        SELECT SUM(
+          CASE
+            WHEN UPPER(TRIM(STATUS)) = 'V' THEN 0
+            WHEN TRANSCODE = 'Transfer' AND TOACCOUNTID = ? THEN TOTRANSAMOUNT
+            WHEN TRANSCODE = 'Transfer' THEN -TRANSAMOUNT
+            WHEN TRANSCODE = 'Deposit' THEN TRANSAMOUNT
+            ELSE -TRANSAMOUNT
+          END
+        ) AS priorSum
+        FROM CHECKINGACCOUNT_V1
+        WHERE (ACCOUNTID = ? OR TOACCOUNTID = ?) AND (DELETEDTIME IS NULL OR DELETEDTIME = '')
+          AND TRANSDATE < ?
+        ''',
+        [accountId, accountId, accountId, _isoDate(from)],
+      );
+      running += (priorSumRow.first['priorSum'] as num?)?.toDouble() ?? 0;
+    }
+
+    final where = <String>[
+      '(ACCOUNTID = ? OR TOACCOUNTID = ?)',
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[accountId, accountId];
+    if (from != null) {
+      where.add('TRANSDATE >= ?');
+      params.add(_isoDate(from));
+    }
+    if (to != null) {
+      where.add('TRANSDATE < ?');
+      params.add(_isoDate(to));
+    }
+
     final rows = db.query(
-      'SELECT * FROM CHECKINGACCOUNT_V1 WHERE (ACCOUNTID = ? OR TOACCOUNTID = ?) '
-      "AND (DELETEDTIME IS NULL OR DELETEDTIME = '') "
+      'SELECT * FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')} '
       'ORDER BY TRANSDATE ASC, TRANSID ASC',
-      [accountId, accountId],
+      params,
     );
     final withBalance = <TransactionWithBalance>[];
     for (final row in rows) {
@@ -386,7 +456,7 @@ class MmexRepository {
       if (!tx.isVoid) running += tx.signedAmountFor(accountId);
       withBalance.add(TransactionWithBalance(tx, running));
     }
-    return withBalance.reversed.take(limit).toList();
+    return withBalance.reversed.toList();
   }
 
   int insertTransaction({
