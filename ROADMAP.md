@@ -5,6 +5,9 @@ courses, pas des engagements.
 
 ## Demandées
 
+- Ajouter bouton ajout/suppression de categorie dans le budget prévisionnel
+- Ajout "1 mois" dans le budget prévisionnel 
+
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
