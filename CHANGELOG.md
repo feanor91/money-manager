@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.25] - 2026-07-31
+
+- docs(roadmap): list outstanding requests before the changelog, log this session's work
+- fix(transactions): stop capping the ledger at ~300 rows, browse by month instead
+- fix(diagnostics): stop flagging normal transactions as duplicates or bad transfers
+- feat(security): lock the PIN after repeated failures, store settings next to the database
+
 ## [1.0.24] - 2026-07-30
 
 - fix(recurring): sort the recurring operations list chronologically
