@@ -39,3 +39,36 @@ class BudgetEnvelope {
     );
   }
 }
+
+/// A named, saveable "what if" budget - see APP_BUDGET_SCENARIOS. Its
+/// per-category simulated amounts live separately (APP_BUDGET_SCENARIO_
+/// AMOUNTS, see MmexRepository.getBudgetScenarioAmounts) since a scenario
+/// on its own is just a name, an account, and an averaging period.
+class BudgetScenario {
+  final int id;
+  final int accountId;
+  final String name;
+  final int periodMonths;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const BudgetScenario({
+    required this.id,
+    required this.accountId,
+    required this.name,
+    required this.periodMonths,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  factory BudgetScenario.fromRow(Map<String, Object?> row) {
+    return BudgetScenario(
+      id: row['SCENARIOID'] as int,
+      accountId: row['ACCOUNTID'] as int,
+      name: row['NAME'] as String? ?? '',
+      periodMonths: row['PERIOD_MONTHS'] as int? ?? 12,
+      createdAt: DateTime.tryParse(row['CREATED_AT'] as String? ?? '') ?? DateTime.now(),
+      updatedAt: DateTime.tryParse(row['UPDATED_AT'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
+}

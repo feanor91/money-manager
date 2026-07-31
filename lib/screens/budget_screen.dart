@@ -111,6 +111,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
   DateTime _cursor = DateTime.now();
   int? _selectedCategoryId;
 
+  /// Toggles the whole screen between the real, persistent envelope
+  /// budget (the default) and the "what if" scenario simulator - see
+  /// _buildSimulationBody. Never affects APP_BUDGET_ENVELOPES either way.
+  bool _simulationMode = false;
+  int? _selectedScenarioId;
+
   /// Opens a category's full detail (breakdown, sub-categories, recent
   /// transactions, and the inline name/amount editor) as a bottom sheet -
   /// a fixed spot near the bottom of the screen every time, unlike an
@@ -347,10 +353,20 @@ class _BudgetScreenState extends State<BudgetScreen> {
         title: Text(accountId == null ? 'Budget' : 'Budget - ${accountsById[accountId]!.name}'),
         actions: [
           IconButton(
-            tooltip: 'Suggérer des enveloppes automatiquement',
-            icon: const Icon(Icons.auto_awesome_outlined),
-            onPressed: openSuggestions,
+            tooltip: _simulationMode ? 'Retour au budget' : 'Simulation de budget',
+            icon: Icon(_simulationMode ? Icons.pie_chart_outline : Icons.calculate_outlined),
+            onPressed: () => setState(() {
+              _simulationMode = !_simulationMode;
+              _selectedScenarioId = null;
+            }),
           ),
+          if (!_simulationMode) ...[
+            IconButton(
+              tooltip: 'Suggérer des enveloppes automatiquement',
+              icon: const Icon(Icons.auto_awesome_outlined),
+              onPressed: openSuggestions,
+            ),
+          ],
           PopupMenuButton<int>(
             icon: const Icon(Icons.filter_list),
             onSelected: (id) => dbProvider.selectAccount(id),
@@ -359,44 +375,58 @@ class _BudgetScreenState extends State<BudgetScreen> {
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
           ),
-          PopupMenuButton<String>(
-            tooltip: 'Réinitialiser',
-            icon: const Icon(Icons.restart_alt),
-            onSelected: (action) {
-              if (action == 'reset' && accountId != null) {
-                _resetBudget(
-                  context: context,
-                  repo: repo,
-                  accountId: accountId,
-                  accountName: accountsById[accountId]!.name,
-                  onDone: () {
-                    setState(() => _selectedCategoryId = null);
-                    dbProvider.touch();
-                  },
-                );
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem(
-                value: 'reset',
-                enabled: accountId != null && envelopes.isNotEmpty,
-                child: Text(
-                  'Réinitialiser le budget de ce compte',
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+          if (!_simulationMode) ...[
+            PopupMenuButton<String>(
+              tooltip: 'Réinitialiser',
+              icon: const Icon(Icons.restart_alt),
+              onSelected: (action) {
+                if (action == 'reset' && accountId != null) {
+                  _resetBudget(
+                    context: context,
+                    repo: repo,
+                    accountId: accountId,
+                    accountName: accountsById[accountId]!.name,
+                    onDone: () {
+                      setState(() => _selectedCategoryId = null);
+                      dbProvider.touch();
+                    },
+                  );
+                }
+              },
+              itemBuilder: (context) => [
+                PopupMenuItem(
+                  value: 'reset',
+                  enabled: accountId != null && envelopes.isNotEmpty,
+                  child: Text(
+                    'Réinitialiser le budget de ce compte',
+                    style: TextStyle(color: Theme.of(context).colorScheme.error),
+                  ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: openAddDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('Enveloppe'),
-      ),
+      floatingActionButton: _simulationMode
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: openAddDialog,
+              icon: const Icon(Icons.add),
+              label: const Text('Enveloppe'),
+            ),
       body: ResponsiveBody(
         maxWidth: 800,
-        child: ListView(
+        child: _simulationMode
+            ? _buildSimulationBody(
+                context: context,
+                repo: repo,
+                dbProvider: dbProvider,
+                accountId: accountId,
+                categories: categories,
+                categoriesById: categoriesById,
+                currency: currency,
+              )
+            : ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
           children: [
             _PeriodNav(
@@ -474,6 +504,409 @@ class _BudgetScreenState extends State<BudgetScreen> {
       ),
     );
   }
+
+  /// "What if" budget simulator - a named, saveable scenario per account
+  /// (APP_BUDGET_SCENARIOS/APP_BUDGET_SCENARIO_AMOUNTS), never touching the
+  /// real envelope budget above. Every relevant category (income and
+  /// expense alike, unlike the envelope view's expense-only bars) gets its
+  /// own bar: the real historical average next to a simulated amount the
+  /// user can edit freely - a category with no saved override yet just
+  /// tracks the real average as its starting point.
+  Widget _buildSimulationBody({
+    required BuildContext context,
+    required MmexRepository repo,
+    required DatabaseProvider dbProvider,
+    required int? accountId,
+    required List<Category> categories,
+    required Map<int, Category> categoriesById,
+    required CurrencyFormat? currency,
+  }) {
+    if (accountId == null) {
+      return const Center(child: Text('Choisissez un compte.'));
+    }
+
+    final scenarios = repo.getBudgetScenarios(accountId);
+    if (_selectedScenarioId == null || !scenarios.any((s) => s.id == _selectedScenarioId)) {
+      _selectedScenarioId = scenarios.isEmpty ? null : scenarios.first.id;
+    }
+    BudgetScenario? scenario;
+    for (final s in scenarios) {
+      if (s.id == _selectedScenarioId) scenario = s;
+    }
+
+    Future<void> create() async {
+      final controller = TextEditingController();
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Nouveau scénario'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Nom du scénario'),
+            onSubmitted: (_) => Navigator.of(context).pop(true),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Créer')),
+          ],
+        ),
+      );
+      final name = controller.text.trim();
+      if (confirmed != true || name.isEmpty || !context.mounted) return;
+      final id = repo.createBudgetScenario(accountId: accountId, name: name);
+      dbProvider.touch();
+      setState(() => _selectedScenarioId = id);
+    }
+
+    Future<void> rename(BudgetScenario current) async {
+      final controller = TextEditingController(text: current.name);
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Renommer le scénario'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Nom du scénario'),
+            onSubmitted: (_) => Navigator.of(context).pop(true),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Renommer')),
+          ],
+        ),
+      );
+      final name = controller.text.trim();
+      if (confirmed != true || name.isEmpty || !context.mounted) return;
+      repo.renameBudgetScenario(current.id, name);
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    Future<void> remove(BudgetScenario current) async {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Supprimer ce scénario'),
+          content: Text('Supprimer "${current.name}" et tous ses montants simulés ? '
+              'Le vrai budget de ce compte n\'est pas concerné.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.error),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Supprimer'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      repo.deleteBudgetScenario(current.id);
+      dbProvider.touch();
+      setState(() => _selectedScenarioId = null);
+    }
+
+    final pickerRow = Row(
+      children: [
+        Expanded(
+          child: scenarios.isEmpty
+              ? const Text('Aucun scénario pour l\'instant.')
+              : DropdownButton<int>(
+                  isExpanded: true,
+                  value: scenario?.id,
+                  items: [
+                    for (final s in scenarios) DropdownMenuItem(value: s.id, child: Text(s.name)),
+                  ],
+                  onChanged: (id) => setState(() => _selectedScenarioId = id),
+                ),
+        ),
+        IconButton(icon: const Icon(Icons.add), tooltip: 'Nouveau scénario', onPressed: create),
+        if (scenario != null) ...[
+          IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'Renommer',
+              onPressed: () => rename(scenario!)),
+          IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Supprimer',
+              onPressed: () => remove(scenario!)),
+        ],
+      ],
+    );
+
+    if (scenario == null) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          pickerRow,
+          const SizedBox(height: 32),
+          const Center(child: Text('Créez un scénario pour commencer une simulation.')),
+        ],
+      );
+    }
+    final activeScenario = scenario;
+
+    void setPeriod(int months) {
+      repo.setBudgetScenarioPeriodMonths(activeScenario.id, months);
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    // Real average per relevant category over the scenario's own period,
+    // ending today (inclusive - "tomorrow" as the exclusive upper bound,
+    // so today's own transactions still count) - same "average the last N
+    // closed months" idea already used for envelope suggestions, just
+    // covering income too (see categoryNetTotalsForPeriod's own doc
+    // comment for why that's a different method than the envelope view's
+    // categorySpendForPeriod).
+    final today = DateTime.now();
+    final end = DateTime(today.year, today.month, today.day + 1);
+    final start = _addMonths(today, -activeScenario.periodMonths);
+    final rawNet = repo.categoryNetTotalsForPeriod(start, end, accountId: accountId);
+    final savedAmounts = repo.getBudgetScenarioAmounts(activeScenario.id);
+
+    final usedCategoryIds = repo.categoriesUsedByAccount(accountId);
+    final byParent = <int?, List<Category>>{};
+    for (final c in categories) {
+      byParent.putIfAbsent(c.parentId, () => []).add(c);
+    }
+    final topCategories = (byParent[null] ?? const <Category>[]).where((c) {
+      final children = byParent[c.id] ?? const <Category>[];
+      return usedCategoryIds.contains(c.id) || children.any((child) => usedCategoryIds.contains(child.id));
+    }).toList();
+
+    final relevantIds = <int>{};
+    for (final top in topCategories) {
+      relevantIds.add(top.id);
+      for (final c in byParent[top.id] ?? const <Category>[]) {
+        relevantIds.add(c.id);
+      }
+    }
+    final realMap = {
+      for (final id in relevantIds) id: (rawNet[id] ?? 0) / activeScenario.periodMonths,
+    };
+    final simulatedMap = {
+      for (final id in relevantIds) id: savedAmounts[id] ?? realMap[id]!,
+    };
+
+    final rows = [
+      for (final top in topCategories)
+        _ScenarioRow(
+          topCategory: top,
+          real: rolledUpSpend(top.id, realMap, categories),
+          simulated: rolledUpSpend(top.id, simulatedMap, categories),
+        ),
+    ];
+    bool isIncomeRow(_ScenarioRow r) => r.real != 0 ? r.real > 0 : r.simulated >= 0;
+    final incomeRows = rows.where(isIncomeRow).toList()
+      ..sort((a, b) => b.simulated.compareTo(a.simulated));
+    final expenseRows = rows.where((r) => !isIncomeRow(r)).toList()
+      ..sort((a, b) => a.simulated.compareTo(b.simulated));
+    final incomeMaxScale =
+        incomeRows.fold(0.0, (m, r) => [m, r.real, r.simulated].reduce((a, b) => a > b ? a : b));
+    final expenseMaxScale = expenseRows.fold(
+        0.0, (m, r) => [m, -r.real, -r.simulated].reduce((a, b) => a > b ? a : b));
+
+    final totalSimulatedIncome = incomeRows.fold(0.0, (s, r) => s + r.simulated);
+    final totalSimulatedExpense = expenseRows.fold(0.0, (s, r) => s - r.simulated);
+    final totalRealIncome = incomeRows.fold(0.0, (s, r) => s + r.real);
+    final totalRealExpense = expenseRows.fold(0.0, (s, r) => s - r.real);
+    String fmt(double v) => currency?.format(v) ?? v.toStringAsFixed(0);
+
+    // Same hover-tooltip principle as the envelope view's own detail sheet
+    // and budget_preview_card.dart: list the real transactions (not the
+    // simulated figure, which is just a typed-in number) that make up a
+    // bar's real average, grouped the same way the average itself is
+    // rolled up (top category plus its direct children).
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final periodTransactions = repo
+        .getTransactions(accountId: accountId, from: start, to: today, limit: 3000)
+        .where((t) => t.categoryId != null && !t.isVoid)
+        .toList();
+    final transactionsByCategory = <int, List<MoneyTransaction>>{};
+    for (final t in periodTransactions) {
+      transactionsByCategory.putIfAbsent(t.categoryId!, () => []).add(t);
+    }
+    final dateFormat = DateFormat('d MMM', 'fr_FR');
+    String? tooltipFor(Category top) {
+      final relevantCategoryIds = {
+        top.id,
+        for (final c in byParent[top.id] ?? const <Category>[]) c.id,
+      };
+      final txns = [
+        for (final id in relevantCategoryIds) ...?transactionsByCategory[id],
+      ]..sort((a, b) => b.date.compareTo(a.date));
+      if (txns.isEmpty) return null;
+      return txns.map((t) {
+        final line = '${dateFormat.format(t.date)} - '
+            '${payees[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmt(t.signedAmountFor(accountId))}';
+        return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
+      }).join('\n');
+    }
+
+    Future<void> editAmount(_ScenarioRow row) async {
+      final controller = TextEditingController(text: row.simulated.abs().toStringAsFixed(2));
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(row.topCategory.name),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Montant mensuel simulé'),
+            onSubmitted: (_) => Navigator.of(context).pop(true),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Enregistrer')),
+          ],
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      final magnitude = double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
+      final signed = isIncomeRow(row) ? magnitude : -magnitude;
+      repo.upsertBudgetScenarioAmount(
+          scenarioId: activeScenario.id, categoryId: row.topCategory.id, amount: signed);
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        pickerRow,
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            const Text('Moyenne sur : '),
+            const SizedBox(width: 8),
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 3, label: Text('3 mois')),
+                ButtonSegment(value: 6, label: Text('6 mois')),
+                ButtonSegment(value: 12, label: Text('12 mois')),
+              ],
+              selected: {activeScenario.periodMonths},
+              onSelectionChanged: (s) => setPeriod(s.first),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Revenus simulés'),
+                    Text(fmt(totalSimulatedIncome), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Dépenses simulées'),
+                    Text(fmt(totalSimulatedExpense), style: const TextStyle(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                const Divider(),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Reste simulé', style: TextStyle(fontWeight: FontWeight.w800)),
+                    Builder(builder: (context) {
+                      final reste = totalSimulatedIncome - totalSimulatedExpense;
+                      return Text(
+                        fmt(reste),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 18,
+                          color: reste < 0 ? AppTheme.negative : AppTheme.positive,
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Réel sur la période : ${fmt(totalRealIncome)} - ${fmt(totalRealExpense)} '
+                  '= ${fmt(totalRealIncome - totalRealExpense)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (incomeRows.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text('Revenus', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          for (final row in incomeRows) ...[
+            _tooltipped(
+              tooltipFor(row.topCategory),
+              _CategoryBarRow(
+                label: row.topCategory.name,
+                spent: row.real.abs(),
+                target: row.simulated.abs(),
+                maxScale: incomeMaxScale,
+                moreIsBetter: true,
+                currency: currency,
+                onTap: () => editAmount(row),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+        if (expenseRows.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Text('Dépenses', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          for (final row in expenseRows) ...[
+            _tooltipped(
+              tooltipFor(row.topCategory),
+              _CategoryBarRow(
+                label: row.topCategory.name,
+                spent: row.real.abs(),
+                target: row.simulated.abs(),
+                maxScale: expenseMaxScale,
+                currency: currency,
+                onTap: () => editAmount(row),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+        ],
+        if (rows.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: Text('Aucune catégorie avec un historique sur ce compte.')),
+          ),
+      ],
+    );
+  }
+}
+
+/// Wraps [child] in a [HoverTooltip] when there's actually a [message] to
+/// show - same "null means nothing to hover" convention as
+/// budget_preview_card.dart's own tooltipFor.
+Widget _tooltipped(String? message, Widget child) =>
+    message == null ? child : HoverTooltip(message: message, child: child);
+
+/// One top-level category's real historical average next to its simulated
+/// (saved or defaulted) amount, both signed (positive income, negative
+/// expense) and rolled up across its subcategories - see
+/// _BudgetScreenState._buildSimulationBody.
+class _ScenarioRow {
+  final Category topCategory;
+  final double real;
+  final double simulated;
+
+  const _ScenarioRow({required this.topCategory, required this.real, required this.simulated});
 }
 
 Future<void> _resetBudget({

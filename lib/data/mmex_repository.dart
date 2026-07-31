@@ -70,6 +70,31 @@ class MmexRepository {
     // own name - null means "use the category name" (the default when an
     // envelope is created, manually or via suggestions).
     _tryAddColumn('APP_BUDGET_ENVELOPES', 'NAME', 'TEXT');
+    // A named, saveable "what if" budget - separate from the real
+    // APP_BUDGET_ENVELOPES (never touched by these), so simulating doesn't
+    // risk the actual budget. Several can exist per account; the user
+    // creates/renames/deletes/recalls them freely (see BudgetScenario).
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BUDGET_SCENARIOS (
+        SCENARIOID INTEGER PRIMARY KEY AUTOINCREMENT,
+        ACCOUNTID INTEGER NOT NULL,
+        NAME TEXT NOT NULL,
+        PERIOD_MONTHS INTEGER NOT NULL DEFAULT 12,
+        CREATED_AT TEXT NOT NULL,
+        UPDATED_AT TEXT NOT NULL
+      )
+    ''');
+    // One simulated monthly amount per (scenario, category) - a category
+    // with no row here yet simply hasn't been overridden, and the UI shows
+    // the live historical average as its starting point instead.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BUDGET_SCENARIO_AMOUNTS (
+        SCENARIOID INTEGER NOT NULL,
+        CATEGID INTEGER NOT NULL,
+        AMOUNT REAL NOT NULL,
+        PRIMARY KEY (SCENARIOID, CATEGID)
+      )
+    ''');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1519,6 +1544,115 @@ class MmexRepository {
   /// getBudgetEnvelopes).
   void resetBudgetEnvelopes(int accountId) {
     db.execute('DELETE FROM APP_BUDGET_ENVELOPES WHERE ACCOUNTID = ?', [accountId]);
+  }
+
+  // ---- Budget scenarios (named "what if" simulations, this app's own
+  // tables - never touches APP_BUDGET_ENVELOPES or MMEX's own schema) ----
+
+  List<BudgetScenario> getBudgetScenarios(int accountId) {
+    final rows = db.query(
+      'SELECT * FROM APP_BUDGET_SCENARIOS WHERE ACCOUNTID = ? ORDER BY UPDATED_AT DESC',
+      [accountId],
+    );
+    return rows.map(BudgetScenario.fromRow).toList();
+  }
+
+  int createBudgetScenario({
+    required int accountId,
+    required String name,
+    int periodMonths = 12,
+  }) {
+    final now = DateTime.now().toIso8601String();
+    return db.execute(
+      'INSERT INTO APP_BUDGET_SCENARIOS (ACCOUNTID, NAME, PERIOD_MONTHS, CREATED_AT, UPDATED_AT) '
+      'VALUES (?, ?, ?, ?, ?)',
+      [accountId, name, periodMonths, now, now],
+    );
+  }
+
+  void renameBudgetScenario(int scenarioId, String name) {
+    db.execute(
+      'UPDATE APP_BUDGET_SCENARIOS SET NAME = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [name, DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  void setBudgetScenarioPeriodMonths(int scenarioId, int months) {
+    db.execute(
+      'UPDATE APP_BUDGET_SCENARIOS SET PERIOD_MONTHS = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [months, DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Deletes [scenarioId] and every simulated amount saved under it - other
+  /// scenarios (and the real APP_BUDGET_ENVELOPES budget) are untouched.
+  void deleteBudgetScenario(int scenarioId) {
+    db.execute('DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_BUDGET_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
+  }
+
+  /// categoryId -> simulated monthly amount saved under [scenarioId] - a
+  /// category missing from this map simply has no override yet; the UI
+  /// falls back to the live historical average as its starting point
+  /// (see [categoryNetTotalsForPeriod]) rather than showing zero.
+  Map<int, double> getBudgetScenarioAmounts(int scenarioId) {
+    final rows = db.query(
+      'SELECT CATEGID, AMOUNT FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return {for (final row in rows) row['CATEGID'] as int: (row['AMOUNT'] as num).toDouble()};
+  }
+
+  void upsertBudgetScenarioAmount({
+    required int scenarioId,
+    required int categoryId,
+    required double amount,
+  }) {
+    db.execute(
+      'INSERT INTO APP_BUDGET_SCENARIO_AMOUNTS (SCENARIOID, CATEGID, AMOUNT) VALUES (?, ?, ?) '
+      'ON CONFLICT(SCENARIOID, CATEGID) DO UPDATE SET AMOUNT = excluded.AMOUNT',
+      [scenarioId, categoryId, amount],
+    );
+    db.execute(
+      'UPDATE APP_BUDGET_SCENARIOS SET UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Removes a single category's override, reverting it to tracking the
+  /// live historical average again (see [getBudgetScenarioAmounts]).
+  void deleteBudgetScenarioAmount(int scenarioId, int categoryId) {
+    db.execute(
+      'DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ? AND CATEGID = ?',
+      [scenarioId, categoryId],
+    );
+  }
+
+  /// Signed net total per leaf category for [accountId] within [start,
+  /// end) - like [categorySpendForPeriod], but covers income and
+  /// categorized-transfer categories too (not just Withdrawal), signed
+  /// from this account's own point of view (an income category reads
+  /// positive, an expense one negative). The simulation view needs both
+  /// side by side, unlike the envelope-based Budget view, which is
+  /// deliberately expense-only.
+  Map<int, double> categoryNetTotalsForPeriod(
+    DateTime start,
+    DateTime end, {
+    required int accountId,
+  }) {
+    final rows = db.query(
+      'SELECT * FROM CHECKINGACCOUNT_V1 '
+      'WHERE (ACCOUNTID = ? OR TOACCOUNTID = ?) AND CATEGID IS NOT NULL '
+      "AND (DELETEDTIME IS NULL OR DELETEDTIME = '') AND UPPER(TRIM(STATUS)) != 'V' "
+      'AND TRANSDATE >= ? AND TRANSDATE < ?',
+      [accountId, accountId, _isoDate(start), _isoDate(end)],
+    );
+    final totals = <int, double>{};
+    for (final row in rows) {
+      final tx = MoneyTransaction.fromRow(row);
+      totals[tx.categoryId!] = (totals[tx.categoryId!] ?? 0) + tx.signedAmountFor(accountId);
+    }
+    return totals;
   }
 
   /// categoryId -> monthly-equivalent total of every active (non-paused),
