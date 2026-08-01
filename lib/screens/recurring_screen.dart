@@ -12,6 +12,8 @@ import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
+import '../widgets/bulk_category_reassign.dart';
+import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 
@@ -68,7 +70,27 @@ class _RecurringScreenState extends State<RecurringScreen> {
       });
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Opérations récurrentes')),
+      appBar: AppBar(
+        title: Text(_accountFilter == null
+            ? 'Opérations récurrentes'
+            : 'Opérations récurrentes - ${accounts[_accountFilter]?.name}'),
+        actions: [
+          PopupMenuButton<int?>(
+            icon: const Icon(Icons.filter_list),
+            tooltip: 'Filtrer par compte',
+            onSelected: (id) => setState(() => _accountFilter = id),
+            itemBuilder: (context) => [
+              const PopupMenuItem<int?>(value: null, child: Text('Tous les comptes')),
+              for (final a in visibleAccounts) PopupMenuItem<int?>(value: a.id, child: Text(a.name)),
+            ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Paramètres',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(context),
         icon: const Icon(Icons.add),
@@ -79,32 +101,13 @@ class _RecurringScreenState extends State<RecurringScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Column(
-                children: [
-                  TextField(
-                    decoration: const InputDecoration(
-                      hintText: 'Rechercher (tiers, compte, catégorie...)',
-                      prefixIcon: Icon(Icons.search),
-                      isDense: true,
-                    ),
-                    onChanged: (v) => setState(() => _searchQuery = v),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<int?>(
-                    initialValue: _accountFilter,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                        labelText: 'Compte', isDense: true),
-                    items: [
-                      const DropdownMenuItem<int?>(
-                          value: null, child: Text('Tous les comptes')),
-                      for (final a in visibleAccounts)
-                        DropdownMenuItem<int?>(
-                            value: a.id, child: Text(a.name)),
-                    ],
-                    onChanged: (v) => setState(() => _accountFilter = v),
-                  ),
-                ],
+              child: TextField(
+                decoration: const InputDecoration(
+                  hintText: 'Rechercher (tiers, compte, catégorie...)',
+                  prefixIcon: Icon(Icons.search),
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _searchQuery = v),
               ),
             ),
             Expanded(
@@ -227,12 +230,20 @@ class _RecurringScreenState extends State<RecurringScreen> {
       {BillDeposit? existing}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
-    await showModalBottomSheet(
+    final categoryChange = await showModalBottomSheet<CategoryChange?>(
       context: context,
       isScrollControlled: true,
       builder: (_) => RecurringEditorSheet(existing: existing, repo: repo),
     );
     dbProvider.touch();
+    if (categoryChange != null && context.mounted) {
+      await offerBulkCategoryReassign(
+        context: context,
+        repo: repo,
+        dbProvider: dbProvider,
+        change: categoryChange,
+      );
+    }
   }
 }
 
@@ -535,7 +546,14 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                 children: [
                   if (widget.existing != null)
                     TextButton(
-                      onPressed: () {
+                      onPressed: () async {
+                        final confirmed = await confirmDelete(
+                          context,
+                          title: 'Supprimer cette opération récurrente',
+                          message: 'Supprimer définitivement ce modèle récurrent ? '
+                              'Les opérations déjà enregistrées dans le grand livre ne sont pas concernées.',
+                        );
+                        if (!confirmed || !context.mounted) return;
                         widget.repo.deleteBillDeposit(widget.existing!.id);
                         context.read<DatabaseProvider>().touch();
                         Navigator.of(context).pop();
@@ -560,14 +578,16 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text);
     final isTransfer = _transCode == TransCode.transfer;
+    final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
     final numOccurrences = periodUsesXParam(_period)
         ? int.parse(_occurrencesController.text)
         : (_limitedOccurrences ? int.parse(_occurrencesController.text) : -1);
+    CategoryChange? categoryChange;
     if (widget.existing == null) {
       final id = widget.repo.insertBillDeposit(
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
-        payeeId: isTransfer ? -1 : (_payeeId ?? -1),
+        payeeId: payeeId,
         transCode: _transCode,
         amount: amount,
         toAmount: isTransfer ? amount : null,
@@ -586,7 +606,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
         id: widget.existing!.id,
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
-        payeeId: isTransfer ? -1 : (_payeeId ?? -1),
+        payeeId: payeeId,
         transCode: _transCode,
         amount: amount,
         toAmount: amount,
@@ -600,9 +620,33 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
       if (_limitedOccurrences && !periodUsesXParam(_period)) {
         widget.repo.ensureBillOccurrenceTotal(widget.existing!.id, numOccurrences);
       }
+      // The bill's category just changed - offer to also fix every real
+      // ledger transaction still sitting under the old category for this
+      // payee (not just future occurrences of this one bill), see
+      // offerBulkCategoryReassign in _openEditor below.
+      final oldCategoryId = widget.existing!.categoryId;
+      if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
+        if (isTransfer && _toAccountId != null) {
+          categoryChange = (
+            payeeId: null,
+            transferAccountId: _accountId,
+            transferToAccountId: _toAccountId,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        } else if (!isTransfer && payeeId != -1) {
+          categoryChange = (
+            payeeId: payeeId,
+            transferAccountId: null,
+            transferToAccountId: null,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        }
+      }
     }
     context.read<DatabaseProvider>().touch();
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(categoryChange);
   }
 }
 

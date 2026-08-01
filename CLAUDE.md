@@ -245,9 +245,13 @@ this happened for real before the fix.
   - Inside the full sheet: fields stacked top to bottom, then at the very
     bottom a `Row` with `TextButton('Supprimer')` (plain, not styled red)
     on the left, `Spacer()`, `FilledButton('Enregistrer')` on the right.
-    Delete is immediate, no confirmation dialog - matches how casual the
-    rest of the app is about undo (there is none yet; see ROADMAP.md's
-    "Bouton Annuler la suppression").
+    Delete asks for confirmation first (`confirmDelete` in
+    `lib/widgets/confirm_delete.dart` - Annuler/Supprimer `AlertDialog`,
+    red `FilledButton`) - reversed 2026-08-01 from the original "immediate,
+    no confirmation" choice below after the user asked for it explicitly
+    for transactions/recurring bills; apply the same confirmation to any
+    future delete-this-record action rather than reintroducing the old
+    immediate-delete behavior.
   Before designing a new "add/edit X" surface: find the closest existing
   equivalent (search for `showModalBottomSheet` and the
   `Supprimer`/`Enregistrer` row) and copy it structurally rather than

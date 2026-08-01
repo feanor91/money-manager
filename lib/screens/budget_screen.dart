@@ -117,6 +117,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
   bool _simulationMode = false;
   int? _selectedScenarioId;
 
+  /// Which top-level categories are currently unfolded to show their own
+  /// subcategories as individually-editable rows, in the simulator - a
+  /// local view preference only (not saved anywhere), same spirit as
+  /// [_selectedCategoryId].
+  final Set<int> _expandedScenarioCategoryIds = {};
+
   /// Opens a category's full detail (breakdown, sub-categories, recent
   /// transactions, and the inline name/amount editor) as a bottom sheet -
   /// a fixed spot near the bottom of the screen every time, unlike an
@@ -405,6 +411,11 @@ class _BudgetScreenState extends State<BudgetScreen> {
               ],
             ),
           ],
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Paramètres',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          ),
         ],
       ),
       floatingActionButton: _simulationMode
@@ -653,28 +664,70 @@ class _BudgetScreenState extends State<BudgetScreen> {
       setState(() {});
     }
 
-    // Real average per relevant category over the scenario's own period,
-    // ending today (inclusive - "tomorrow" as the exclusive upper bound,
-    // so today's own transactions still count) - same "average the last N
-    // closed months" idea already used for envelope suggestions, just
-    // covering income too (see categoryNetTotalsForPeriod's own doc
-    // comment for why that's a different method than the envelope view's
-    // categorySpendForPeriod).
-    final today = DateTime.now();
-    final end = DateTime(today.year, today.month, today.day + 1);
-    final start = _addMonths(today, -activeScenario.periodMonths);
-    final rawNet = repo.categoryNetTotalsForPeriod(start, end, accountId: accountId);
+    // Closed months only, never the one still in progress - it's
+    // incomplete (e.g. rent due the 25th looks "free" if you're simulating
+    // on the 5th), which would understate or misleadingly zero out a
+    // category that's actually perfectly normal. Deliberately plain
+    // calendar months (not the forecast-day-anchored BudgetWindow the
+    // envelope suggestions use below) - the simulator already worked in
+    // calendar months before this change, this only resolves *which*
+    // month counts as "still in progress".
+    final now = DateTime.now();
+    final closedMonthsEnd = DateTime(now.year, now.month, 1);
+    final start = _addMonths(closedMonthsEnd, -activeScenario.periodMonths);
+    final rawNet = repo.categoryNetTotalsForPeriod(start, closedMonthsEnd, accountId: accountId);
     final savedAmounts = repo.getBudgetScenarioAmounts(activeScenario.id);
 
+    // A recurring bill/deposit is a near-certain monthly figure - it takes
+    // priority over the historical average for a category that has one,
+    // same rule already used for envelope suggestions (see _openSuggestions
+    // below): not additive, the recurring figure simply replaces the
+    // average when both exist.
+    final recurringExpense = repo.categoryMonthlyRecurringTotals(accountId: accountId);
+    final recurringIncome = repo.categoryMonthlyRecurringIncomeTotals(accountId: accountId);
+
     final usedCategoryIds = repo.categoriesUsedByAccount(accountId);
+    // Per-scenario add/remove override on top of the automatic "has real
+    // history on this account" default - see APP_BUDGET_SCENARIO_CATEGORIES
+    // and the "Ajouter une catégorie"/per-row remove button below.
+    final categoryVisibility = repo.getBudgetScenarioCategoryOverrides(activeScenario.id);
+    // Budget-only categories with no real CATEGORY_V1 row at all - see
+    // APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES. Synthesized as ordinary
+    // Category objects (negative id, no parent) so they flow through
+    // exactly the same rows/rollup/tooltip machinery as a real one - a
+    // tooltip naturally comes up empty for one since no real transaction
+    // can ever carry a negative CATEGID.
+    // Every virtual category (top-level or an artificial subdivision of a
+    // real one - see VirtualBudgetCategory) folds into the same byParent
+    // map as the real categories, keyed the same way (null = top-level,
+    // otherwise its real or virtual parent's id) - from here on nothing
+    // downstream needs to know or care which categories are real.
+    final virtualCategories = repo.getVirtualBudgetCategories(activeScenario.id);
     final byParent = <int?, List<Category>>{};
     for (final c in categories) {
       byParent.putIfAbsent(c.parentId, () => []).add(c);
     }
-    final topCategories = (byParent[null] ?? const <Category>[]).where((c) {
+    for (final v in virtualCategories) {
+      byParent
+          .putIfAbsent(v.parentCategId, () => [])
+          .add(Category(id: v.id, name: v.name, active: true, parentId: v.parentCategId));
+    }
+    bool usedHere(Category c) {
       final children = byParent[c.id] ?? const <Category>[];
       return usedCategoryIds.contains(c.id) || children.any((child) => usedCategoryIds.contains(child.id));
-    }).toList();
+    }
+    bool isVirtualCategory(Category c) => c.id < 0;
+    // A virtual category has no organic "used" signal (never a real
+    // transaction) - it only ever shows once explicitly added, unlike a
+    // real one which defaults to visible as soon as it has history.
+    bool defaultVisible(Category c) => isVirtualCategory(c) ? false : usedHere(c);
+
+    final allTopCategories = byParent[null] ?? const <Category>[];
+    final topCategories =
+        allTopCategories.where((c) => categoryVisibility[c.id] ?? defaultVisible(c)).toList();
+    final hiddenTopCategories =
+        allTopCategories.where((c) => !(categoryVisibility[c.id] ?? defaultVisible(c))).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
 
     final relevantIds = <int>{};
     for (final top in topCategories) {
@@ -683,11 +736,28 @@ class _BudgetScreenState extends State<BudgetScreen> {
         relevantIds.add(c.id);
       }
     }
+    // Pure historical average - the "Réel" column always reflects actual
+    // transactions only, whatever the suggested/simulated side is doing.
     final realMap = {
       for (final id in relevantIds) id: (rawNet[id] ?? 0) / activeScenario.periodMonths,
     };
+    // Recurring-priority-else-average - only used as the fallback for a
+    // category with no saved amount yet (see simulatedMap below), never
+    // shown directly.
+    final suggestedMap = {
+      for (final id in relevantIds)
+        id: recurringExpense.containsKey(id)
+            ? -recurringExpense[id]!
+            : (recurringIncome[id] ?? realMap[id]!),
+    };
+    // Fixed: every visible category is guaranteed a saved row by
+    // fixBudgetScenario, so the ?? 0 fallback is mostly theoretical (only
+    // reachable mid-edit for a category added after fixing, which is
+    // always prompted for a manual amount immediately - see addCategory).
+    // Draft: an unset category keeps tracking the live suggestion.
     final simulatedMap = {
-      for (final id in relevantIds) id: savedAmounts[id] ?? realMap[id]!,
+      for (final id in relevantIds)
+        id: activeScenario.isFixed ? (savedAmounts[id] ?? 0) : (savedAmounts[id] ?? suggestedMap[id]!),
     };
 
     final rows = [
@@ -721,7 +791,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
     // rolled up (top category plus its direct children).
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
     final periodTransactions = repo
-        .getTransactions(accountId: accountId, from: start, to: today, limit: 3000)
+        .getTransactions(
+          accountId: accountId,
+          from: start,
+          to: closedMonthsEnd.subtract(const Duration(days: 1)),
+          limit: 3000,
+        )
         .where((t) => t.categoryId != null && !t.isVoid)
         .toList();
     final transactionsByCategory = <int, List<MoneyTransaction>>{};
@@ -745,18 +820,61 @@ class _BudgetScreenState extends State<BudgetScreen> {
       }).join('\n');
     }
 
-    Future<void> editAmount(_ScenarioRow row) async {
-      final controller = TextEditingController(text: row.simulated.abs().toStringAsFixed(2));
+    // 12/6/3/1-month real averages for [top], each ending at the same
+    // closed-months boundary as everything else here - shown as reference
+    // context whenever the user is asked to type a monthly amount (never
+    // for a virtual category: it has no real transaction to average).
+    Map<int, double> referenceAverages(Category top) {
+      return {
+        for (final months in [12, 6, 3, 1])
+          months: rolledUpSpend(
+                top.id,
+                repo.categoryNetTotalsForPeriod(
+                  _addMonths(closedMonthsEnd, -months),
+                  closedMonthsEnd,
+                  accountId: accountId,
+                ),
+                categories,
+              ) /
+              months,
+      };
+    }
+
+    // Shared by editAmount and addCategory - always asks for a positive
+    // magnitude (the row/category's own income-or-expense classification
+    // decides the sign, see isIncomeRow), with the 4 reference averages
+    // shown alongside for a real category. Returns null on cancel.
+    Future<double?> promptAmount({
+      required String title,
+      required double prefill,
+      Map<int, double>? refs,
+    }) async {
+      final controller = TextEditingController(text: prefill.abs().toStringAsFixed(2));
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(row.topCategory.name),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Montant mensuel simulé'),
-            onSubmitted: (_) => Navigator.of(context).pop(true),
+          title: Text(title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (refs != null) ...[
+                Text(
+                  'Moyennes réelles - 12 mois : ${fmt(refs[12]!.abs())}  ·  '
+                  '6 mois : ${fmt(refs[6]!.abs())}  ·  3 mois : ${fmt(refs[3]!.abs())}  ·  '
+                  'dernier mois : ${fmt(refs[1]!.abs())}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Montant mensuel simulé'),
+                onSubmitted: (_) => Navigator.of(context).pop(true),
+              ),
+            ],
           ),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
@@ -764,8 +882,18 @@ class _BudgetScreenState extends State<BudgetScreen> {
           ],
         ),
       );
-      if (confirmed != true || !context.mounted) return;
-      final magnitude = double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
+      if (confirmed != true || !context.mounted) return null;
+      return double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
+    }
+
+    Future<void> editAmount(_ScenarioRow row) async {
+      final isVirtual = row.topCategory.id < 0;
+      final magnitude = await promptAmount(
+        title: row.topCategory.name,
+        prefill: row.simulated,
+        refs: isVirtual ? null : referenceAverages(row.topCategory),
+      );
+      if (magnitude == null) return;
       final signed = isIncomeRow(row) ? magnitude : -magnitude;
       repo.upsertBudgetScenarioAmount(
           scenarioId: activeScenario.id, categoryId: row.topCategory.id, amount: signed);
@@ -773,17 +901,294 @@ class _BudgetScreenState extends State<BudgetScreen> {
       setState(() {});
     }
 
+    // Hides a row for this scenario only - its saved simulated amount (if
+    // any) stays in APP_BUDGET_SCENARIO_AMOUNTS untouched, so re-adding the
+    // category later brings back its old value intact. No confirmation:
+    // this is just a view toggle, not a delete.
+    void removeCategory(Category top) {
+      repo.setBudgetScenarioCategoryVisible(activeScenario.id, top.id, false);
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    // Picks among top-level categories not currently shown (never used on
+    // this account, previously removed, or brand new - "onCreate" makes a
+    // virtual budget-only category on the fly), then always requires a
+    // typed monthly amount before the category actually appears - no more
+    // silent default. Cancelling either step adds nothing at all.
+    Future<void> addCategory() async {
+      Category? picked;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Ajouter une catégorie'),
+          content: SizedBox(
+            width: 360,
+            child: SearchableSelectField<Category>(
+              label: 'Catégorie',
+              options: hiddenTopCategories,
+              labelOf: (c) => c.name,
+              onSelected: (c) {
+                picked = c;
+                Navigator.of(context).pop();
+              },
+              onCreate: (text) async {
+                final id = repo.createVirtualBudgetCategory(activeScenario.id, text);
+                dbProvider.touch();
+                return Category(id: id, name: text, active: true, parentId: null);
+              },
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          ],
+        ),
+      );
+      if (picked == null || !context.mounted) return;
+      final category = picked!;
+      final isVirtual = category.id < 0;
+      final refs = isVirtual ? null : referenceAverages(category);
+      // A category with some non-zero real history uses its sign (income
+      // vs expense) as a sensible default; virtual or genuinely never-used
+      // real categories have nothing to infer from, so default to expense -
+      // a newly imagined budget line is far more often a cost than income.
+      final defaultsToIncome = refs != null && refs[12]! > 0;
+      final magnitude = await promptAmount(
+        title: category.name,
+        prefill: refs?[12] ?? 0,
+        refs: refs,
+      );
+      if (magnitude == null || !context.mounted) return;
+      repo.setBudgetScenarioCategoryVisible(activeScenario.id, category.id, true);
+      repo.upsertBudgetScenarioAmount(
+        scenarioId: activeScenario.id,
+        categoryId: category.id,
+        amount: defaultsToIncome ? magnitude : -magnitude,
+      );
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    // "Fixer" snapshots every currently-visible category's simulated value
+    // (whichever ones are still on auto-pilot get a MANUAL=0 row; already-
+    // manual ones are untouched) and stamps FIXED_AT - see
+    // MmexRepository.fixBudgetScenario. Confirmed explicitly since it
+    // changes how every row behaves from here on, not just one value.
+    Future<void> fixScenario() async {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Fixer ce budget'),
+          content: const Text(
+            'Les montants simulés affichés seront gravés tels quels : ils ne suivront plus '
+            'automatiquement vos moyennes réelles ou récurrentes, seule une modification '
+            'manuelle les changera ensuite. La colonne "Réel" continue elle de suivre vos '
+            'vraies transactions, pour comparer prévu et réel. Vous pourrez revenir en '
+            'arrière à tout moment avec "Défixer".',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Fixer')),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+      repo.fixBudgetScenario(activeScenario.id, {for (final row in rows) row.topCategory.id: row.simulated});
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    void unfixScenario() {
+      repo.unfixBudgetScenario(activeScenario.id);
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    // A subcategory's own edit dialog - separate from editAmount rather
+    // than reusing it via a synthetic _ScenarioRow, because isIncomeRow's
+    // sign inference (real/simulated's own sign) is unreliable for a
+    // subcategory that happens to be exactly 0 (never used yet): it must
+    // follow its parent's income/expense classification instead, passed in
+    // explicitly as [parentIsIncome] - same one used for the parent's own
+    // section/colour (moreIsBetter in buildScenarioRow below).
+    Future<void> editChildAmount(Category child, {required bool parentIsIncome}) async {
+      final isVirtual = child.id < 0;
+      final childSimulated = rolledUpSpend(child.id, simulatedMap, categories);
+      final magnitude = await promptAmount(
+        title: child.name,
+        prefill: childSimulated,
+        refs: isVirtual ? null : referenceAverages(child),
+      );
+      if (magnitude == null) return;
+      repo.upsertBudgetScenarioAmount(
+        scenarioId: activeScenario.id,
+        categoryId: child.id,
+        amount: parentIsIncome ? magnitude : -magnitude,
+      );
+      dbProvider.touch();
+      setState(() {});
+    }
+
+    // One category row, plus - if it has real subcategories and is
+    // currently unfolded - one extra row per subcategory right underneath,
+    // indented, each individually tappable to edit its own amount (same
+    // dialog/reference-averages as a top-level category). Shares maxScale
+    // and moreIsBetter with its parent, so a subcategory always reads as
+    // the same kind (income/expense) and stays on the same visual scale as
+    // the row it belongs to, rather than introducing a second scale to
+    // learn.
+    // "Subdivide" a category with no subcategory of its own to split up
+    // (e.g. one MMEX category lumping together two people's salaries,
+    // distinguishable only by payee in the tooltip, never by category) -
+    // name first, then the usual amount prompt (no reference averages: a
+    // brand new virtual line has no real history of its own to show).
+    Future<void> addVirtualSubcategory(Category parent, {required bool parentIsIncome}) async {
+      final controller = TextEditingController();
+      final confirmedName = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Nouvelle sous-catégorie'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Nom'),
+            onSubmitted: (_) => Navigator.of(context).pop(true),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Suivant')),
+          ],
+        ),
+      );
+      final name = controller.text.trim();
+      if (confirmedName != true || name.isEmpty || !context.mounted) return;
+      final magnitude = await promptAmount(title: name, prefill: 0, refs: null);
+      if (magnitude == null || !context.mounted) return;
+      final id = repo.createVirtualBudgetCategory(activeScenario.id, name, parentCategId: parent.id);
+      repo.upsertBudgetScenarioAmount(
+        scenarioId: activeScenario.id,
+        categoryId: id,
+        amount: parentIsIncome ? magnitude : -magnitude,
+      );
+      dbProvider.touch();
+      setState(() => _expandedScenarioCategoryIds.add(parent.id));
+    }
+
+    Widget buildScenarioRow(_ScenarioRow row, {required double maxScale, required bool moreIsBetter}) {
+      final children = (byParent[row.topCategory.id] ?? const <Category>[])
+          .where((c) => categoryVisibility[c.id] ?? true)
+          .toList();
+      final expanded = _expandedScenarioCategoryIds.contains(row.topCategory.id);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(expanded ? Icons.expand_less : Icons.expand_more, size: 20),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip: expanded ? 'Replier les sous-catégories' : 'Déplier les sous-catégories',
+                onPressed: () => setState(() {
+                  if (expanded) {
+                    _expandedScenarioCategoryIds.remove(row.topCategory.id);
+                  } else {
+                    _expandedScenarioCategoryIds.add(row.topCategory.id);
+                  }
+                }),
+              ),
+              Expanded(
+                child: _tooltipped(
+                  tooltipFor(row.topCategory),
+                  _CategoryBarRow(
+                    label: row.topCategory.name,
+                    spent: row.real.abs(),
+                    target: row.simulated.abs(),
+                    maxScale: maxScale,
+                    moreIsBetter: moreIsBetter,
+                    currency: currency,
+                    onTap: () => editAmount(row),
+                    onRemove: () => removeCategory(row.topCategory),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (expanded) ...[
+            for (final child in children)
+              Padding(
+                padding: const EdgeInsets.only(left: 40, top: 6),
+                child: _tooltipped(
+                  tooltipFor(child),
+                  _CategoryBarRow(
+                    label: child.name,
+                    spent: rolledUpSpend(child.id, realMap, categories).abs(),
+                    target: rolledUpSpend(child.id, simulatedMap, categories).abs(),
+                    maxScale: maxScale,
+                    moreIsBetter: moreIsBetter,
+                    currency: currency,
+                    onTap: () => editChildAmount(child, parentIsIncome: moreIsBetter),
+                    onRemove: () => removeCategory(child),
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(left: 32, top: 4),
+              child: TextButton.icon(
+                onPressed: () => addVirtualSubcategory(row.topCategory, parentIsIncome: moreIsBetter),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Ajouter une sous-catégorie'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
         pickerRow,
+        const SizedBox(height: 8),
+        if (activeScenario.isFixed)
+          Row(
+            children: [
+              Icon(Icons.lock_outline, size: 16, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Fixé le ${DateFormat('d MMM y', 'fr_FR').format(activeScenario.fixedAt!)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              TextButton(onPressed: unfixScenario, child: const Text('Défixer')),
+            ],
+          )
+        else
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.tonalIcon(
+              onPressed: fixScenario,
+              icon: const Icon(Icons.lock_outline, size: 18),
+              label: const Text('Fixer le budget'),
+            ),
+          ),
         const SizedBox(height: 12),
         Row(
           children: [
-            const Text('Moyenne sur : '),
+            // Once fixed, this no longer feeds the simulated amounts (those
+            // are frozen) - it now only controls the "Réel" comparison
+            // column/total below, which stays live either way.
+            Text(activeScenario.isFixed ? 'Comparer sur : ' : 'Moyenne sur : '),
             const SizedBox(width: 8),
             SegmentedButton<int>(
               segments: const [
+                ButtonSegment(value: 1, label: Text('1 mois')),
                 ButtonSegment(value: 3, label: Text('3 mois')),
                 ButtonSegment(value: 6, label: Text('6 mois')),
                 ButtonSegment(value: 12, label: Text('12 mois')),
@@ -792,6 +1197,18 @@ class _BudgetScreenState extends State<BudgetScreen> {
               onSelectionChanged: (s) => setPeriod(s.first),
             ),
           ],
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            // Always enabled, even with nothing hidden to re-add - the
+            // dialog's "create" option (SearchableSelectField.onCreate)
+            // still lets you start a brand new virtual category from here.
+            onPressed: addCategory,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Ajouter une catégorie'),
+          ),
         ),
         const SizedBox(height: 16),
         Card(
@@ -847,18 +1264,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
           Text('Revenus', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           for (final row in incomeRows) ...[
-            _tooltipped(
-              tooltipFor(row.topCategory),
-              _CategoryBarRow(
-                label: row.topCategory.name,
-                spent: row.real.abs(),
-                target: row.simulated.abs(),
-                maxScale: incomeMaxScale,
-                moreIsBetter: true,
-                currency: currency,
-                onTap: () => editAmount(row),
-              ),
-            ),
+            buildScenarioRow(row, maxScale: incomeMaxScale, moreIsBetter: true),
             const SizedBox(height: 10),
           ],
         ],
@@ -867,17 +1273,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
           Text('Dépenses', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           for (final row in expenseRows) ...[
-            _tooltipped(
-              tooltipFor(row.topCategory),
-              _CategoryBarRow(
-                label: row.topCategory.name,
-                spent: row.real.abs(),
-                target: row.simulated.abs(),
-                maxScale: expenseMaxScale,
-                currency: currency,
-                onTap: () => editAmount(row),
-              ),
-            ),
+            buildScenarioRow(row, maxScale: expenseMaxScale, moreIsBetter: false),
             const SizedBox(height: 10),
           ],
         ],
@@ -1509,6 +1905,7 @@ class _CategoryBarRow extends StatelessWidget {
   final bool selected;
   final CurrencyFormat? currency;
   final VoidCallback? onTap;
+  final VoidCallback? onRemove;
 
   const _CategoryBarRow({
     required this.label,
@@ -1521,6 +1918,7 @@ class _CategoryBarRow extends StatelessWidget {
     this.selected = false,
     this.currency,
     this.onTap,
+    this.onRemove,
   });
 
   @override
@@ -1665,6 +2063,18 @@ class _CategoryBarRow extends StatelessWidget {
                 ],
               ),
             ),
+            if (onRemove != null) ...[
+              const SizedBox(width: 4),
+              IconButton(
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                tooltip: 'Retirer du scénario',
+                icon: const Icon(Icons.close),
+                onPressed: onRemove,
+              ),
+            ],
           ],
         ),
       ),

@@ -52,6 +52,12 @@ class BudgetScenario {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// Null means still a draft (every category without its own saved amount
+  /// keeps tracking its live suggested value). Non-null means fixed as of
+  /// this moment - see APP_BUDGET_SCENARIOS.FIXED_AT and
+  /// MmexRepository.fixBudgetScenario.
+  final DateTime? fixedAt;
+
   const BudgetScenario({
     required this.id,
     required this.accountId,
@@ -59,7 +65,10 @@ class BudgetScenario {
     required this.periodMonths,
     required this.createdAt,
     required this.updatedAt,
+    this.fixedAt,
   });
+
+  bool get isFixed => fixedAt != null;
 
   factory BudgetScenario.fromRow(Map<String, Object?> row) {
     return BudgetScenario(
@@ -69,6 +78,21 @@ class BudgetScenario {
       periodMonths: row['PERIOD_MONTHS'] as int? ?? 12,
       createdAt: DateTime.tryParse(row['CREATED_AT'] as String? ?? '') ?? DateTime.now(),
       updatedAt: DateTime.tryParse(row['UPDATED_AT'] as String? ?? '') ?? DateTime.now(),
+      fixedAt: DateTime.tryParse(row['FIXED_AT'] as String? ?? ''),
     );
   }
+}
+
+/// A scenario-only category with no CATEGORY_V1 row at all - see
+/// APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES. [id] is always negative (never
+/// collides with a real, always-positive CATEGID). Null [parentCategId]
+/// means a top-level category of its own; a real category's id means an
+/// artificial subdivision of that category (e.g. splitting "Salaire" into
+/// named shares when MMEX itself only tracks it as one lump category).
+class VirtualBudgetCategory {
+  final int id;
+  final String name;
+  final int? parentCategId;
+
+  const VirtualBudgetCategory({required this.id, required this.name, this.parentCategId});
 }

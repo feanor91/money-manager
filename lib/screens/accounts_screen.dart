@@ -29,7 +29,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
         accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Comptes')),
+      appBar: AppBar(
+        title: const Text('Comptes'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Paramètres',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(context, repo),
         icon: const Icon(Icons.add),

@@ -5,8 +5,7 @@ courses, pas des engagements.
 
 ## Demandées
 
-- Ajouter bouton ajout/suppression de categorie dans le budget prévisionnel
-- Ajout "1 mois" dans le budget prévisionnel 
+(aucune pour l'instant)
 
 ## Suggestions (à valider avant de s'y lancer)
 
@@ -19,9 +18,10 @@ courses, pas des engagements.
 - **Déverrouillage biométrique** (empreinte/visage) en plus ou à la place
   du code PIN, sur Android - `local_auth` package, s'intègre proprement à
   côté du `PinLockProvider` existant.
-- **Bouton "Annuler la suppression"** pour une transaction (actuellement
-  la suppression est immédiate et définitive, pas de confirmation ni de
-  filet de rattrapage au-delà des sauvegardes automatiques).
+- **Bouton "Annuler la suppression"** pour une transaction (la suppression
+  demande maintenant confirmation - voir Récemment fait - mais reste
+  définitive une fois confirmée, pas de filet de rattrapage au-delà des
+  sauvegardes automatiques).
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
 - Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie
 - ?...)
@@ -40,6 +40,50 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Simulateur de budget : mois clos, récurrent, budget fixé, sous-catégories~~
+  - **fait**. Chantier important sur le simulateur (scénarios) livré cet
+  après-midi :
+  - Les moyennes (et les 4 moyennes de référence 12/6/3/1 mois affichées
+    lors de la saisie d'un montant) ne comptent plus jamais le mois en
+    cours, incomplet par nature.
+  - Une opération récurrente active prime désormais sur la moyenne
+    historique pour le montant suggéré (dépenses et revenus), même règle
+    que pour les suggestions d'enveloppes.
+  - Nouveau : un scénario peut être "fixé" (bouton avec confirmation) -
+    grave les montants simulés affichés, qui cessent alors de suivre
+    automatiquement la moyenne/récurrent (seule une modification manuelle
+    les change) ; réversible via "Défixer" (`FIXED_AT`/colonne `MANUAL`
+    sur `APP_BUDGET_SCENARIO_AMOUNTS`). Le sélecteur de période reste
+    utile même fixé : il pilote la comparaison "Réel" à côté.
+  - Catégories ajoutables/retirables (bouton dédié, saisie du montant
+    désormais toujours obligatoire, plus de valeur par défaut silencieuse)
+    et catégories "virtuelles" (sans lien avec une vraie catégorie MMEX,
+    id négatif - `APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES`) pour planifier
+    un poste qui n'existe pas encore.
+  - Sous-catégories réelles dépliables avec édition individuelle du
+    montant (même principe qu'une catégorie mère), et sous-catégories
+    virtuelles pour subdiviser artificiellement le total d'une catégorie
+    qui mélange plusieurs sources (ex. deux salaires sous "Salaire",
+    distingués seulement par tiers) - limite connue : cette subdivision
+    reste côté "simulé" uniquement, le "Réel" ne peut pas être scindé
+    sans créer de vraies sous-catégories MMEX et réaffecter les
+    transactions.
+
+- ~~Réaffectation en masse d'une catégorie + confirmation de suppression~~
+  - **fait**. Changer la catégorie d'une transaction ou d'une opération
+    récurrente propose désormais de l'appliquer aussi à toutes les
+    opérations "identiques" du grand livre (même tiers, même ancienne
+    catégorie - ou même paire de comptes source/destination pour un
+    virement, qui n'a pas de tiers) : nombre trouvé affiché, à confirmer.
+    Supprimer une transaction ou une opération récurrente demande
+    maintenant confirmation (n'était pas le cas avant).
+
+- ~~Petits ajustements~~ - **fait**. Numéro de version affiché en bas à
+  droite de la barre de navigation ; bouton Paramètres accessible depuis
+  les 5 onglets (avant : uniquement Accueil) ; filtre de compte de l'écran
+  Récurrentes passé d'une liste déroulante pleine largeur à une icône en
+  haut à droite, pour matcher Budget/Transactions.
 
 - ~~Mode simulation de budget~~ - **fait**, sous la forme de scénarios
   nommés. Nouveau bouton "Simulation" dans l'écran Budget : plusieurs

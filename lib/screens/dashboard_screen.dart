@@ -52,7 +52,16 @@ class DashboardScreen extends StatelessWidget {
 
     if (accounts.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Tableau de bord')),
+        appBar: AppBar(
+          title: const Text('Tableau de bord'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Paramètres',
+              onPressed: () => Navigator.of(context).pushNamed('/settings'),
+            ),
+          ],
+        ),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -136,6 +145,7 @@ class DashboardScreen extends StatelessWidget {
             ),
             IconButton(
               icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Paramètres',
               onPressed: () => Navigator.of(context).pushNamed('/settings'),
             ),
           ],

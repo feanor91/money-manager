@@ -95,6 +95,55 @@ class MmexRepository {
         PRIMARY KEY (SCENARIOID, CATEGID)
       )
     ''');
+    // Per-scenario override of whether a top-level category shows as a row -
+    // no entry means "automatic" (visible iff categoriesUsedByAccount says
+    // so, see _buildSimulationBody). VISIBLE=1 forces a row in even with no
+    // real history yet (planning a brand new expense/income); VISIBLE=0
+    // hides one that would otherwise show, without touching any saved
+    // amount for it in APP_BUDGET_SCENARIO_AMOUNTS.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BUDGET_SCENARIO_CATEGORIES (
+        SCENARIOID INTEGER NOT NULL,
+        CATEGID INTEGER NOT NULL,
+        VISIBLE INTEGER NOT NULL,
+        PRIMARY KEY (SCENARIOID, CATEGID)
+      )
+    ''');
+    // Null (the default) means "still a draft": every category without its
+    // own saved amount keeps tracking the live suggested value (recurring
+    // bill, else closed-month average - see _buildSimulationBody). Once
+    // set, the scenario is "fixed" - every visible category is guaranteed a
+    // row in APP_BUDGET_SCENARIO_AMOUNTS (see fixBudgetScenario) and none of
+    // them auto-update anymore, only a manual edit changes them from here
+    // on. The period selector keeps working either way - it's what drives
+    // the "Réel" comparison window, not just the draft suggestion.
+    _tryAddColumn('APP_BUDGET_SCENARIOS', 'FIXED_AT', 'TEXT');
+    // 1 (the default, and the only possibility before this column existed -
+    // every pre-existing row was created by a deliberate manual edit) means
+    // the user themselves typed this value, via editAmount or the "add
+    // category" flow - it survives a défixer. 0 means fixBudgetScenario
+    // snapshotted it automatically from that category's live suggested
+    // value purely to freeze it - unfixBudgetScenario deletes exactly the
+    // 0-rows, so those categories resume live tracking.
+    _tryAddColumn('APP_BUDGET_SCENARIO_AMOUNTS', 'MANUAL', 'INTEGER NOT NULL DEFAULT 1');
+    // Budget-only categories that don't exist in CATEGORY_V1 at all - for
+    // planning a spend/income that has no dedicated real category yet.
+    // Referenced elsewhere (APP_BUDGET_SCENARIO_AMOUNTS.CATEGID,
+    // APP_BUDGET_SCENARIO_CATEGORIES.CATEGID) as -VIRTUAL_ID, always
+    // negative so it can never collide with a real (always positive)
+    // CATEGID - see getVirtualBudgetCategories/createVirtualBudgetCategory.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES (
+        VIRTUAL_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+        SCENARIOID INTEGER NOT NULL,
+        NAME TEXT NOT NULL
+      )
+    ''');
+    // Null (the default, and the only possibility before this column
+    // existed) means a top-level virtual category, same as before. A real
+    // category's id means this virtual category is an artificial
+    // subdivision nested under it instead - see VirtualBudgetCategory.
+    _tryAddColumn('APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES', 'PARENT_CATEGID', 'INTEGER');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -537,6 +586,76 @@ class MmexRepository {
   void deleteTransaction(int transId) {
     db.execute('DELETE FROM CHECKINGACCOUNT_V1 WHERE TRANSID = ?', [transId]);
     db.execute('DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+  }
+
+  /// How many real ledger transactions share [payeeId] and [categoryId] -
+  /// "identical" for the purposes of a bulk category reassignment (see
+  /// [bulkReassignTransactionCategory]): same payee and same current
+  /// category, regardless of account or amount - a payee's category is
+  /// normally stable across both (groceries vary in amount every time but
+  /// stay the same category; the same payee can pay from more than one of
+  /// the user's own accounts).
+  int countTransactionsMatching({required int payeeId, required int categoryId}) {
+    final rows = db.query(
+      'SELECT COUNT(*) AS c FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ? AND CATEGID = ? '
+      "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      [payeeId, categoryId],
+    );
+    return rows.first['c'] as int;
+  }
+
+  /// Reassigns every real ledger transaction matching [payeeId] and
+  /// [oldCategoryId] to [newCategoryId] at once - see
+  /// [countTransactionsMatching] for what "matching" means. Offered after
+  /// changing a single transaction's category (or a recurring bill's -
+  /// bills live in a separate table, but this always sweeps the ledger)
+  /// to fix every other occurrence of the same mistake in one go.
+  void bulkReassignTransactionCategory({
+    required int payeeId,
+    required int oldCategoryId,
+    required int newCategoryId,
+  }) {
+    db.execute(
+      'UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE PAYEEID = ? AND CATEGID = ? '
+      "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      [newCategoryId, payeeId, oldCategoryId],
+    );
+  }
+
+  /// Transfer counterpart to [countTransactionsMatching] - a transfer has
+  /// no meaningful payee in this app (PAYEEID is always forced to -1, see
+  /// TransactionEditorSheet/RecurringEditorSheet's own _save), so the
+  /// (source, destination) account pair plays the role a payee normally
+  /// would for identifying "the same recurring transfer" across months.
+  int countTransfersMatching({
+    required int accountId,
+    required int toAccountId,
+    required int categoryId,
+  }) {
+    final rows = db.query(
+      'SELECT COUNT(*) AS c FROM CHECKINGACCOUNT_V1 WHERE ACCOUNTID = ? AND TOACCOUNTID = ? '
+      "AND CATEGID = ? AND TRANSCODE = 'Transfer' AND UPPER(TRIM(STATUS)) != 'V' "
+      "AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      [accountId, toAccountId, categoryId],
+    );
+    return rows.first['c'] as int;
+  }
+
+  /// Reassigns every real ledger transfer matching [accountId],
+  /// [toAccountId] and [oldCategoryId] to [newCategoryId] at once - see
+  /// [countTransfersMatching].
+  void bulkReassignTransferCategory({
+    required int accountId,
+    required int toAccountId,
+    required int oldCategoryId,
+    required int newCategoryId,
+  }) {
+    db.execute(
+      'UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE ACCOUNTID = ? AND TOACCOUNTID = ? '
+      "AND CATEGID = ? AND TRANSCODE = 'Transfer' AND UPPER(TRIM(STATUS)) != 'V' "
+      "AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      [newCategoryId, accountId, toAccountId, oldCategoryId],
+    );
   }
 
   /// Links [transId] back to bill [billId] it was just recorded from, along
@@ -1588,6 +1707,8 @@ class MmexRepository {
   /// scenarios (and the real APP_BUDGET_ENVELOPES budget) are untouched.
   void deleteBudgetScenario(int scenarioId) {
     db.execute('DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_BUDGET_SCENARIO_CATEGORIES WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES WHERE SCENARIOID = ?', [scenarioId]);
     db.execute('DELETE FROM APP_BUDGET_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
   }
 
@@ -1603,18 +1724,61 @@ class MmexRepository {
     return {for (final row in rows) row['CATEGID'] as int: (row['AMOUNT'] as num).toDouble()};
   }
 
+  /// Always saved as MANUAL=1 - this is only ever called from a deliberate
+  /// user edit (editAmount, or entering an amount for a newly-added
+  /// category), so it must survive a défixer even if the scenario is fixed
+  /// right now (see [fixBudgetScenario]/[unfixBudgetScenario]).
   void upsertBudgetScenarioAmount({
     required int scenarioId,
     required int categoryId,
     required double amount,
   }) {
     db.execute(
-      'INSERT INTO APP_BUDGET_SCENARIO_AMOUNTS (SCENARIOID, CATEGID, AMOUNT) VALUES (?, ?, ?) '
-      'ON CONFLICT(SCENARIOID, CATEGID) DO UPDATE SET AMOUNT = excluded.AMOUNT',
+      'INSERT INTO APP_BUDGET_SCENARIO_AMOUNTS (SCENARIOID, CATEGID, AMOUNT, MANUAL) '
+      'VALUES (?, ?, ?, 1) '
+      'ON CONFLICT(SCENARIOID, CATEGID) DO UPDATE SET AMOUNT = excluded.AMOUNT, MANUAL = 1',
       [scenarioId, categoryId, amount],
     );
     db.execute(
       'UPDATE APP_BUDGET_SCENARIOS SET UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Locks in [currentValues] (categoryId -> whatever _buildSimulationBody
+  /// is showing as its simulated amount right now, live-suggested or
+  /// already-manual alike) as of this moment: any category in there with no
+  /// saved row yet gets one, tagged MANUAL=0 since it's an automatic
+  /// snapshot, not something the user typed - a category that already has a
+  /// row (MANUAL=0 or 1) is left exactly as-is. Then stamps FIXED_AT so
+  /// _buildSimulationBody stops falling back to the live suggestion for
+  /// every category from here on (see [BudgetScenario.isFixed]).
+  void fixBudgetScenario(int scenarioId, Map<int, double> currentValues) {
+    final existing = getBudgetScenarioAmounts(scenarioId).keys.toSet();
+    for (final entry in currentValues.entries) {
+      if (existing.contains(entry.key)) continue;
+      db.execute(
+        'INSERT INTO APP_BUDGET_SCENARIO_AMOUNTS (SCENARIOID, CATEGID, AMOUNT, MANUAL) '
+        'VALUES (?, ?, ?, 0)',
+        [scenarioId, entry.key, entry.value],
+      );
+    }
+    db.execute(
+      'UPDATE APP_BUDGET_SCENARIOS SET FIXED_AT = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [DateTime.now().toIso8601String(), DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Reverts to draft: deletes every auto-snapshotted (MANUAL=0) amount so
+  /// those categories resume live tracking, and clears FIXED_AT. Amounts
+  /// the user actually typed (MANUAL=1) are untouched.
+  void unfixBudgetScenario(int scenarioId) {
+    db.execute(
+      'DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ? AND MANUAL = 0',
+      [scenarioId],
+    );
+    db.execute(
+      'UPDATE APP_BUDGET_SCENARIOS SET FIXED_AT = NULL, UPDATED_AT = ? WHERE SCENARIOID = ?',
       [DateTime.now().toIso8601String(), scenarioId],
     );
   }
@@ -1626,6 +1790,61 @@ class MmexRepository {
       'DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ? AND CATEGID = ?',
       [scenarioId, categoryId],
     );
+  }
+
+  /// categoryId -> explicit visibility override for [scenarioId] - a
+  /// category missing from this map just follows the automatic default in
+  /// _buildSimulationBody (see APP_BUDGET_SCENARIO_CATEGORIES).
+  Map<int, bool> getBudgetScenarioCategoryOverrides(int scenarioId) {
+    final rows = db.query(
+      'SELECT CATEGID, VISIBLE FROM APP_BUDGET_SCENARIO_CATEGORIES WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return {for (final row in rows) row['CATEGID'] as int: (row['VISIBLE'] as int) == 1};
+  }
+
+  void setBudgetScenarioCategoryVisible(int scenarioId, int categoryId, bool visible) {
+    db.execute(
+      'INSERT INTO APP_BUDGET_SCENARIO_CATEGORIES (SCENARIOID, CATEGID, VISIBLE) VALUES (?, ?, ?) '
+      'ON CONFLICT(SCENARIOID, CATEGID) DO UPDATE SET VISIBLE = excluded.VISIBLE',
+      [scenarioId, categoryId, visible ? 1 : 0],
+    );
+  }
+
+  /// -VIRTUAL_ID -> name for every budget-only category ever created under
+  /// [scenarioId] (regardless of its current show/hide state - same
+  /// "definition persists, visibility is separate" rule as a real category,
+  /// see [getBudgetScenarioCategoryOverrides]). The negative id is what the
+  /// rest of the scenario machinery (amounts, visibility, _ScenarioRow)
+  /// actually keys on - see APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES' own
+  /// schema comment for why it's negated.
+  List<VirtualBudgetCategory> getVirtualBudgetCategories(int scenarioId) {
+    final rows = db.query(
+      'SELECT VIRTUAL_ID, NAME, PARENT_CATEGID FROM APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES '
+      'WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return [
+      for (final row in rows)
+        VirtualBudgetCategory(
+          id: -(row['VIRTUAL_ID'] as int),
+          name: row['NAME'] as String,
+          parentCategId: row['PARENT_CATEGID'] as int?,
+        ),
+    ];
+  }
+
+  /// Returns the new category's negative id, ready to use anywhere a real
+  /// CATEGID would go in the scenario tables. [parentCategId] nests it
+  /// under a real category as an artificial subdivision instead of making
+  /// it a top-level category of its own - see VirtualBudgetCategory.
+  int createVirtualBudgetCategory(int scenarioId, String name, {int? parentCategId}) {
+    final id = db.execute(
+      'INSERT INTO APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES (SCENARIOID, NAME, PARENT_CATEGID) '
+      'VALUES (?, ?, ?)',
+      [scenarioId, name, parentCategId],
+    );
+    return -id;
   }
 
   /// Signed net total per leaf category for [accountId] within [start,
@@ -1787,6 +2006,37 @@ class MmexRepository {
       total += (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) * factor;
     }
     return total;
+  }
+
+  /// Per-category counterpart to [monthlyRecurringIncome] - identical
+  /// deposit-or-incoming-transfer-excluding-Épargne rule, just broken down
+  /// by category instead of summed into one total. The budget simulator
+  /// shows income per category (unlike the single combined income gauge
+  /// [monthlyRecurringIncome] was originally built for), so a recurring
+  /// paycheque/etc. can take priority over a category's historical average
+  /// there the same way a recurring bill already does for expenses (see
+  /// [categoryMonthlyRecurringTotals]).
+  Map<int, double> categoryMonthlyRecurringIncomeTotals({int? accountId}) {
+    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+    final totals = <int, double>{};
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      if (_isSavingsCategory(bill.categoryId, categoriesById)) continue;
+      final categoryId = bill.categoryId;
+      if (categoryId == null) continue;
+      final isIncoming = bill.transCode == TransCode.deposit ||
+          (bill.transCode == TransCode.transfer &&
+              (accountId == null || bill.toAccountId == accountId));
+      if (!isIncoming) continue;
+      if (bill.transCode == TransCode.deposit && accountId != null && bill.accountId != accountId) {
+        continue;
+      }
+      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      if (factor <= 0) continue;
+      totals[categoryId] = (totals[categoryId] ?? 0) +
+          (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) * factor;
+    }
+    return totals;
   }
 
   // ---- Currencies ----------------------------------------------------

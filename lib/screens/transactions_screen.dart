@@ -12,6 +12,8 @@ import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
+import '../widgets/bulk_category_reassign.dart';
+import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import 'recurring_screen.dart' show RecurringEditorSheet;
@@ -137,6 +139,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               for (final a in visibleAccounts)
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Paramètres',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
           ),
         ],
         bottom: PreferredSize(
@@ -295,7 +302,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       {MoneyTransaction? existing, int? defaultAccountId}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
-    await showModalBottomSheet(
+    final categoryChange = await showModalBottomSheet<CategoryChange?>(
       context: context,
       isScrollControlled: true,
       builder: (_) => TransactionEditorSheet(
@@ -305,6 +312,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       ),
     );
     dbProvider.touch();
+    if (categoryChange != null && context.mounted) {
+      await offerBulkCategoryReassign(
+        context: context,
+        repo: repo,
+        dbProvider: dbProvider,
+        change: categoryChange,
+      );
+    }
   }
 
   /// Lets the FAB create either a one-off transaction or a recurring bill
@@ -1140,7 +1155,13 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 children: [
                   if (widget.existing != null)
                     TextButton(
-                      onPressed: () {
+                      onPressed: () async {
+                        final confirmed = await confirmDelete(
+                          context,
+                          title: 'Supprimer cette opération',
+                          message: 'Supprimer définitivement cette opération du grand livre ?',
+                        );
+                        if (!confirmed || !context.mounted) return;
                         widget.repo.deleteTransaction(widget.existing!.id);
                         context.read<DatabaseProvider>().touch();
                         Navigator.of(context).pop();
@@ -1165,10 +1186,12 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text);
     final isTransfer = _transCode == TransCode.transfer;
+    final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
+    CategoryChange? categoryChange;
     if (widget.existing == null) {
       widget.repo.insertTransaction(
         accountId: _accountId!,
-        payeeId: isTransfer ? -1 : (_payeeId ?? -1),
+        payeeId: payeeId,
         transCode: _transCode,
         amount: amount,
         date: _date,
@@ -1183,7 +1206,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         id: widget.existing!.id,
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
-        payeeId: isTransfer ? -1 : (_payeeId ?? -1),
+        payeeId: payeeId,
         transCode: _transCode,
         amount: amount,
         toAmount: amount,
@@ -1192,8 +1215,32 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         categoryId: _categoryId,
         notes: _notesController.text,
       ));
+      // Only a real edit (not a brand new transaction) can have "other
+      // identical" occurrences to offer fixing too - see
+      // offerBulkCategoryReassign in _openEditor, which runs once this
+      // sheet has actually closed.
+      final oldCategoryId = widget.existing!.categoryId;
+      if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
+        if (isTransfer && _toAccountId != null) {
+          categoryChange = (
+            payeeId: null,
+            transferAccountId: _accountId,
+            transferToAccountId: _toAccountId,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        } else if (!isTransfer && payeeId != -1) {
+          categoryChange = (
+            payeeId: payeeId,
+            transferAccountId: null,
+            transferToAccountId: null,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        }
+      }
     }
     context.read<DatabaseProvider>().touch();
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(categoryChange);
   }
 }
