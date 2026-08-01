@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.28] - 2026-08-01
+
+- fix(web): stop the browser autofilling the PIN field with a saved password
+
 ## [1.0.27] - 2026-08-01
 
 - fix(android): stop reading/writing a disconnected private-cache copy of the .mmb
