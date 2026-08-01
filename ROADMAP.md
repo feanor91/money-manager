@@ -41,9 +41,22 @@ courses, pas des engagements.
 
 ## Récemment fait
 
-- ~~Android : le fichier réel n'était jamais lu/écrit~~ - **fait, mais pas
-  encore vérifié sur un vrai téléphone** (aucun appareil/émulateur
-  disponible pour tester - à valider au retour). Découverte importante en
+- ~~Android : le fichier réel n'était jamais lu/écrit~~ - **fait et
+  vérifié sur un vrai téléphone (2026-08-01)**, avec une découverte
+  importante au passage : choisir le dossier via l'entrée "Nextcloud" du
+  sélecteur Android (la liaison virtuelle de l'appli Nextcloud) fait
+  planter la lecture (`NetworkOnMainThreadException`) - bug connu et
+  toujours ouvert de l'appli Nextcloud elle-même, pas quelque chose que ce
+  projet peut corriger (voir CLAUDE.md pour le détail complet et les
+  tickets amont). La solution qui marche réellement : synchroniser le
+  dossier vers un vrai dossier **local** du téléphone via une appli tierce
+  (FolderSync gratuit, ou Autosync payant après 14 jours d'essai) en mode
+  bidirectionnel, puis choisir ce dossier local (pas "Nextcloud") dans
+  Money Manager - confirmé fonctionnel une fois ce contournement en place.
+  Limite à connaître : contrairement au PC, la synchronisation de ces
+  applis n'est pas instantanée (programmée ou manuelle) - une transaction
+  saisie sur Android peut nécessiter une synchronisation manuelle avant de
+  remonter vers le serveur. Découverte initiale importante en
   creusant une remarque sur les paramètres qui ne se retrouvaient pas
   identiques entre appareils : sur Android, choisir le fichier `.mmb`
   passait par un mécanisme qui en fait une copie invisible dans le cache
@@ -60,9 +73,8 @@ courses, pas des engagements.
   bibliothèque incompatible) - repéré uniquement en revérifiant le build
   web après coup, corrigé en isolant le code Android dans un fichier à
   part. Web, Android et Windows compilent tous les trois avec succès après
-  coup, mais **rien de tout ça n'a été exécuté sur un vrai téléphone ou
-  émulateur** (aucun disponible pour tester) - à considérer comme non
-  confirmé tant que ce n'est pas testé en conditions réelles au retour.
+  coup - et, comme décrit plus haut, le comportement runtime sur Android
+  est maintenant confirmé (avec le contournement Nextcloud nécessaire).
 - ~~Build desktop obsolète~~ - **fait**. Le dossier `dist/` contenait une
   build Windows figée au 30 juillet (v1.0.18), bien antérieure à la
   migration des paramètres compagnons (31 juillet) - ce qui explique

@@ -1,9 +1,47 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
+
+/// Masks a PIN field as bullets while tracking the real digits via
+/// [setValue]/[getValue], WITHOUT ever using `obscureText: true`. That
+/// matters specifically on web: `obscureText: true` renders as a genuine
+/// `<input type="password">` under the hood, and browsers/password
+/// managers target that for autofill/autosuggest *regardless* of
+/// `autofillHints`/`autocomplete` - browsers have widely ignored
+/// `autocomplete="off"` on password fields for a decade now, precisely
+/// because sites used to abuse it to block legitimate password-manager use.
+/// A masked-but-`type="text"` field labelled "Code PIN" isn't recognized as
+/// a login field by any reasonable autofill heuristic, so this sidesteps
+/// the problem entirely instead of asking browsers nicely not to interfere.
+/// Only supports appending/deleting from the end (standard for PIN entry -
+/// no mid-string cursor editing), which keeps the masking logic simple: the
+/// masked text's length always equals the real value's length, so the
+/// diff between old/new masked lengths tells us exactly how many real
+/// characters were typed or removed.
+TextInputFormatter pinMaskFormatter({
+  required String Function() getValue,
+  required void Function(String) setValue,
+}) {
+  return TextInputFormatter.withFunction((oldValue, newValue) {
+    final real = getValue();
+    final delta = newValue.text.length - oldValue.text.length;
+    final updated = delta > 0
+        ? real + newValue.text.substring(newValue.text.length - delta)
+        : delta < 0
+            ? real.substring(0, (real.length + delta).clamp(0, real.length))
+            : real;
+    setValue(updated);
+    final masked = '•' * updated.length;
+    return TextEditingValue(
+      text: masked,
+      selection: TextSelection.collapsed(offset: masked.length),
+    );
+  });
+}
 
 /// Web only: shown instead of [PinUnlockScreen] when a database is open but
 /// this browser doesn't (yet, or any more) have permission to the folder
@@ -96,6 +134,7 @@ class PinUnlockScreen extends StatefulWidget {
 class _PinUnlockScreenState extends State<PinUnlockScreen> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+  String _pin = '';
   String? _error;
   bool _checking = false;
 
@@ -107,7 +146,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
   }
 
   Future<void> _submit() async {
-    final pin = _controller.text;
+    final pin = _pin;
     if (pin.isEmpty) return;
     setState(() => _checking = true);
     final result = await context.read<PinLockProvider>().verify(pin);
@@ -116,6 +155,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
       _checking = false;
       if (!result.ok) {
         _controller.clear();
+        _pin = '';
         final lockout = result.lockoutRemaining;
         if (lockout != null) {
           _error = 'Trop de tentatives. Réessayez dans ${_formatLockout(lockout)}.';
@@ -156,13 +196,13 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                   controller: _controller,
                   focusNode: _focusNode,
                   autofocus: true,
-                  obscureText: true,
-                  // Without this, the browser's own password manager (web
-                  // only - obscureText renders as a real <input
-                  // type="password"> under the hood) offers to autofill a
-                  // saved password here, which can leave the field looking
-                  // pre-filled and fighting the user's own typing/deletes.
-                  // This is a PIN, not a saved password - opt out entirely.
+                  obscureText: false,
+                  inputFormatters: [
+                    pinMaskFormatter(
+                      getValue: () => _pin,
+                      setValue: (v) => _pin = v,
+                    ),
+                  ],
                   autofillHints: const [],
                   enableSuggestions: false,
                   keyboardType: TextInputType.number,
@@ -208,6 +248,8 @@ class PinSetupScreen extends StatefulWidget {
 class _PinSetupScreenState extends State<PinSetupScreen> {
   final _pinController = TextEditingController();
   final _confirmController = TextEditingController();
+  String _pin = '';
+  String _confirm = '';
   late final _maxAttemptsController = TextEditingController(
       text: '${context.read<PinLockProvider>().maxAttempts}');
   late final _lockoutMinutesController = TextEditingController(
@@ -224,8 +266,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
   }
 
   Future<void> _save() async {
-    final pin = _pinController.text;
-    final confirm = _confirmController.text;
+    final pin = _pin;
+    final confirm = _confirm;
     if (pin.length < 4) {
       setState(() => _error = 'Au moins 4 chiffres');
       return;
@@ -271,7 +313,13 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             TextField(
               controller: _pinController,
               autofocus: true,
-              obscureText: true,
+              obscureText: false,
+              inputFormatters: [
+                pinMaskFormatter(
+                  getValue: () => _pin,
+                  setValue: (v) => _pin = v,
+                ),
+              ],
               autofillHints: const [],
               enableSuggestions: false,
               keyboardType: TextInputType.number,
@@ -280,7 +328,13 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: _confirmController,
-              obscureText: true,
+              obscureText: false,
+              inputFormatters: [
+                pinMaskFormatter(
+                  getValue: () => _confirm,
+                  setValue: (v) => _confirm = v,
+                ),
+              ],
               autofillHints: const [],
               enableSuggestions: false,
               keyboardType: TextInputType.number,

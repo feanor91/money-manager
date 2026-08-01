@@ -233,15 +233,49 @@ error. Whole-file read/write is exactly what the web version already does
 successfully against the same kind of synced folder, so this reuses a
 proven pattern rather than a novel, untestable one.
 
-**This was built and verified by compiling successfully (`flutter build
-apk --debug` and `--release`, both clean) but never run on a real device
-or emulator - neither was available in the environment it was built in.**
-Treat it as unverified at runtime until tested on an actual phone against
-a real Nextcloud-synced folder: does the folder picker show up and let you
-navigate into a synced folder, does `hasPersistedPermission` actually
-survive an app restart, does writing back actually reach the synced file
-(check its modified timestamp from another device), does the companion
-settings file appear in the synced folder and get picked up by web/desktop.
+**Verified on a real phone 2026-08-01**, with one critical finding:
+picking the folder through the **"Nextcloud" entry in Android's system
+folder picker does not work at all** - reading the .mmb through that
+virtual connection throws `android.os.NetworkOnMainThreadException`,
+surfaced via Android's Binder exception propagation from inside
+Nextcloud's own DocumentsProvider process (`ContentProviderProxy.
+openTypedAssetFile` → `DatabaseUtils.readExceptionFromParcel`). Confirmed
+by testing that this is not about the file needing to be cached first: it
+happens identically whether the file already shows as fully downloaded/
+available offline in Nextcloud (green checkmark in Nextcloud's own file
+list) or not, and identically with the phone in airplane mode - so it
+isn't really "attempting network access" in the sense of needing
+connectivity to succeed, it's Android's StrictMode flagging the mere act
+of calling a networking-adjacent API on Nextcloud's own main thread,
+unconditionally, regardless of whether that call could reach anything.
+This is a known, long-standing, still-open bug class in Nextcloud's own
+Android app, not something fixable from this app's code:
+[nextcloud/android#12375](https://github.com/nextcloud/android/issues/12375)
+is the same `ContentResolver.openInputStream` crash from a third-party
+app, still open; [signalapp/Signal-Android#13296](https://github.com/signalapp/Signal-Android/issues/13296)
+is the same crash hitting Signal. Not fixed even in the latest Nextcloud
+release at the time (34.1.0, 2026-07-23).
+
+**The workaround users need on their phone**: don't pick the "Nextcloud"
+entry in Money Manager's folder picker at all. Install a separate sync
+app - FolderSync's free tier, or MetaCtrl's "Autosync - File Sync &
+Backup" (paid after a 14-day trial) - configured with a **WebDAV**
+account (`https://<server>/remote.php/dav/files/<username>/`, an app
+password rather than the real account password) syncing the database
+folder **two-way** to a real local folder on the phone, then pick *that*
+local folder (under the phone's own storage entry, never "Nextcloud") in
+Money Manager. That's genuine local storage once synced, so SAF just
+reads/writes plain files with no provider involved - confirmed working
+this way. Trade-off worth telling the user about proactively: unlike the
+desktop Nextcloud client's near-instant sync, these Android sync apps
+sync on a schedule or manual trigger, not in real time - a transaction
+entered on Android may need a manual "sync now" before it reaches the
+server, and vice versa before opening Money Manager on Android to see a
+desktop/web edit.
+
+`hasPersistedPermission` surviving an app restart and the companion
+settings file round-tripping through the same folder both got exercised
+as a side effect of the above and raised no separate issues.
 
 Unrelated Windows-only build issue hit and fixed while verifying this:
 Kotlin's incremental compiler intermittently fails with "Could not close
