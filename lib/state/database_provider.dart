@@ -488,7 +488,7 @@ class DatabaseProvider extends ChangeNotifier {
     status = DbStatus.loading;
     notifyListeners();
     try {
-      final db = await MmexDatabase.openFromPath(path);
+      final db = await MmexDatabase.openFromPath(path, createIfMissing: true);
       await initializeBlankSchema(db);
       final prefs = await AppPreferences.getInstance();
       await prefs.setString(_prefsKeyLastPath, path);

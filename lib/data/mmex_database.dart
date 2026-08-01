@@ -10,7 +10,12 @@ import 'mmex_database_stub.dart'
 /// fully into an in-memory sqlite3 (wasm) database; [exportBytes] lets the
 /// UI offer a "save back to disk" download after edits.
 abstract class MmexDatabase {
-  static Future<MmexDatabase> openFromPath(String path) => impl.openFromPath(path);
+  /// [createIfMissing] must only be true for genuinely creating a brand-new
+  /// file at a path that doesn't exist yet (see createNewDatabase) - false
+  /// (the default) makes a missing path a clean error instead of silently
+  /// opening an empty, schema-less new file where a real one was expected.
+  static Future<MmexDatabase> openFromPath(String path, {bool createIfMissing = false}) =>
+      impl.openFromPath(path, createIfMissing: createIfMissing);
 
   static Future<MmexDatabase> openFromBytes(List<int> bytes, {String? label}) =>
       impl.openFromBytes(bytes, label: label);

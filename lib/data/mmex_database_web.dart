@@ -14,7 +14,7 @@ import 'mmex_database.dart';
 // calls internally.
 const _dbPath = '/mmex.mmb';
 
-Future<MmexDatabase> openFromPath(String path) {
+Future<MmexDatabase> openFromPath(String path, {bool createIfMissing = false}) {
   throw UnsupportedError(
     'Web builds cannot open a database by file path. Use the file picker '
     '(openFromBytes) to choose your .mmb file instead.',

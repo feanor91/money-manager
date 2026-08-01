@@ -1,6 +1,6 @@
 import 'mmex_database.dart';
 
-Future<MmexDatabase> openFromPath(String path) =>
+Future<MmexDatabase> openFromPath(String path, {bool createIfMissing = false}) =>
     throw UnsupportedError('No MmexDatabase implementation for this platform.');
 
 Future<MmexDatabase> openFromBytes(List<int> bytes, {String? label}) =>

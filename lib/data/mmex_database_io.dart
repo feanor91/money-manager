@@ -5,8 +5,20 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'mmex_database.dart';
 
-Future<MmexDatabase> openFromPath(String path) async {
-  final db = sqlite3.open(path);
+Future<MmexDatabase> openFromPath(String path, {bool createIfMissing = false}) async {
+  // sqlite3.open defaults to OpenMode.readWriteCreate - silently creating a
+  // fresh, empty (and schema-less: none of MMEX's own tables) file if `path`
+  // doesn't exist, rather than throwing. That's exactly wrong for reopening
+  // a remembered path: a renamed/moved/deleted real database would open
+  // "successfully" into a blank new file with no prompt to pick the right
+  // one instead - confirmed 2026-08-01 as the actual cause of a "blank app,
+  // no way to open the new database" report after a plain file rename.
+  // Only createNewDatabase() genuinely wants create-if-missing (a brand new
+  // path from a save-file dialog, which never exists yet by construction).
+  final db = sqlite3.open(
+    path,
+    mode: createIfMissing ? OpenMode.readWriteCreate : OpenMode.readWrite,
+  );
   return _IoMmexDatabase(db, path, path);
 }
 

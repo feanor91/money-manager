@@ -41,6 +41,16 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Renommer/déplacer la bdd (desktop) ouvrait une base vide sans prévenir~~ -
+  **fait/corrigé**. Signalé le 2026-08-01 : après avoir renommé le fichier
+  `.mmb`, l'appli de bureau s'ouvrait sur un écran vide sans jamais proposer
+  de choisir le nouveau fichier. Cause réelle : `sqlite3.open()` crée
+  silencieusement un fichier vide (sans aucune table MMEX) si le chemin
+  n'existe plus, au lieu de signaler une erreur - exactement ce qui se
+  passe en rouvrant le dernier chemin connu après un renommage/déplacement.
+  Corrigé pour qu'un chemin manquant redemande clairement de choisir un
+  fichier, comme prévu. Voir CLAUDE.md pour le détail technique.
+
 - ~~Android : le fichier réel n'était jamais lu/écrit~~ - **fait et
   vérifié sur un vrai téléphone (2026-08-01)**, avec une découverte
   importante au passage : choisir le dossier via l'entrée "Nextcloud" du

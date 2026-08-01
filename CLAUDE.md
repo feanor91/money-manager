@@ -110,6 +110,23 @@ shape on someone's already-open file. Existing examples:
 `APP_BUDGET_ENVELOPES`, `APP_BILL_OCCURRENCE_TOTALS`,
 `APP_TRANSACTION_BILL_LINKS`.
 
+## Desktop: reopening a missing path must never silently create an empty file
+
+`sqlite3.open(path)` defaults to `OpenMode.readWriteCreate` - if `path`
+doesn't exist, it creates a fresh, empty, schema-less SQLite file there
+instead of throwing. Found 2026-08-01: `MmexDatabase.openFromPath` used
+that default unconditionally, so reopening the last-used path after the
+real file was renamed/moved (`restoreLastDatabase`) "succeeded" into a
+brand-new empty file - the app came up as a blank shell with no error and
+no prompt to pick the right file, since nothing had technically failed
+from the code's point of view. Fixed by adding a `createIfMissing`
+parameter (default `false` → `OpenMode.readWrite`, which errors on a
+missing file) - only `createNewDatabase()` (a save-file dialog path that
+never exists yet by construction) passes `createIfMissing: true`. Covered
+by `test/mmex_database_open_test.dart`. If this ever recurs, check for a
+stray empty `.mmb` at the *old* path from before the fix - it's harmless
+clutter (never the real data) but easy to confuse with the real file.
+
 ## Where app preferences/settings live
 
 **Default rule going forward: any new preference or setting belongs in the
