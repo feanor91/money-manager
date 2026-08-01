@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../state/app_preferences.dart';
+import 'android_file_link.dart';
 import 'encrypted_settings_codec.dart';
 import 'web_file_link.dart';
 
@@ -25,9 +26,13 @@ const companionSettingsFileName = 'money_manager_settings.dat';
 /// - both are inherently per-device/per-browser, resolved *before* this
 /// companion file's location is even known.
 abstract class DatabaseCompanionSettings {
-  /// Native (Android/Windows/desktop): [dbPath] is the real path of the
+  /// Desktop (Windows/macOS/Linux) only: [dbPath] is the real path of the
   /// currently open .mmb file (see MmexDatabase.label on native). Always
-  /// succeeds - unlike the web case, there's no permission to lack.
+  /// succeeds - unlike the web/Android cases, there's no permission to lack.
+  ///
+  /// NOT used for Android, despite that being "native" too in the sense of
+  /// having direct sqlite3 file access - see [forAndroidLink]'s own doc
+  /// comment for why a plain file path can't be trusted there.
   static Future<AppPreferences> forNativePath(String dbPath) {
     final dir = File(dbPath).parent.path;
     final siblingPath = '$dir${Platform.pathSeparator}$companionSettingsFileName';
@@ -55,6 +60,31 @@ abstract class DatabaseCompanionSettings {
     }
     return _WebCompanionPreferences(link, data);
   }
+
+  /// Android: reads/writes through [link]'s Storage Access Framework
+  /// folder grant - see AndroidFileLink's own doc comment for why Android
+  /// needs this at all instead of [forNativePath], despite running real
+  /// `dart:io`/sqlite3 code same as desktop: a plain file picker on Android
+  /// only ever hands back a path to a private-cache copy it silently made,
+  /// never the real file, so a "sibling path" next to that copy would be
+  /// just as disconnected from the real folder as the copy itself.
+  ///
+  /// Unlike [forWebLink], never returns null - an [AndroidFileLink] only
+  /// ever exists with folder access already granted (see
+  /// AndroidFileLink.pickAndRemember), there's no "link exists but isn't
+  /// reachable yet" state to represent here.
+  static Future<AppPreferences> forAndroidLink(AndroidFileLink link) async {
+    final raw = await link.readCompanionFile(companionSettingsFileName);
+    var data = <String, Object?>{};
+    if (raw != null) {
+      try {
+        data = decryptSettingsBytes(Uint8List.fromList(raw));
+      } catch (_) {
+        data = {};
+      }
+    }
+    return _AndroidCompanionPreferences(link, data);
+  }
 }
 
 class _WebCompanionPreferences implements AppPreferences {
@@ -62,6 +92,50 @@ class _WebCompanionPreferences implements AppPreferences {
   final Map<String, Object?> _data;
 
   _WebCompanionPreferences(this._link, this._data);
+
+  Future<bool> _persist() =>
+      _link.writeCompanionFile(companionSettingsFileName, encryptSettingsBytes(_data));
+
+  @override
+  String? getString(String key) => _data[key] as String?;
+  @override
+  Future<bool> setString(String key, String value) {
+    _data[key] = value;
+    return _persist();
+  }
+
+  @override
+  int? getInt(String key) => _data[key] as int?;
+  @override
+  Future<bool> setInt(String key, int value) {
+    _data[key] = value;
+    return _persist();
+  }
+
+  @override
+  List<String>? getStringList(String key) {
+    final v = _data[key];
+    return v is List ? v.cast<String>() : null;
+  }
+
+  @override
+  Future<bool> setStringList(String key, List<String> value) {
+    _data[key] = value;
+    return _persist();
+  }
+
+  @override
+  Future<bool> remove(String key) {
+    _data.remove(key);
+    return _persist();
+  }
+}
+
+class _AndroidCompanionPreferences implements AppPreferences {
+  final AndroidFileLink _link;
+  final Map<String, Object?> _data;
+
+  _AndroidCompanionPreferences(this._link, this._data);
 
   Future<bool> _persist() =>
       _link.writeCompanionFile(companionSettingsFileName, encryptSettingsBytes(_data));

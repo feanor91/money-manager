@@ -41,6 +41,34 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Android : le fichier réel n'était jamais lu/écrit~~ - **fait, mais pas
+  encore vérifié sur un vrai téléphone** (aucun appareil/émulateur
+  disponible pour tester - à valider au retour). Découverte importante en
+  creusant une remarque sur les paramètres qui ne se retrouvaient pas
+  identiques entre appareils : sur Android, choisir le fichier `.mmb`
+  passait par un mécanisme qui en fait une copie invisible dans le cache
+  privé de l'appli - toutes les lectures/écritures se faisaient sur cette
+  copie, **jamais sur le vrai fichier synchronisé Nextcloud**, avec un
+  vrai risque de perte silencieuse de données (cache vidé, appli
+  réinstallée, fichier re-choisi = copie fraîche du fichier original figé,
+  tout ce qui a été saisi sur Android entre-temps disparaît). Corrigé en
+  passant par le Storage Access Framework (dossier entier, pas juste un
+  fichier, pour pouvoir aussi écrire le fichier de paramètres à côté) via
+  les packages `saf_util`/`saf_stream` - voir CLAUDE.md pour le détail
+  technique complet. Au passage, la première version de ce correctif
+  cassait silencieusement le web (une des nouvelles dépendances tire une
+  bibliothèque incompatible) - repéré uniquement en revérifiant le build
+  web après coup, corrigé en isolant le code Android dans un fichier à
+  part. Web, Android et Windows compilent tous les trois avec succès après
+  coup, mais **rien de tout ça n'a été exécuté sur un vrai téléphone ou
+  émulateur** (aucun disponible pour tester) - à considérer comme non
+  confirmé tant que ce n'est pas testé en conditions réelles au retour.
+- ~~Build desktop obsolète~~ - **fait**. Le dossier `dist/` contenait une
+  build Windows figée au 30 juillet (v1.0.18), bien antérieure à la
+  migration des paramètres compagnons (31 juillet) - ce qui explique
+  pourquoi l'appli de bureau ne demandait plus le bon code PIN ni les bons
+  comptes. Nouvelle build (portable + installeur) régénérée à jour.
+
 - ~~Simulateur de budget : mois clos, récurrent, budget fixé, sous-catégories~~
   - **fait**. Chantier important sur le simulateur (scénarios) livré cet
   après-midi :

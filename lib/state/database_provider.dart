@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 
+import '../data/android_file_link.dart';
 import '../data/blank_database.dart';
 import '../data/db_backup.dart';
 import '../data/db_companion_settings.dart';
@@ -12,6 +13,13 @@ import '../data/mmex_repository.dart';
 import '../data/web_file_link.dart';
 import '../theme/app_theme.dart';
 import 'app_preferences.dart';
+
+/// True on Android specifically - deliberately not dart:io's Platform.isAndroid,
+/// which would fail to compile for web (this file also compiles there).
+/// defaultTargetPlatform is web-safe; kIsWeb is checked first everywhere
+/// this is used since defaultTargetPlatform on web reflects the browser's
+/// own OS, not "there is no native platform here".
+bool get _isAndroid => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 /// Device/browser-local - deliberately the only thing left in
 /// AppPreferences by this provider. Everything else (theme, forecast day,
@@ -65,6 +73,7 @@ class DatabaseProvider extends ChangeNotifier {
   MmexDatabase? _db;
   MmexRepository? _repository;
   WebFileLink? _webFileLink;
+  AndroidFileLink? _androidFileLink;
   DbStatus status = DbStatus.none;
   String? errorMessage;
   String? currentLabel;
@@ -74,10 +83,11 @@ class DatabaseProvider extends ChangeNotifier {
   String? reconnectFileName;
 
   /// True once this session has actually written to the real file on disk
-  /// at least once (native always; web only with File System Access
-  /// support). Purely informational, e.g. to explain why "Telecharger une
-  /// copie" may or may not be necessary.
-  bool get isDirectlyPersisted => !kIsWeb || _webFileLink != null;
+  /// at least once (desktop always; web/Android only with a live file link
+  /// - see WebFileLink/AndroidFileLink). Purely informational, e.g. to
+  /// explain why "Telecharger une copie" may or may not be necessary.
+  bool get isDirectlyPersisted =>
+      _isAndroid ? _androidFileLink != null : (!kIsWeb || _webFileLink != null);
 
   /// The current database's companion settings (see
   /// db_companion_settings.dart) - null if none is open, or (web) if its
@@ -218,10 +228,11 @@ class DatabaseProvider extends ChangeNotifier {
   MmexRepository? get repository => _repository;
   bool get isReady => status == DbStatus.ready && _repository != null;
 
-  /// Reopens the last used database: by path on native/desktop (re-read
-  /// fresh from disk every time), or by remembered File System Access
-  /// handle on web. Never falls back to a cached byte snapshot - if
-  /// nothing can be reopened live, the picker screen is shown instead.
+  /// Reopens the last used database: by path on desktop (re-read fresh from
+  /// disk every time), by remembered File System Access handle on web, or
+  /// by remembered Storage Access Framework folder grant on Android. Never
+  /// falls back to a cached byte snapshot - if nothing can be reopened
+  /// live, the picker screen is shown instead.
   Future<void> restoreLastDatabase() async {
     if (kIsWeb) {
       // Earlier versions cached a full byte snapshot here, which could show
@@ -256,6 +267,28 @@ class DatabaseProvider extends ChangeNotifier {
           notifyListeners();
           return;
       }
+    }
+
+    if (_isAndroid) {
+      // No "needs reconnect" state here unlike web - a persistable SAF
+      // grant survives across launches on its own; if it's ever gone
+      // (revoked, or the folder itself moved/deleted), tryRestore just
+      // returns null and the picker screen shows, same as never having
+      // opened anything - the user only needs to pick the folder again.
+      final link = await AndroidFileLink.tryRestore();
+      if (link == null) return;
+      status = DbStatus.loading;
+      notifyListeners();
+      try {
+        final bytes = await link.readBytes();
+        final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
+        await _finishOpeningAndroid(db, link);
+      } catch (e) {
+        status = DbStatus.error;
+        errorMessage = e.toString();
+      }
+      notifyListeners();
+      return;
     }
     final prefs = await AppPreferences.getInstance();
     final lastPath = prefs.getString(_prefsKeyLastPath);
@@ -329,7 +362,11 @@ class DatabaseProvider extends ChangeNotifier {
   /// Opens the platform file picker so the user can choose their .mmb file.
   /// On web, prefers the File System Access API (remembered + writable
   /// handle) when the browser supports it, falling back to a plain one-shot
-  /// byte read otherwise.
+  /// byte read otherwise. On Android, always goes through the Storage
+  /// Access Framework folder picker (see AndroidFileLink) rather than
+  /// FilePicker.pickFiles below - that call hands back a path to a private
+  /// cache copy on Android, never the real file (see CLAUDE.md/ROADMAP.md),
+  /// which is exactly the bug this whole path exists to avoid.
   Future<void> pickDatabaseFile() async {
     if (kIsWeb && WebFileLink.isSupported) {
       final link = await WebFileLink.pickAndRemember();
@@ -340,6 +377,31 @@ class DatabaseProvider extends ChangeNotifier {
         final bytes = await link.readBytes();
         final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
         await _finishOpeningWeb(db, link);
+      } catch (e) {
+        status = DbStatus.error;
+        errorMessage = e.toString();
+      }
+      notifyListeners();
+      return;
+    }
+
+    if (_isAndroid) {
+      AndroidFileLink? link;
+      try {
+        link = await AndroidFileLink.pickAndRemember();
+      } catch (e) {
+        status = DbStatus.error;
+        errorMessage = e.toString();
+        notifyListeners();
+        return;
+      }
+      if (link == null) return; // user cancelled the folder picker
+      status = DbStatus.loading;
+      notifyListeners();
+      try {
+        final bytes = await link.readBytes();
+        final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
+        await _finishOpeningAndroid(db, link);
       } catch (e) {
         status = DbStatus.error;
         errorMessage = e.toString();
@@ -379,12 +441,16 @@ class DatabaseProvider extends ChangeNotifier {
     }
   }
 
-  /// Desktop only (native file paths required): lets the user pick where
-  /// to create a brand-new, empty-but-functional .mmb file - the "New
-  /// Database" counterpart to [pickDatabaseFile]'s "open an existing one".
-  /// See [initializeBlankSchema] for what actually gets written.
+  /// Desktop only (a real file path is required to create a brand-new
+  /// file at a chosen location): lets the user pick where to create a
+  /// brand-new, empty-but-functional .mmb file - the "New Database"
+  /// counterpart to [pickDatabaseFile]'s "open an existing one". See
+  /// [initializeBlankSchema] for what actually gets written. Not offered on
+  /// Android for the same reason [pickDatabaseFile] needs AndroidFileLink -
+  /// a plain save-file path there would be just as disconnected from real
+  /// shared storage as the cache-copy bug this whole file works around.
   Future<void> createNewDatabase() async {
-    if (kIsWeb) return;
+    if (kIsWeb || _isAndroid) return;
     final path = await FilePicker.saveFile(
       dialogTitle: 'Créer une nouvelle base de données (.mmb)',
       fileName: 'MaBanque.mmb',
@@ -410,15 +476,28 @@ class DatabaseProvider extends ChangeNotifier {
   Timer? _writeBackDebounce;
 
   /// Set when the last attempt to write back to the real file on disk
-  /// (web, File System Access handle) failed - e.g. permission silently
-  /// revoked, the file locked by another program, disk full. Null means
-  /// either persistence isn't applicable (native, or no handle) or the
-  /// last write succeeded. Surfaced app-wide (see [HomeShell]) because a
-  /// failed save must never happen invisibly - the previous behaviour let
-  /// [writeBytes] fail with nobody ever finding out.
+  /// (web/Android, through a live file link) failed - e.g. permission
+  /// silently revoked, the file locked by another program, disk full. Null
+  /// means either persistence isn't applicable (desktop, or no link) or
+  /// the last write succeeded. Surfaced app-wide (see [HomeShell]) because
+  /// a failed save must never happen invisibly - the previous behaviour
+  /// let a write fail with nobody ever finding out.
   String? saveError;
 
-  Future<void> _writeBack(WebFileLink link, MmexDatabase db) async {
+  Future<void> _writeBackWeb(WebFileLink link, MmexDatabase db) async {
+    try {
+      await link.writeBytes(db.exportBytes());
+      if (saveError != null) {
+        saveError = null;
+        notifyListeners();
+      }
+    } catch (e) {
+      saveError = e.toString();
+      notifyListeners();
+    }
+  }
+
+  Future<void> _writeBackAndroid(AndroidFileLink link, MmexDatabase db) async {
     try {
       await link.writeBytes(db.exportBytes());
       if (saveError != null) {
@@ -435,10 +514,14 @@ class DatabaseProvider extends ChangeNotifier {
   /// the user (e.g. a "Réessayer" button), using the current in-memory
   /// state of the database (not just re-running the old attempt).
   void retrySave() {
-    final link = _webFileLink;
     final db = _db;
-    if (link != null && db != null) {
-      unawaited(_writeBack(link, db));
+    if (db == null) return;
+    final webLink = _webFileLink;
+    final androidLink = _androidFileLink;
+    if (webLink != null) {
+      unawaited(_writeBackWeb(webLink, db));
+    } else if (androidLink != null) {
+      unawaited(_writeBackAndroid(androidLink, db));
     }
   }
 
@@ -446,17 +529,25 @@ class DatabaseProvider extends ChangeNotifier {
   /// every screen watches this provider, so this is what makes sibling tabs
   /// kept alive by the bottom navigation's IndexedStack refresh their data.
   ///
-  /// On web with a File System Access handle, this is also what writes the
-  /// change straight back to the real file on disk (debounced), so it's
-  /// still there next time the file is reopened - exactly like native.
+  /// On web (File System Access handle) or Android (Storage Access
+  /// Framework grant), this is also what writes the change straight back to
+  /// the real file on disk (debounced), so it's still there next time the
+  /// file is reopened - exactly like desktop.
   void touch() {
     notifyListeners();
-    final link = _webFileLink;
     final db = _db;
-    if (link != null && db != null) {
+    if (db == null) return;
+    final webLink = _webFileLink;
+    final androidLink = _androidFileLink;
+    if (webLink != null) {
       _writeBackDebounce?.cancel();
       _writeBackDebounce = Timer(const Duration(milliseconds: 500), () {
-        unawaited(_writeBack(link, db));
+        unawaited(_writeBackWeb(webLink, db));
+      });
+    } else if (androidLink != null) {
+      _writeBackDebounce?.cancel();
+      _writeBackDebounce = Timer(const Duration(milliseconds: 500), () {
+        unawaited(_writeBackAndroid(androidLink, db));
       });
     }
   }
@@ -467,14 +558,19 @@ class DatabaseProvider extends ChangeNotifier {
 
   /// A dated snapshot of whatever was just opened, before any edits this
   /// session could touch it - a safety net independent of the user's own
-  /// backup habits. Must be called after [_webFileLink] reflects the link
-  /// (if any) just established, since web backups are written through it.
-  /// Never lets a backup failure (revoked folder access, read-only disk,
-  /// quota) block the app from being usable.
+  /// backup habits. Must be called after [_webFileLink]/[_androidFileLink]
+  /// reflects the link (if any) just established, since web/Android
+  /// backups are written through it. Never lets a backup failure (revoked
+  /// folder access, read-only disk, quota) block the app from being usable.
   void _backupNow(MmexDatabase db) {
     final bytes = db.exportBytes();
     if (kIsWeb) {
       final link = _webFileLink;
+      if (link == null) return;
+      unawaited(
+          link.writeBackup(bytes, backupFileName(db.label)).catchError((_) {}));
+    } else if (_isAndroid) {
+      final link = _androidFileLink;
       if (link == null) return;
       unawaited(
           link.writeBackup(bytes, backupFileName(db.label)).catchError((_) {}));
@@ -492,7 +588,7 @@ class DatabaseProvider extends ChangeNotifier {
     saveError = null;
   }
 
-  /// Native/desktop: finishes opening [db] - companion settings come from a
+  /// Desktop: finishes opening [db] - companion settings come from a
   /// sibling file next to it, always reachable (no permission to lack).
   Future<void> _finishOpeningNative(MmexDatabase db) async {
     await _swapDatabase(db);
@@ -511,6 +607,21 @@ class DatabaseProvider extends ChangeNotifier {
     _backupNow(db);
     final prefs = await DatabaseCompanionSettings.forWebLink(link);
     await _applyCompanionSettings(prefs, webLinkAvailableButUnreachable: prefs == null);
+    status = DbStatus.ready;
+  }
+
+  /// Android: finishes opening [db] through [link] - companion settings
+  /// come from a file in the same Storage Access Framework folder [link]
+  /// was granted (see AndroidFileLink), mirroring [_finishOpeningWeb]:
+  /// web's File System Access API and Android's SAF are the same shape of
+  /// constraint (no plain file path, but a real folder grant once
+  /// obtained), unlike desktop's [_finishOpeningNative].
+  Future<void> _finishOpeningAndroid(MmexDatabase db, AndroidFileLink link) async {
+    await _swapDatabase(db);
+    _androidFileLink = link;
+    _backupNow(db);
+    final prefs = await DatabaseCompanionSettings.forAndroidLink(link);
+    await _applyCompanionSettings(prefs);
     status = DbStatus.ready;
   }
 

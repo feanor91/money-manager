@@ -106,27 +106,31 @@ conceptually the same file.
 - The companion file (`money_manager_settings.dat`, AES-encrypted like the
   portable-desktop prefs file - see `EncryptedFilePreferences` in
   `lib/state/app_preferences.dart`, shared by both) sits in the **same
-  folder as the currently open `.mmb` file** - native via a plain sibling
+  folder as the currently open `.mmb` file** - desktop via a plain sibling
   path (`lib/data/db_companion_settings.dart`'s `forNativePath`), web via
   the directory handle already requested alongside the main file (see
   `WebFileLink.ensureDirectoryPermission`/`readCompanionFile`/
-  `writeCompanionFile`). Because it lives next to the database rather than
-  in this device's own storage, it automatically follows the database
-  everywhere that folder is synced to (this user's case: a Nextcloud-synced
-  folder) - one PIN, one set of preferences, on every device/browser that
-  opens that file, and it survives a "clear site data"/reinstall that would
-  wipe device-local storage.
+  `writeCompanionFile`), Android the same way via a Storage Access
+  Framework folder grant (see `AndroidFileLink`/`forAndroidLink` - **not**
+  `forNativePath`, despite Android otherwise being "native" too; see that
+  class's own doc comment for why). Because it lives next to the database
+  rather than in this device's own storage, it automatically follows the
+  database everywhere that folder is synced to (this user's case: a
+  Nextcloud-synced folder) - one PIN, one set of preferences, on every
+  device/browser that opens that file, and it survives a "clear site
+  data"/reinstall that would wipe device-local storage.
 - Currently living there: PIN hash/salt + lockout settings
   (`PinLockProvider`), palette, theme mode, forecast day, selected account,
   hidden accounts, account display order (all in `DatabaseProvider`).
 - **Must stay in `AppPreferences` (device-local) - not a style choice, a
-  hard technical necessity**: which database path to reopen at startup, and
-  (web) this browser's own remembered file/directory permissions. Both are
+  hard technical necessity**: which database path to reopen at startup,
+  (web) this browser's own remembered file/directory permissions, and
+  (Android) the remembered SAF folder URI + file name. All three are
   inherently per-device (a synced folder mounts at a different local path
-  per device; web File System Access permissions can't be exported/shared
-  across browsers by design) and have to be resolved *before* the companion
-  file's location is even known - there's no chicken-and-egg way around
-  this.
+  per device; web File System Access permissions and Android SAF grants
+  can't be exported/shared across browsers/devices by design) and have to
+  be resolved *before* the companion file's location is even known -
+  there's no chicken-and-egg way around this.
 - Consequence: `PinLockProvider` no longer has a standalone `load()` -
   `DatabaseProvider` calls `attachDatabase()` on it (wired in main.dart)
   every time the open database changes, and `app.dart`'s `_RootGate` now
@@ -162,6 +166,92 @@ there - don't assume it from the UI updating correctly.
 Related: `DatabaseProvider.saveError` surfaces write-*failure* (a red
 banner app-wide) - don't remove that, it's the fix for a previous
 silent-failure incident.
+
+## Android file access: never `FilePicker.pickFiles()` for the main database
+
+Discovered 2026-08-01: on Android, `file_picker`'s `pickFiles()` (used
+elsewhere in the app for things like importing) does **not** hand back a
+path to the real file the user picked - its own Kotlin source
+(`FileUtils.kt`'s `openFileStream`) always copies the picked document into
+this app's private cache directory first, and hands back a path to *that
+copy*. Every real MMEX app on this machine has always kept its actual
+`.mmb` in a Nextcloud-synced folder, and the bug this caused was severe:
+every read/write on Android silently went to the disconnected cache copy
+- the real synced file was never touched again after the first pick, and
+the companion settings file (see above) - being "a sibling of that copy" -
+lived there too, invisible to web/desktop. Real transactions entered on
+Android would sit only in that private cache, at real risk of silently
+vanishing (cache cleared by the OS, app reinstalled, or the file re-picked
+- any of which re-copies fresh from the still-frozen original, discarding
+everything entered on Android in between) - this was caught and fixed
+before the user had entered any real data there, but treat this as a
+near-miss, not a non-issue.
+
+The fix: `lib/data/android_file_link.dart`'s `AndroidFileLink`, an Android
+counterpart to `web_file_link.dart`'s `WebFileLink` (same shape
+deliberately - name/readBytes/writeBytes/writeBackup/readCompanionFile/
+writeCompanionFile - but its own separate abstract class, not a shared
+interface, so fixing Android could never risk regressing the
+already-working web path). Built on `saf_util`+`saf_stream` (Storage
+Access Framework): picks a *folder* (`ACTION_OPEN_DOCUMENT_TREE` under the
+hood, via `SafUtil.pickDirectory(persistablePermission: true)`), not a
+single file - SAF only grants sibling access at the folder level, and a
+settings file needs to live next to the .mmb - then finds the one
+`.mmb`/`.db`/`.sqlite` file inside it. The folder URI + file name are
+remembered in `AppPreferences` (device-local, like the web handle) so
+`AndroidFileLink.tryRestore()` can reopen it on the next launch without
+re-prompting, as long as `SafUtil.hasPersistedPermission` still says yes.
+`DatabaseProvider` wires this in exactly parallel to the web path -
+`_finishOpeningAndroid`/`_writeBackAndroid`/`_isAndroid` alongside
+`_finishOpeningWeb`/`_writeBackWeb`/`kIsWeb` - `pickDatabaseFile()`/
+`restoreLastDatabase()`/`touch()`/`_backupNow()` all branch three ways now
+(web / Android / desktop), never two.
+
+**`android_file_link.dart` itself must stay a thin conditional-import
+shell** (`android_file_link_io.dart` for real platforms,
+`android_file_link_stub.dart` on web - same `if (dart.library.js_interop)`
+mechanism `web_file_link.dart` uses, just with the default/override sides
+swapped) - **never inline the real implementation directly into it or
+import it eagerly from a file that also compiles for web.** This isn't a
+style preference: `saf_stream`'s Android implementation pulls in
+`package:jni` → `dart:ffi`, which doesn't exist on web at all, and the
+first version of this fix (importing `saf_util`/`saf_stream` directly from
+a plain `android_file_link.dart` that `database_provider.dart` - a
+web-compiled file - imported unconditionally) broke `flutter build web`
+outright with a hard `dart:ffi` compile error, caught by chance only
+because the web build was re-verified after finishing the Android side.
+Any future Android-only dependency added here needs the same isolation.
+
+Deliberately whole-file byte read/write (`readFileBytes`/`writeFileBytes`,
+`overwrite: true`), not a direct SQLite-over-file-descriptor trick some
+SAF integrations attempt (`saf_util` does expose `getFileDescriptor`,
+which would make it technically possible via a `/proc/self/fd/N` path) -
+a cloud-storage-backed SAF provider (Nextcloud's own Android app, in this
+app's real usage) may not support genuine random access the way sqlite3
+needs, and getting that wrong risks silent corruption instead of a clean
+error. Whole-file read/write is exactly what the web version already does
+successfully against the same kind of synced folder, so this reuses a
+proven pattern rather than a novel, untestable one.
+
+**This was built and verified by compiling successfully (`flutter build
+apk --debug` and `--release`, both clean) but never run on a real device
+or emulator - neither was available in the environment it was built in.**
+Treat it as unverified at runtime until tested on an actual phone against
+a real Nextcloud-synced folder: does the folder picker show up and let you
+navigate into a synced folder, does `hasPersistedPermission` actually
+survive an app restart, does writing back actually reach the synced file
+(check its modified timestamp from another device), does the companion
+settings file appear in the synced folder and get picked up by web/desktop.
+
+Unrelated Windows-only build issue hit and fixed while verifying this:
+Kotlin's incremental compiler intermittently fails with "Could not close
+incremental caches" on this machine for several plugins at once (not
+specific to the packages added for this fix) - worked around via
+`android/gradle.properties`'s `kotlin.incremental=false` (full, slower,
+compiles instead). Also bumped the Kotlin Gradle plugin
+(`android/settings.gradle.kts`) from 2.0.20 to 2.3.20, which a separate,
+unrelated internal-compiler-error was blocking `package_info_plus` (added
+earlier the same day) from building at all until fixed.
 
 ## Android release signing
 

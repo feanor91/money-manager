@@ -9,7 +9,7 @@
 ; (run from the App directory so the relative paths below resolve)
 
 #define MyAppName "Money Manager"
-#define MyAppVersion "1.0.18"
+#define MyAppVersion "1.0.26"
 #define MyAppPublisher "Money Manager"
 #define MyAppExeName "money_manager.exe"
 #define MyReleaseDir "..\build\windows\x64\runner\Release"
