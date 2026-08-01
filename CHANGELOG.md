@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.30] - 2026-08-01
+
+- fix(web): stop rendering the PIN field as a real password input
+
 ## [1.0.29] - 2026-08-01
 
 - fix(backup): use the same  folder name on desktop as web/Android
