@@ -31,6 +31,28 @@ bool get _isAndroid => !kIsWeb && defaultTargetPlatform == TargetPlatform.androi
 /// can't move there.
 const _prefsKeyLastPath = 'mmex_last_db_path';
 
+/// Turns an Android SAF read failure into an actionable French message.
+/// `NetworkOnMainThreadException` here does NOT mean this app did networking
+/// on its own main thread - it's a long-standing bug in Nextcloud's Android
+/// app itself (nextcloud/android#1975 and several later duplicates; also
+/// hits other apps like Signal): serving a file through its DocumentsProvider
+/// that isn't already cached locally requires an on-demand network fetch,
+/// which Nextcloud performs on its own main thread and crashes doing so -
+/// that crash is what comes back to us as a remote exception. Nothing in
+/// this app's code can fix Nextcloud's provider; the real fix is making the
+/// file available offline in Nextcloud first.
+String _androidReadErrorMessage(Object e) {
+  if (e.toString().contains('NetworkOnMainThreadException')) {
+    return 'Nextcloud n\'a pas réussi à fournir ce fichier (bug connu de '
+        'l\'application Nextcloud elle-même, pas de Money Manager) - il '
+        'doit d\'abord être disponible hors-ligne sur ce téléphone. Dans '
+        'l\'application Nextcloud, ouvrez ce dossier, activez sa '
+        'disponibilité hors-ligne (appui long sur le dossier ou le fichier '
+        '> "Disponible hors-ligne"), puis réessayez ici.';
+  }
+  return e.toString();
+}
+
 enum DbStatus {
   none,
   loading,
@@ -285,7 +307,7 @@ class DatabaseProvider extends ChangeNotifier {
         await _finishOpeningAndroid(db, link);
       } catch (e) {
         status = DbStatus.error;
-        errorMessage = e.toString();
+        errorMessage = _androidReadErrorMessage(e);
       }
       notifyListeners();
       return;
@@ -404,7 +426,7 @@ class DatabaseProvider extends ChangeNotifier {
         await _finishOpeningAndroid(db, link);
       } catch (e) {
         status = DbStatus.error;
-        errorMessage = e.toString();
+        errorMessage = _androidReadErrorMessage(e);
       }
       notifyListeners();
       return;

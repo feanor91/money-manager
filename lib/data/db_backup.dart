@@ -3,8 +3,11 @@ import 'db_backup_stub.dart' if (dart.library.io) 'db_backup_io.dart' as impl;
 /// Saves a timestamped copy of the database, taken right when it's opened
 /// (see [DatabaseProvider._swapDatabase]) - a lightweight, always-on safety
 /// net independent of whatever external backup habits the user does or
-/// doesn't have for the real file. Writes a real file into a `backups`
-/// folder next to the source .mmb.
+/// doesn't have for the real file. Writes a real file into a `backup`
+/// folder next to the source .mmb - same folder name as
+/// WebFileLink/AndroidFileLink's own writeBackup, deliberately, so every
+/// platform's automatic snapshots land in one place instead of splitting
+/// across `backup`/`backups` depending which app last wrote one.
 ///
 /// Native (desktop/Android) only - on web, [DatabaseProvider] instead calls
 /// [WebFileLink.writeBackup], since the destination there depends on
