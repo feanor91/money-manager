@@ -5,7 +5,15 @@ courses, pas des engagements.
 
 ## Demandées
 
-(aucune pour l'instant)
+- **Assistant de création de base pour un nouvel utilisateur** (important,
+  demandé le 2026-08-01, en vue d'un partage futur du logiciel avec
+  d'autres personnes - pas pour l'utilisateur actuel). Actuellement,
+  "Créer une nouvelle base" (desktop uniquement) ne demande rien du tout :
+  elle crée silencieusement une base minimale vide (devise EUR, catégories
+  par défaut MMEX - voir `blank_database.dart`), sans nom ni premier
+  compte. Ça n'a de sens que pour quelqu'un qui sait déjà ce qu'il fait -
+  pour un nouvel utilisateur, il faut au minimum lui demander un nom et le
+  laisser créer un premier compte avant de le lâcher dans une appli vide.
 
 ## Suggestions (à valider avant de s'y lancer)
 
