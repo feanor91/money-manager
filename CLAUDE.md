@@ -75,6 +75,25 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
    success** (files copied), only exit codes ≥8 are real robocopy
    failures. Don't treat 1 as an error.
 
+`\\Excelsior\web\mmex` is what actually serves `https://bteuile.ddns.net:8443/`
+(confirmed 2026-08-01) - the user's real day-to-day URL, reachable outside
+the home network, separate from the plain file share path. Same target,
+two access routes - a deploy from the work PC (where the NAS share itself
+isn't reachable, see the deploy skill) also can't reach this URL, same
+caveat.
+
+**After redeploying, a plain page refresh can still show the old build.**
+Confirmed 2026-08-01 chasing a fix that looked like it hadn't shipped: no
+service worker was registered (checked via `navigator.serviceWorker.
+getRegistrations()` - empty) and Cache Storage was empty too, so it isn't
+Flutter's PWA caching - it's the browser's ordinary HTTP cache for
+`main.dart.js`/`flutter_bootstrap.js`, which this server doesn't appear to
+send cache-busting headers for. Loading the URL with any throwaway query
+string (`?x=1`) forces a real fetch and reliably shows the current build -
+use that to verify a deploy actually landed before concluding a fix
+didn't work, and tell the user to do the same (or a real hard-refresh) if
+they still see old behavior right after a deploy.
+
 ## App-owned database schema
 
 MMEX's own tables (`CHECKINGACCOUNT_V1`, `BILLSDEPOSITS_V1`,
