@@ -157,6 +157,14 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                   focusNode: _focusNode,
                   autofocus: true,
                   obscureText: true,
+                  // Without this, the browser's own password manager (web
+                  // only - obscureText renders as a real <input
+                  // type="password"> under the hood) offers to autofill a
+                  // saved password here, which can leave the field looking
+                  // pre-filled and fighting the user's own typing/deletes.
+                  // This is a PIN, not a saved password - opt out entirely.
+                  autofillHints: const [],
+                  enableSuggestions: false,
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 24, letterSpacing: 8),
@@ -264,6 +272,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
               controller: _pinController,
               autofocus: true,
               obscureText: true,
+              autofillHints: const [],
+              enableSuggestions: false,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Nouveau code PIN'),
             ),
@@ -271,6 +281,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             TextField(
               controller: _confirmController,
               obscureText: true,
+              autofillHints: const [],
+              enableSuggestions: false,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Confirmer le code'),
             ),

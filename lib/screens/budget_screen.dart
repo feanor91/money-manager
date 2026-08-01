@@ -1964,7 +1964,7 @@ class _CategoryBarRow extends StatelessWidget {
                   Expanded(
                     child: Text(
                       label,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 13,
