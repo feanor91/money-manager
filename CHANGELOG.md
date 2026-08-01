@@ -3,6 +3,12 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.27] - 2026-08-01
+
+- fix(android): stop reading/writing a disconnected private-cache copy of the .mmb
+- feat(budget): fix/défixer scenarios, real+virtual subcategories, closed-month averages
+- Update roadmap with new budget and export suggestions
+
 ## [1.0.26] - 2026-07-31
 
 - docs(roadmap): actually log the scenario simulator (missed in the last commit)
