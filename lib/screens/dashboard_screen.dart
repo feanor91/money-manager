@@ -11,6 +11,7 @@ import '../widgets/budget_preview_card.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/category_spend_analyzer.dart';
 import '../widgets/forecast_chart.dart';
+import '../widgets/nl_query_dialog.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show openAccountEditor;
@@ -172,6 +173,15 @@ class DashboardScreen extends StatelessWidget {
                   accountId: selectedAccountId,
                   categories: categories.values.toList(),
                   currency: currency,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.chat_bubble_outline),
+                tooltip: 'Poser une question',
+                onPressed: () => openNlQueryDialog(
+                  context: context,
+                  repo: repo,
+                  defaultAccountId: selectedAccountId,
                 ),
               ),
               IconButton(

@@ -47,6 +47,9 @@ dependencies:
   saf_stream: ^4.0.1
   http: ^1.6.0
 
+  # IA locale (Windows uniquement, optionnelle) - inference GGUF via llama.cpp
+  llama_cpp_dart: ^0.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

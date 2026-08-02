@@ -1065,6 +1065,58 @@ class MmexRepository {
     return totals;
   }
 
+  /// Same idea as [categorySpendForPeriod] but for a single payee instead
+  /// of every category - "combien j'ai dépensé chez X" (natural-language
+  /// query feature). Withdrawals only, same exclusions (voided, deleted).
+  double payeeSpendForPeriod(int payeeId, DateTime start, DateTime end, {int? accountId}) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "TRANSCODE = 'Withdrawal'",
+      "PAYEEID = ?",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end), payeeId];
+    if (accountId != null) {
+      where.add('ACCOUNTID = ?');
+      params.add(accountId);
+    }
+    final rows = db.query(
+      'SELECT TRANSAMOUNT FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')}',
+      params,
+    );
+    var total = 0.0;
+    for (final row in rows) {
+      total += (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+    }
+    return total;
+  }
+
+  /// The [limit] largest withdrawals within [start, end) - "mes plus
+  /// grosses dépenses de tel mois" (natural-language query feature).
+  /// Ordered by amount descending; same exclusions as [categorySpendForPeriod].
+  List<MoneyTransaction> topExpenses(DateTime start, DateTime end, {int? accountId, int limit = 5}) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "TRANSCODE = 'Withdrawal'",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    if (accountId != null) {
+      where.add('ACCOUNTID = ?');
+      params.add(accountId);
+    }
+    final rows = db.query(
+      'SELECT * FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')} '
+      'ORDER BY TRANSAMOUNT DESC LIMIT ?',
+      [...params, limit],
+    );
+    return rows.map(MoneyTransaction.fromRow).toList();
+  }
+
   /// Most recent withdrawal date per category within [start, end) for
   /// [accountId] - used to flag a history-based budget suggestion whose
   /// evidence is stale (see BudgetScreen's suggestions dialog): a category

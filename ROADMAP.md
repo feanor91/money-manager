@@ -46,6 +46,45 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Questions en langage naturel ("quelles ont été mes dépenses en
+  juillet ?")~~ - **fait pour la partie sans IA, IA locale Windows en
+  attente de vérification sur une vraie machine (2026-08-02)**. Nouvelle
+  icône bulle de dialogue sur le tableau de bord ("Poser une question"),
+  ouvre un dialogue texte libre. Deux moteurs, avec repli automatique du
+  second vers le premier :
+  - **Analyseur à règles** (`lib/services/nl_query/`) : gratuit, 100%
+    local, web/Android/desktop - reconnaît une liste de tournures
+    françaises courantes (dépenses/revenus par période, solde d'un compte,
+    plus grosses dépenses, dépenses chez un tiers) et les périodes
+    correspondantes (mois nommés, "le mois dernier", "cette année", "les N
+    derniers mois/jours", plage explicite JJ/MM/AAAA...), résolues contre
+    les vraies catégories/comptes/tiers de la base. Le calcul reste
+    toujours les mêmes méthodes déterministes de `MmexRepository` - aucun
+    risque de chiffre inventé. Entièrement testé (`test/nl_query/`).
+  - **IA locale optionnelle (Windows uniquement)** : llama.cpp via le
+    paquet `llama_cpp_dart`, modèle GGUF (Qwen2.5 3B ou 7B, au choix)
+    téléchargé à la demande depuis Hugging Face (jamais imposé), IA
+    activable/désactivable dans Paramètres. Le modèle ne fait jamais que
+    de l'extraction d'intention (quelle catégorie/compte/tiers/période est
+    mentionné) vers le même format que l'analyseur à règles - jamais de
+    calcul ni de date précise laissés au modèle, jamais de SQL généré : la
+    réponse finale passe toujours par le même code déterministe.
+    **Blocage connu, non résolu depuis cet environnement (conteneur Linux
+    sans machine Windows)** : ni `llama_cpp_dart` ni `llamadart` (l'autre
+    paquet Dart candidat) ne fournissent de binaire Windows prêt à
+    l'emploi aujourd'hui - `llama_cpp_dart` ne fournit que des bibliothèques
+    macOS/iOS précompilées, et son propre sous-module `llama.cpp` (requis
+    pour compiler sur Windows) n'est même pas inclus dans le paquet publié
+    sur pub.dev. En pratique, l'utilisateur doit récupérer manuellement un
+    binaire llama.cpp compatible et le placer dans un dossier indiqué par
+    l'écran Paramètres (voir `local_llm_manager_io.dart`) - étape
+    documentée dans l'appli, mais pas automatisée, et le vrai test
+    (chargement du modèle, qualité du JSON produit) n'a jamais pu être fait
+    en conditions réelles depuis cette session. `flutter analyze`/`flutter
+    test`/`flutter build web` vérifiés propres (le code touche
+    `dart:ffi` via un import conditionnel comme pour le correctif Android
+    SAF) ; `flutter build windows` jamais tenté (pas de machine Windows
+    disponible ici non plus).
 - ~~Vérification/installation automatique des mises à jour (desktop)~~ -
   **fait, vérification en direct en attente (2026-08-02)**. Au démarrage,
   vérification silencieuse en arrière-plan de la dernière release GitHub

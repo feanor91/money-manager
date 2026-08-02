@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/local_llm_settings_card.dart';
 import 'categories_screen.dart';
 import 'database_diagnostics_screen.dart';
 import 'pin_lock_screen.dart';
@@ -172,6 +173,7 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ),
+          const LocalLlmSettingsCard(),
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: () =>
