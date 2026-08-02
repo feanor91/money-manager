@@ -13,8 +13,11 @@ courses, pas des engagements.
   par défaut MMEX - voir `blank_database.dart`), sans nom ni premier
   compte. Ça n'a de sens que pour quelqu'un qui sait déjà ce qu'il fait -
   pour un nouvel utilisateur, il faut au minimum lui demander un nom et le
-  laisser créer un premier compte avant de le lâcher dans une appli vide.
-
+  laisser créer un premier compte avant de le lâcher dans une appli vide, et saisir le solde initial.
+- **UI**
+- - Ajouter la possibilité de saisir une transaction a partir du tableau de bord
+  - Déplacer l'icône budget après l'icône transaction dans la barre du bas
+    
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
@@ -31,8 +34,8 @@ courses, pas des engagements.
   définitive une fois confirmée, pas de filet de rattrapage au-delà des
   sauvegardes automatiques).
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
-- Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie
-- ?...)
+- Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie ?...)
+- Export csv des différents budgets
 
 ## Priorité basse
 
