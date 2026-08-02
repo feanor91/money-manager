@@ -3,6 +3,12 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.32] - 2026-08-02
+
+- feat(dashboard): quick transaction entry, reordered nav, first-account onboarding
+- Update roadmap with onboarding and UI changes
+- docs: note a first-run setup assistant as a requested future item
+
 ## [1.0.31] - 2026-08-01
 
 - fix(desktop): stop silently creating an empty database on a missing path
