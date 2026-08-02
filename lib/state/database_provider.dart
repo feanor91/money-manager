@@ -58,6 +58,20 @@ String _androidReadErrorMessage(Object e) {
   return e.toString();
 }
 
+/// Turns a web file-restore failure into an actionable French message. The
+/// raw DOMException (e.g. "NotFoundError: A requested file or directory
+/// could not be found...") is what a renamed/moved/deleted remembered file
+/// throws - same underlying situation as the desktop "fichier introuvable"
+/// message, just a different exception shape on web.
+String _webReadErrorMessage(Object e) {
+  if (e.toString().contains('NotFoundError')) {
+    return 'Le fichier mémorisé est introuvable (renommé, déplacé ou '
+        'supprimé depuis la dernière fois). Choisissez-le à nouveau sous '
+        'son nouveau nom/emplacement, ou un autre fichier.';
+  }
+  return e.toString();
+}
+
 enum DbStatus {
   none,
   loading,
@@ -289,7 +303,7 @@ class DatabaseProvider extends ChangeNotifier {
             await _finishOpeningWeb(db, link);
           } catch (e) {
             status = DbStatus.error;
-            errorMessage = e.toString();
+            errorMessage = _webReadErrorMessage(e);
           }
           notifyListeners();
           return;
@@ -340,7 +354,7 @@ class DatabaseProvider extends ChangeNotifier {
       await _finishOpeningWeb(db, link);
     } catch (e) {
       status = DbStatus.error;
-      errorMessage = e.toString();
+      errorMessage = _webReadErrorMessage(e);
     }
     notifyListeners();
   }
@@ -468,16 +482,41 @@ class DatabaseProvider extends ChangeNotifier {
     }
   }
 
-  /// Desktop only (a real file path is required to create a brand-new
-  /// file at a chosen location): lets the user pick where to create a
-  /// brand-new, empty-but-functional .mmb file - the "New Database"
-  /// counterpart to [pickDatabaseFile]'s "open an existing one". See
-  /// [initializeBlankSchema] for what actually gets written. Not offered on
-  /// Android for the same reason [pickDatabaseFile] needs AndroidFileLink -
-  /// a plain save-file path there would be just as disconnected from real
-  /// shared storage as the cache-copy bug this whole file works around.
+  /// Lets the user pick where to create a brand-new, empty-but-functional
+  /// .mmb file - the "New Database" counterpart to [pickDatabaseFile]'s
+  /// "open an existing one". See [initializeBlankSchema] for what actually
+  /// gets written. Not offered on Android for the same reason
+  /// [pickDatabaseFile] needs AndroidFileLink - a plain save-file path
+  /// there would be just as disconnected from real shared storage as the
+  /// cache-copy bug this whole file works around.
+  ///
+  /// Web needed its own path here (added 2026-08-02, after a first-time web
+  /// user with no existing .mmb had no way to get started at all - only
+  /// "Choisir un fichier .mmb" was ever offered on web): there's no
+  /// arbitrary filesystem path to hand `openFromPath`, so this instead asks
+  /// the browser's own save-file picker where to put it, builds the blank
+  /// schema in the same in-memory sqlite3 (wasm) database `openFromBytes`
+  /// always uses on web, then writes those bytes to the chosen location.
   Future<void> createNewDatabase() async {
-    if (kIsWeb || _isAndroid) return;
+    if (_isAndroid) return;
+    if (kIsWeb) {
+      if (!WebFileLink.isSupported) return;
+      final link = await WebFileLink.pickLocationForNewFile('MaBanque.mmb');
+      if (link == null) return; // user cancelled
+      status = DbStatus.loading;
+      notifyListeners();
+      try {
+        final db = await MmexDatabase.openFromBytes(const [], label: link.name);
+        await initializeBlankSchema(db);
+        await link.writeBytes(db.exportBytes());
+        await _finishOpeningWeb(db, link);
+      } catch (e) {
+        status = DbStatus.error;
+        errorMessage = e.toString();
+      }
+      notifyListeners();
+      return;
+    }
     final path = await FilePicker.saveFile(
       dialogTitle: 'Créer une nouvelle base de données (.mmb)',
       fileName: 'MaBanque.mmb',

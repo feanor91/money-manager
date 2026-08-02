@@ -8,6 +8,7 @@ import '../models/bill_deposit.dart';
 import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import '../state/database_provider.dart';
+import '../widgets/update_prompt.dart';
 import 'accounts_screen.dart';
 import 'budget_screen.dart';
 import 'dashboard_screen.dart';
@@ -33,8 +34,8 @@ class _HomeShellState extends State<HomeShell> {
 
   static const _screens = [
     DashboardScreen(),
-    BudgetScreen(),
     TransactionsScreen(),
+    BudgetScreen(),
     RecurringScreen(),
     AccountsScreen(),
   ];
@@ -43,6 +44,8 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _runRecurringCatchUp());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => checkForUpdatesAndPrompt(context));
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _version = info.version);
     });
@@ -100,8 +103,8 @@ class _HomeShellState extends State<HomeShell> {
             onDestinationSelected: (i) => setState(() => _index = i),
             destinations: const [
               NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Accueil'),
-              NavigationDestination(icon: Icon(Icons.pie_chart_outline), selectedIcon: Icon(Icons.pie_chart), label: 'Budget'),
               NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Transactions'),
+              NavigationDestination(icon: Icon(Icons.pie_chart_outline), selectedIcon: Icon(Icons.pie_chart), label: 'Budget'),
               NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Récurrentes'),
               NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
             ],

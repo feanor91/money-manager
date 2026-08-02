@@ -4,6 +4,9 @@ bool get isSupported => false;
 
 Future<WebFileLink?> pickAndRemember() => throw UnsupportedError('Web-only.');
 
+Future<WebFileLink?> pickLocationForNewFile(String suggestedName) =>
+    throw UnsupportedError('Web-only.');
+
 Future<WebFileRestoreResult> tryRestore() async =>
     const WebFileRestoreResult(WebFileRestoreStatus.none);
 

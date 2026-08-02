@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../data/web_file_link.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 
@@ -66,10 +67,14 @@ class DbPickerScreen extends StatelessWidget {
                       icon: const Icon(Icons.folder_open),
                       label: const Text('Choisir un fichier .mmb'),
                     ),
-                    // Desktop only - the web build has no arbitrary
-                    // filesystem access to create a new file at a chosen
-                    // path (see DatabaseProvider.createNewDatabase).
-                    if (!kIsWeb) ...[
+                    // Desktop: always available. Web: only when the
+                    // browser exposes the File System Access API (Chrome/
+                    // Edge - see WebFileLink.isSupported/pickLocationForNewFile);
+                    // otherwise there's no way to choose a save location at
+                    // all, so the button would just silently do nothing.
+                    // Android: not offered - see DatabaseProvider.createNewDatabase.
+                    if (!(!kIsWeb && defaultTargetPlatform == TargetPlatform.android) &&
+                        (!kIsWeb || WebFileLink.isSupported)) ...[
                       const SizedBox(height: 12),
                       OutlinedButton.icon(
                         onPressed: () =>

@@ -25,6 +25,14 @@ external JSPromise<JSArray<web.FileSystemFileHandle>> _showOpenFilePicker();
 @JS('showDirectoryPicker')
 external JSPromise<web.FileSystemDirectoryHandle> _showDirectoryPicker();
 
+@JS('showSaveFilePicker')
+external JSPromise<web.FileSystemFileHandle> _showSaveFilePicker(
+    [JSObject? options]);
+
+extension type _SaveFilePickerOptions._(JSObject _) implements JSObject {
+  external factory _SaveFilePickerOptions({String suggestedName});
+}
+
 extension _FileSystemHandlePermissions on web.FileSystemHandle {
   external JSPromise<JSString> queryPermission([JSObject? descriptor]);
   external JSPromise<JSString> requestPermission([JSObject? descriptor]);
@@ -118,6 +126,30 @@ Future<WebFileLink?> pickAndRemember() async {
   // again. Optional and best-effort - if the browser refuses a second
   // picker in this chain, or the user cancels/picks the wrong folder,
   // backups are simply skipped rather than failing the whole file pick.
+  web.FileSystemDirectoryHandle? dirHandle;
+  try {
+    dirHandle = await _showDirectoryPicker().toDart;
+    await _storeDirHandle(dirHandle);
+  } catch (_) {
+    dirHandle = null;
+  }
+
+  return _WebFileLinkImpl(handle, dirHandle);
+}
+
+Future<WebFileLink?> pickLocationForNewFile(String suggestedName) async {
+  if (!isSupported) return null;
+  final web.FileSystemFileHandle handle;
+  try {
+    handle = await _showSaveFilePicker(
+            _SaveFilePickerOptions(suggestedName: suggestedName))
+        .toDart;
+  } catch (_) {
+    return null; // user cancelled the save dialog
+  }
+  await _storeHandle(handle);
+
+  // Same best-effort folder-access ask as pickAndRemember, for backups.
   web.FileSystemDirectoryHandle? dirHandle;
   try {
     dirHandle = await _showDirectoryPicker().toDart;

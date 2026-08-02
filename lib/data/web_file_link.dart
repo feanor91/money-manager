@@ -41,6 +41,13 @@ abstract class WebFileLink {
   /// and returns a link to it. Returns null if the user cancelled.
   static Future<WebFileLink?> pickAndRemember() => impl.pickAndRemember();
 
+  /// Lets the user choose *where* to save a brand-new file (the web
+  /// counterpart to desktop's `FilePicker.saveFile` in createNewDatabase) -
+  /// nothing is written yet, the caller still has to [writeBytes]. Returns
+  /// null if the user cancelled. [suggestedName] pre-fills the save dialog.
+  static Future<WebFileLink?> pickLocationForNewFile(String suggestedName) =>
+      impl.pickLocationForNewFile(suggestedName);
+
   /// Attempts to reuse the handle remembered from a previous session
   /// without showing any picker UI.
   static Future<WebFileRestoreResult> tryRestore() => impl.tryRestore();

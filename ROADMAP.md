@@ -5,19 +5,13 @@ courses, pas des engagements.
 
 ## Demandées
 
-- **Assistant de création de base pour un nouvel utilisateur** (important,
-  demandé le 2026-08-01, en vue d'un partage futur du logiciel avec
-  d'autres personnes - pas pour l'utilisateur actuel). Actuellement,
-  "Créer une nouvelle base" (desktop uniquement) ne demande rien du tout :
-  elle crée silencieusement une base minimale vide (devise EUR, catégories
-  par défaut MMEX - voir `blank_database.dart`), sans nom ni premier
-  compte. Ça n'a de sens que pour quelqu'un qui sait déjà ce qu'il fait -
-  pour un nouvel utilisateur, il faut au minimum lui demander un nom et le
-  laisser créer un premier compte avant de le lâcher dans une appli vide, et saisir le solde initial.
-- **UI**
-- - Ajouter la possibilité de saisir une transaction a partir du tableau de bord
-  - Déplacer l'icône budget après l'icône transaction dans la barre du bas
-    
+- **Vérification/installation des mises à jour côté Android** (suite du
+  2026-08-02). La version desktop est faite (voir Récemment fait) ; Android
+  a besoin de son propre déclencheur d'installation natif
+  (`REQUEST_INSTALL_PACKAGES` + `FileProvider` dans `AndroidManifest.xml`),
+  volontairement traité à part plutôt que mélangé au changement desktop, vu
+  les frictions Kotlin/Gradle déjà rencontrées sur ce projet le même jour.
+
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
@@ -51,6 +45,54 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Vérification/installation automatique des mises à jour (desktop)~~ -
+  **fait, vérification en direct en attente (2026-08-02)**. Au démarrage,
+  vérification silencieuse en arrière-plan de la dernière release GitHub
+  (`services/update_checker.dart`) ; si une version plus récente existe,
+  boîte de dialogue "Version X.X.X disponible, installer ?" avec les notes
+  de version, puis téléchargement + lancement de l'installeur Windows et
+  fermeture de l'appli (l'installeur prend le relais). Rien ne s'affiche si
+  déjà à jour, et un échec de vérification (hors-ligne...) reste
+  totalement silencieux plutôt que de gêner le démarrage. Web exclu
+  (rien à installer) ; Android en suite séparée (voir Demandées). Logique
+  de comparaison de version testée unitairement
+  (`test/update_checker_test.dart`) ; `flutter build web`/`flutter build
+  windows` vérifiés propres tous les deux (le code touche un import
+  conditionnel `dart:io`, comme pour le correctif Android plus tôt le même
+  jour) - le vrai scénario "une mise à jour existe, cliquer Installer"
+  reste à tester en conditions réelles.
+- ~~"Créer une nouvelle base" absent sur le web~~ - **fait**. Signalé le
+  2026-08-02 : un nouvel utilisateur web sans fichier `.mmb` existant
+  n'avait aucun moyen de commencer (seul "Choisir un fichier .mmb" était
+  proposé, "Créer une nouvelle base" était desktop uniquement). Le web a
+  maintenant son propre chemin de création (`WebFileLink.
+  pickLocationForNewFile`, le sélecteur "enregistrer sous" du navigateur)
+  qui construit la même base minimale que sur desktop. Au passage, le
+  message d'erreur brut (`NotFoundError: ...`) affiché quand un fichier
+  mémorisé est renommé/déplacé est remplacé par un message clair, côté web
+  comme desktop.
+- ~~Assistant de création de base pour un nouvel utilisateur~~ - **fait,
+  vérification en direct par l'utilisateur en attente (2026-08-02)**.
+  "Créer une nouvelle base" (desktop) crée toujours une base minimale vide
+  (devise EUR, catégories par défaut MMEX) sans rien demander - c'est
+  intentionnel et inchangé. Ce qui change : le Tableau de bord distingue
+  maintenant "base neuve, zéro compte du tout" de "tous les comptes sont
+  masqués" (deux situations qui partageaient le même écran avant, avec le
+  mauvais message pour la première) - la base neuve affiche un message de
+  bienvenue et un bouton "Créer mon premier compte" (nom, type, solde
+  initial - même formulaire que Paramètres > Comptes, extrait en fonction
+  partagée `openAccountEditor` plutôt que dupliqué). Fonctionne sur
+  n'importe quelle plateforme dès qu'une base a zéro compte, pas seulement
+  juste après "Créer une nouvelle base". `flutter analyze`/`flutter test`
+  propres ; la vérification bout-en-bout en conditions réelles reste à
+  faire par l'utilisateur.
+- ~~UI : saisie de transaction depuis le tableau de bord~~ - **fait**.
+  Bouton "+" flottant sur le Tableau de bord, même formulaire
+  (`TransactionEditorSheet`) et même comportement que celui des
+  Transactions - compte présélectionné sur celui affiché.
+- ~~UI : icône Budget après Transactions dans la barre du bas~~ - **fait**.
+  Ordre désormais Accueil / Transactions / Budget / Récurrentes / Comptes.
 
 - ~~Renommer/déplacer la bdd (desktop) ouvrait une base vide sans prévenir~~ -
   **fait/corrigé**. Signalé le 2026-08-01 : après avoir renommé le fichier

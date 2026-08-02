@@ -8,10 +8,13 @@ import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/bento_card.dart';
 import '../widgets/budget_preview_card.dart';
+import '../widgets/bulk_category_reassign.dart';
 import '../widgets/category_spend_analyzer.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
+import 'accounts_screen.dart' show openAccountEditor;
+import 'transactions_screen.dart' show TransactionEditorSheet;
 
 /// The next occurrence (this month, or next if already passed) of [day]
 /// as a calendar day, clamped to the last day of whichever month doesn't
@@ -51,6 +54,7 @@ class DashboardScreen extends StatelessWidget {
     };
 
     if (accounts.isEmpty) {
+      final isBrandNew = allAccountsById.isEmpty;
       return Scaffold(
         appBar: AppBar(
           title: const Text('Tableau de bord'),
@@ -67,14 +71,31 @@ class DashboardScreen extends StatelessWidget {
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Tous les comptes sont masqués.'),
-                const SizedBox(height: 12),
-                Text(
-                  'Réactivez-en un depuis l\'onglet Comptes.',
-                  style: TextStyle(color: Colors.grey[600]),
-                ),
-              ],
+              children: isBrandNew
+                  ? [
+                      const Text('Bienvenue dans Money Manager !',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Créez votre premier compte pour commencer.',
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                      const SizedBox(height: 20),
+                      FilledButton.icon(
+                        onPressed: () => openAccountEditor(context, repo),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Créer mon premier compte'),
+                      ),
+                    ]
+                  : [
+                      const Text('Tous les comptes sont masqués.'),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Réactivez-en un depuis l\'onglet Comptes.',
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    ],
             ),
           ),
         ),
@@ -91,271 +112,312 @@ class DashboardScreen extends StatelessWidget {
 
     final now = DateTime.now();
     final forecastDate = _nextForecastDate(now, dbProvider.forecastDay);
-    final forecastDateLabel = 'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
+    final forecastDateLabel =
+        'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
     final forecastBalances = {
-      for (final a in accounts) a.id: repo.forecastAccountBalance(a.id, forecastDate)
+      for (final a in accounts)
+        a.id: repo.forecastAccountBalance(a.id, forecastDate)
     };
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final recentTx =
         repo.getTransactions(accountId: selectedAccountId, limit: 6);
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
 
-    return CustomScrollView(
-      slivers: [
-        SliverAppBar(
-          floating: true,
-          title: const Text('Tableau de bord'),
-          actions: [
-            PopupMenuButton<AppPalette>(
-              icon: const Icon(Icons.palette_outlined),
-              tooltip: 'Palette de couleurs',
-              onSelected: (p) => dbProvider.setPalette(p),
-              itemBuilder: (context) => [
-                for (final palette in AppPalette.values)
-                  PopupMenuItem(
-                    value: palette,
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 18,
-                          height: 18,
-                          decoration: BoxDecoration(color: palette.seed, shape: BoxShape.circle),
-                        ),
-                        const SizedBox(width: 12),
-                        Text(palette.label),
-                        if (dbProvider.palette == palette) ...[
-                          const Spacer(),
-                          const Icon(Icons.check, size: 18),
+    return Scaffold(
+      floatingActionButton: FloatingActionButton(
+        tooltip: 'Nouvelle transaction',
+        onPressed: () => _openTransactionEditor(context,
+            defaultAccountId: selectedAccountId),
+        child: const Icon(Icons.add),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverAppBar(
+            floating: true,
+            title: const Text('Tableau de bord'),
+            actions: [
+              PopupMenuButton<AppPalette>(
+                icon: const Icon(Icons.palette_outlined),
+                tooltip: 'Palette de couleurs',
+                onSelected: (p) => dbProvider.setPalette(p),
+                itemBuilder: (context) => [
+                  for (final palette in AppPalette.values)
+                    PopupMenuItem(
+                      value: palette,
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 18,
+                            height: 18,
+                            decoration: BoxDecoration(
+                                color: palette.seed, shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(palette.label),
+                          if (dbProvider.palette == palette) ...[
+                            const Spacer(),
+                            const Icon(Icons.check, size: 18),
+                          ],
                         ],
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-            IconButton(
-              icon: const Icon(Icons.query_stats),
-              tooltip: 'Analyser les dépenses par catégorie',
-              onPressed: () => openCategorySpendAnalyzer(
-                context: context,
-                repo: repo,
-                accountId: selectedAccountId,
-                categories: categories.values.toList(),
-                currency: currency,
-              ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: 'Paramètres',
-              onPressed: () => Navigator.of(context).pushNamed('/settings'),
-            ),
-          ],
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.all(16),
-          sliver: SliverToBoxAdapter(
-            child: ResponsiveBody(
-              maxWidth: 1400,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  IntrinsicHeight(
-                    child: _TotalBalanceCard(
-                      total: scopedBalance,
-                      currency: currency,
-                      label: accounts
-                          .firstWhere((a) => a.id == selectedAccountId)
-                          .name,
-                      forecastBalance: forecastBalances[selectedAccountId],
-                      forecastLabel: forecastDateLabel,
-                    ),
-                  ),
-                  const SizedBox(height: AppTheme.gridGap),
-                  LayoutBuilder(builder: (context, constraints) {
-                    // Narrow widths need extra room: the duration dropdown
-                    // and axis labels can wrap onto more lines than they
-                    // do on a wide desktop layout.
-                    final forecastHeight =
-                        constraints.maxWidth < 480 ? 460.0 : 400.0;
-                    return SizedBox(
-                      height: forecastHeight,
-                      child: ForecastChart(
-                        repository: repo,
-                        startingBalance: scopedBalance,
-                        currency: currency,
-                        accountId: selectedAccountId,
                       ),
-                    );
-                  }),
-                  const SizedBox(height: AppTheme.gridGap),
-                  LayoutBuilder(builder: (context, constraints) {
-                    final wide = constraints.maxWidth > 800;
-                    // A horizontal carousel of fixed-width cards always
-                    // crops the last one somewhere - fine on desktop where
-                    // it reads as "scroll for more", but on a narrow screen
-                    // it just looks broken. Below the wide breakpoint, show
-                    // every account as a full-width tile stacked instead -
-                    // no cropping, no scrolling. Drag-to-reorder only
-                    // applies to the wide carousel; narrow order follows
-                    // the same saved order but isn't itself draggable.
-                    final accountsGrid = wide
-                        ? SizedBox(
-                            height: 168,
-                            child: ReorderableListView.builder(
-                              scrollDirection: Axis.horizontal,
-                              buildDefaultDragHandles: false,
-                              itemCount: accounts.length,
-                              onReorderItem: (oldIndex, newIndex) {
-                                final reordered = [...accounts];
-                                final moved = reordered.removeAt(oldIndex);
-                                reordered.insert(newIndex, moved);
-                                dbProvider.setAccountOrder(
-                                    reordered.map((a) => a.id).toList());
-                              },
-                              itemBuilder: (context, i) {
-                                final account = accounts[i];
-                                return Padding(
-                                  key: ValueKey(account.id),
-                                  padding: const EdgeInsets.only(
-                                      right: AppTheme.gridGap),
-                                  child: SizedBox(
-                                    width: 210,
-                                    child: Stack(
-                                      children: [
-                                        AccountBalanceCard(
-                                          account: account,
-                                          balance: balances[account.id] ?? 0,
-                                          currency: currency,
-                                          selected:
-                                              account.id == selectedAccountId,
-                                          onTap: () => dbProvider
-                                              .selectAccount(account.id),
-                                          forecastBalance:
-                                              forecastBalances[account.id],
-                                          forecastLabel: forecastDateLabel,
-                                        ),
-                                        Positioned(
-                                          top: 6,
-                                          right: 6,
-                                          child: ReorderableDragStartListener(
-                                            index: i,
-                                            child: Container(
-                                              padding: const EdgeInsets.all(4),
-                                              decoration: BoxDecoration(
-                                                color: Colors.grey
-                                                    .withValues(alpha: 0.15),
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
+                    ),
+                ],
+              ),
+              IconButton(
+                icon: const Icon(Icons.query_stats),
+                tooltip: 'Analyser les dépenses par catégorie',
+                onPressed: () => openCategorySpendAnalyzer(
+                  context: context,
+                  repo: repo,
+                  accountId: selectedAccountId,
+                  categories: categories.values.toList(),
+                  currency: currency,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.settings_outlined),
+                tooltip: 'Paramètres',
+                onPressed: () => Navigator.of(context).pushNamed('/settings'),
+              ),
+            ],
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverToBoxAdapter(
+              child: ResponsiveBody(
+                maxWidth: 1400,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    IntrinsicHeight(
+                      child: _TotalBalanceCard(
+                        total: scopedBalance,
+                        currency: currency,
+                        label: accounts
+                            .firstWhere((a) => a.id == selectedAccountId)
+                            .name,
+                        forecastBalance: forecastBalances[selectedAccountId],
+                        forecastLabel: forecastDateLabel,
+                      ),
+                    ),
+                    const SizedBox(height: AppTheme.gridGap),
+                    LayoutBuilder(builder: (context, constraints) {
+                      // Narrow widths need extra room: the duration dropdown
+                      // and axis labels can wrap onto more lines than they
+                      // do on a wide desktop layout.
+                      final forecastHeight =
+                          constraints.maxWidth < 480 ? 460.0 : 400.0;
+                      return SizedBox(
+                        height: forecastHeight,
+                        child: ForecastChart(
+                          repository: repo,
+                          startingBalance: scopedBalance,
+                          currency: currency,
+                          accountId: selectedAccountId,
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: AppTheme.gridGap),
+                    LayoutBuilder(builder: (context, constraints) {
+                      final wide = constraints.maxWidth > 800;
+                      // A horizontal carousel of fixed-width cards always
+                      // crops the last one somewhere - fine on desktop where
+                      // it reads as "scroll for more", but on a narrow screen
+                      // it just looks broken. Below the wide breakpoint, show
+                      // every account as a full-width tile stacked instead -
+                      // no cropping, no scrolling. Drag-to-reorder only
+                      // applies to the wide carousel; narrow order follows
+                      // the same saved order but isn't itself draggable.
+                      final accountsGrid = wide
+                          ? SizedBox(
+                              height: 168,
+                              child: ReorderableListView.builder(
+                                scrollDirection: Axis.horizontal,
+                                buildDefaultDragHandles: false,
+                                itemCount: accounts.length,
+                                onReorderItem: (oldIndex, newIndex) {
+                                  final reordered = [...accounts];
+                                  final moved = reordered.removeAt(oldIndex);
+                                  reordered.insert(newIndex, moved);
+                                  dbProvider.setAccountOrder(
+                                      reordered.map((a) => a.id).toList());
+                                },
+                                itemBuilder: (context, i) {
+                                  final account = accounts[i];
+                                  return Padding(
+                                    key: ValueKey(account.id),
+                                    padding: const EdgeInsets.only(
+                                        right: AppTheme.gridGap),
+                                    child: SizedBox(
+                                      width: 210,
+                                      child: Stack(
+                                        children: [
+                                          AccountBalanceCard(
+                                            account: account,
+                                            balance: balances[account.id] ?? 0,
+                                            currency: currency,
+                                            selected:
+                                                account.id == selectedAccountId,
+                                            onTap: () => dbProvider
+                                                .selectAccount(account.id),
+                                            forecastBalance:
+                                                forecastBalances[account.id],
+                                            forecastLabel: forecastDateLabel,
+                                          ),
+                                          Positioned(
+                                            top: 6,
+                                            right: 6,
+                                            child: ReorderableDragStartListener(
+                                              index: i,
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.all(4),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.grey
+                                                      .withValues(alpha: 0.15),
+                                                  borderRadius:
+                                                      BorderRadius.circular(8),
+                                                ),
+                                                child: Icon(
+                                                    Icons.drag_indicator,
+                                                    size: 18,
+                                                    color: AppTheme.accent),
                                               ),
-                                              child: Icon(
-                                                  Icons.drag_indicator,
-                                                  size: 18,
-                                                  color: AppTheme.accent),
                                             ),
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            )
+                          : Wrap(
+                              spacing: AppTheme.gridGap,
+                              runSpacing: AppTheme.gridGap,
+                              children: [
+                                for (final account in accounts)
+                                  SizedBox(
+                                    width: constraints.maxWidth < 380
+                                        ? constraints.maxWidth
+                                        : (constraints.maxWidth -
+                                                AppTheme.gridGap) /
+                                            2,
+                                    height: 140,
+                                    child: AccountBalanceCard(
+                                      account: account,
+                                      balance: balances[account.id] ?? 0,
+                                      currency: currency,
+                                      selected: account.id == selectedAccountId,
+                                      onTap: () =>
+                                          dbProvider.selectAccount(account.id),
+                                      forecastBalance:
+                                          forecastBalances[account.id],
+                                      forecastLabel: forecastDateLabel,
                                     ),
                                   ),
-                                );
-                              },
-                            ),
-                          )
-                        : Wrap(
-                            spacing: AppTheme.gridGap,
-                            runSpacing: AppTheme.gridGap,
-                            children: [
-                              for (final account in accounts)
-                                SizedBox(
-                                  width: constraints.maxWidth < 380
-                                      ? constraints.maxWidth
-                                      : (constraints.maxWidth -
-                                              AppTheme.gridGap) /
-                                          2,
-                                  height: 140,
-                                  child: AccountBalanceCard(
-                                    account: account,
-                                    balance: balances[account.id] ?? 0,
-                                    currency: currency,
-                                    selected: account.id == selectedAccountId,
-                                    onTap: () =>
-                                        dbProvider.selectAccount(account.id),
-                                    forecastBalance: forecastBalances[account.id],
-                                    forecastLabel: forecastDateLabel,
-                                  ),
-                                ),
-                            ],
-                          );
-                    final spendCard = SizedBox(
-                      height: 320,
-                      child: BudgetPreviewCard(
-                        repository: repo,
-                        currency: currency,
-                        accountId: selectedAccountId,
-                        forecastDay: dbProvider.forecastDay,
-                      ),
-                    );
-                    final recentCard = SizedBox(
-                      height: 320,
-                      child: BentoCard(
-                        title: 'Transactions récentes',
-                        child: ListView.builder(
-                          itemCount: recentTx.length,
-                          itemBuilder: (context, i) {
-                            final tx = recentTx[i];
-                            return TransactionTile(
-                              transaction: tx,
-                              payee: payees[tx.payeeId],
-                              category: tx.categoryId != null
-                                  ? categories[tx.categoryId]
-                                  : null,
-                              fromAccount: allAccountsById[tx.accountId],
-                              toAccount: tx.toAccountId != null
-                                  ? allAccountsById[tx.toAccountId]
-                                  : null,
-                              viewpointAccountId: selectedAccountId,
-                              currency: currency,
-                              onToggleReconciled: (value) {
-                                repo.setReconciled(tx.id, value);
-                                dbProvider.touch();
-                              },
+                              ],
                             );
-                          },
+                      final spendCard = SizedBox(
+                        height: 320,
+                        child: BudgetPreviewCard(
+                          repository: repo,
+                          currency: currency,
+                          accountId: selectedAccountId,
+                          forecastDay: dbProvider.forecastDay,
                         ),
-                      ),
-                    );
+                      );
+                      final recentCard = SizedBox(
+                        height: 320,
+                        child: BentoCard(
+                          title: 'Transactions récentes',
+                          child: ListView.builder(
+                            itemCount: recentTx.length,
+                            itemBuilder: (context, i) {
+                              final tx = recentTx[i];
+                              return TransactionTile(
+                                transaction: tx,
+                                payee: payees[tx.payeeId],
+                                category: tx.categoryId != null
+                                    ? categories[tx.categoryId]
+                                    : null,
+                                fromAccount: allAccountsById[tx.accountId],
+                                toAccount: tx.toAccountId != null
+                                    ? allAccountsById[tx.toAccountId]
+                                    : null,
+                                viewpointAccountId: selectedAccountId,
+                                currency: currency,
+                                onToggleReconciled: (value) {
+                                  repo.setReconciled(tx.id, value);
+                                  dbProvider.touch();
+                                },
+                              );
+                            },
+                          ),
+                        ),
+                      );
 
-                    if (wide) {
+                      if (wide) {
+                        return Column(
+                          children: [
+                            accountsGrid,
+                            const SizedBox(height: AppTheme.gridGap),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: spendCard),
+                                const SizedBox(width: AppTheme.gridGap),
+                                Expanded(child: recentCard),
+                              ],
+                            ),
+                          ],
+                        );
+                      }
                       return Column(
                         children: [
                           accountsGrid,
                           const SizedBox(height: AppTheme.gridGap),
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(child: spendCard),
-                              const SizedBox(width: AppTheme.gridGap),
-                              Expanded(child: recentCard),
-                            ],
-                          ),
+                          spendCard,
+                          const SizedBox(height: AppTheme.gridGap),
+                          recentCard,
                         ],
                       );
-                    }
-                    return Column(
-                      children: [
-                        accountsGrid,
-                        const SizedBox(height: AppTheme.gridGap),
-                        spendCard,
-                        const SizedBox(height: AppTheme.gridGap),
-                        recentCard,
-                      ],
-                    );
-                  }),
-                ],
+                    }),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Same interaction as TransactionsScreen's own FAB (see
+/// TransactionsScreen._openEditor) - the dashboard only ever creates a
+/// brand-new transaction (never edits one in place), so there's no
+/// existing category for offerBulkCategoryReassign to ever actually fire
+/// on, but it's kept for consistency in case that ever changes.
+Future<void> _openTransactionEditor(BuildContext context,
+    {int? defaultAccountId}) async {
+  final dbProvider = context.read<DatabaseProvider>();
+  final repo = dbProvider.repository!;
+  final categoryChange = await showModalBottomSheet<CategoryChange?>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => TransactionEditorSheet(
+      repo: repo,
+      defaultAccountId: defaultAccountId,
+    ),
+  );
+  dbProvider.touch();
+  if (categoryChange != null && context.mounted) {
+    await offerBulkCategoryReassign(
+      context: context,
+      repo: repo,
+      dbProvider: dbProvider,
+      change: categoryChange,
     );
   }
 }
@@ -392,7 +454,8 @@ class _TotalBalanceCard extends StatelessWidget {
           const SizedBox(height: 8),
           if (forecastBalance != null) ...[
             Text(
-              currency?.format(forecastBalance!) ?? forecastBalance!.toStringAsFixed(2),
+              currency?.format(forecastBalance!) ??
+                  forecastBalance!.toStringAsFixed(2),
               style: TextStyle(
                 color: forecastBalance! < 0 ? AppTheme.negative : Colors.white,
                 fontSize: 28,

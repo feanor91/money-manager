@@ -40,7 +40,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context, repo),
+        onPressed: () => openAccountEditor(context, repo),
         icon: const Icon(Icons.add),
         label: const Text('Nouveau compte'),
       ),
@@ -61,8 +61,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                           balance: repo.accountBalance(account.id),
                           currency: currency,
                           hidden: false,
-                          onTap: () =>
-                              _openEditor(context, repo, existing: account),
+                          onTap: () => openAccountEditor(context, repo,
+                              existing: account),
                           onToggleHidden: () =>
                               dbProvider.setAccountHidden(account.id, true),
                         ),
@@ -80,8 +80,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                           balance: repo.accountBalance(account.id),
                           currency: currency,
                           hidden: true,
-                          onTap: () =>
-                              _openEditor(context, repo, existing: account),
+                          onTap: () => openAccountEditor(context, repo,
+                              existing: account),
                           onToggleHidden: () =>
                               dbProvider.setAccountHidden(account.id, false),
                         ),
@@ -92,99 +92,99 @@ class _AccountsScreenState extends State<AccountsScreen> {
             ),
     );
   }
+}
 
-  Future<void> _openEditor(BuildContext context, MmexRepository repo,
-      {Account? existing}) async {
-    final dbProvider = context.read<DatabaseProvider>();
-    final nameController = TextEditingController(text: existing?.name ?? '');
-    final balanceController = TextEditingController(
-      text: existing != null ? existing.initialBalance.toStringAsFixed(2) : '0',
-    );
-    String type = existing?.type ?? 'Checking';
+/// Shared with DashboardScreen's "create your first account" prompt on a
+/// freshly created, empty database - same fields, same repository call,
+/// rather than a second bespoke form for what's the same underlying action.
+Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
+    {Account? existing}) async {
+  final dbProvider = context.read<DatabaseProvider>();
+  final nameController = TextEditingController(text: existing?.name ?? '');
+  final balanceController = TextEditingController(
+    text: existing != null ? existing.initialBalance.toStringAsFixed(2) : '0',
+  );
+  String type = existing?.type ?? 'Checking';
 
-    await showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title:
-              Text(existing == null ? 'Nouveau compte' : 'Modifier le compte'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(labelText: 'Nom')),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: type,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: const [
-                  'Checking',
-                  'Savings',
-                  'Credit Card',
-                  'Cash',
-                  'Loan',
-                  'Term',
-                  'Asset',
-                  'Investment'
-                ]
-                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                    .toList(),
-                onChanged: (v) => setDialogState(() => type = v ?? type),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: balanceController,
-                decoration: const InputDecoration(labelText: 'Solde initial'),
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-              ),
-            ],
-          ),
-          actions: [
-            if (existing != null)
-              TextButton(
-                onPressed: () {
-                  repo.deleteAccount(existing.id);
-                  Navigator.of(context).pop();
-                  dbProvider.touch();
-                },
-                child: const Text('Supprimer'),
-              ),
-            TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Annuler')),
-            FilledButton(
-              onPressed: () {
-                final balance = double.tryParse(balanceController.text) ?? 0;
-                if (existing == null) {
-                  repo.insertAccount(
-                    name: nameController.text,
-                    type: type,
-                    initialBalance: balance,
-                    currencyId: repo.getDefaultCurrency()?.id ?? 1,
-                  );
-                } else {
-                  repo.updateAccount(Account(
-                    id: existing.id,
-                    name: nameController.text,
-                    type: type,
-                    status: existing.status,
-                    initialBalance: balance,
-                    currencyId: existing.currencyId,
-                    favorite: existing.favorite,
-                  ));
-                }
-                Navigator.of(context).pop();
-                dbProvider.touch();
-              },
-              child: const Text('Enregistrer'),
+  await showDialog(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: Text(existing == null ? 'Nouveau compte' : 'Modifier le compte'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Nom')),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: type,
+              decoration: const InputDecoration(labelText: 'Type'),
+              items: const [
+                'Checking',
+                'Savings',
+                'Credit Card',
+                'Cash',
+                'Loan',
+                'Term',
+                'Asset',
+                'Investment'
+              ].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+              onChanged: (v) => setDialogState(() => type = v ?? type),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: balanceController,
+              decoration: const InputDecoration(labelText: 'Solde initial'),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
             ),
           ],
         ),
+        actions: [
+          if (existing != null)
+            TextButton(
+              onPressed: () {
+                repo.deleteAccount(existing.id);
+                Navigator.of(context).pop();
+                dbProvider.touch();
+              },
+              child: const Text('Supprimer'),
+            ),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Annuler')),
+          FilledButton(
+            onPressed: () {
+              final balance = double.tryParse(balanceController.text) ?? 0;
+              if (existing == null) {
+                repo.insertAccount(
+                  name: nameController.text,
+                  type: type,
+                  initialBalance: balance,
+                  currencyId: repo.getDefaultCurrency()?.id ?? 1,
+                );
+              } else {
+                repo.updateAccount(Account(
+                  id: existing.id,
+                  name: nameController.text,
+                  type: type,
+                  status: existing.status,
+                  initialBalance: balance,
+                  currencyId: existing.currencyId,
+                  favorite: existing.favorite,
+                ));
+              }
+              Navigator.of(context).pop();
+              dbProvider.touch();
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
       ),
-    );
-  }
+    ),
+  );
 }
 
 class _SectionHeader extends StatelessWidget {
