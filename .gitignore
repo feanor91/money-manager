@@ -14,7 +14,6 @@ android/key.properties
 *.keystore
 *.jks
 ios/Pods/
-web/sqlite3.wasm
 
 # Real financial database - never commit this, wherever it happens to sit
 # relative to the repo (CLAUDE.md says one level up, but a plain zip
