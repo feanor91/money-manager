@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.35] - 2026-08-03
+
+- fix(state): notify listeners when a write-back finishes, not just when it starts
+
 ## [1.0.34] - 2026-08-03
 
 - fix(state): serialize db write-backs, stop error banner from shifting UI, surface save status
