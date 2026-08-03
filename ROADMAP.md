@@ -46,6 +46,51 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Questions en langage naturel ("quelles ont été mes dépenses en
+  juillet ?")~~ - **fait pour la partie sans IA, IA locale Windows en
+  attente de vérification sur une vraie machine (2026-08-02)**. Nouvelle
+  icône bulle de dialogue sur le tableau de bord ("Poser une question"),
+  ouvre un dialogue texte libre. Deux moteurs, avec repli automatique du
+  second vers le premier :
+  - **Analyseur à règles** (`lib/services/nl_query/`) : gratuit, 100%
+    local, web/Android/desktop - reconnaît une liste de tournures
+    françaises courantes (dépenses/revenus par période, solde d'un compte,
+    plus grosses dépenses, dépenses chez un tiers) et les périodes
+    correspondantes (mois nommés, "le mois dernier", "cette année", "les N
+    derniers mois/jours", plage explicite JJ/MM/AAAA...), résolues contre
+    les vraies catégories/comptes/tiers de la base. Le calcul reste
+    toujours les mêmes méthodes déterministes de `MmexRepository` - aucun
+    risque de chiffre inventé. Entièrement testé (`test/nl_query/`).
+  - **IA locale optionnelle (Windows uniquement)** : modèle GGUF (Qwen2.5
+    3B ou 7B, au choix) téléchargé à la demande depuis Hugging Face (jamais
+    imposé), IA activable/désactivable dans Paramètres. Le modèle ne fait
+    jamais que de l'extraction d'intention (quelle catégorie/compte/tiers/
+    période est mentionné) vers le même format que l'analyseur à règles -
+    jamais de calcul ni de date précise laissés au modèle, jamais de SQL
+    généré : la réponse finale passe toujours par le même code
+    déterministe.
+    **Changement d'approche (2026-08-03)** : abandon de `llama_cpp_dart`
+    (FFI) - ni ce paquet ni `llamadart` ne fournissent de binaire Windows
+    prêt à l'emploi (`llama_cpp_dart` ne fournit que des bibliothèques
+    macOS/iOS précompilées), rendant la compatibilité native jamais
+    vérifiable en pratique. Remplacé par un appel HTTP à `llama-server.exe`
+    (le serveur officiel du projet llama.cpp, lancé et arrêté par l'appli
+    elle-même en sous-processus) - voir
+    `lib/services/nl_query/local_llm/llama_server_client.dart` (le client
+    HTTP, testé contre un faux serveur local - voir
+    `llama_server_client_test.dart`) et `local_llm_manager_io.dart` (cycle
+    de vie du process). L'utilisateur doit toujours récupérer manuellement
+    la release Windows officielle de llama.cpp (GitHub, un binaire
+    réellement prêt à l'emploi cette fois, contrairement aux paquets Dart)
+    et placer `llama-server.exe` + ses DLL dans le dossier indiqué par
+    l'écran Paramètres - étape documentée dans l'appli, pas automatisée
+    (le choix de la variante CPU/CUDA/Vulkan dépend du matériel).
+    **Non vérifié en conditions réelles** : le vrai test (démarrage du
+    process, chargement du modèle, qualité du JSON produit, arrêt propre
+    du process à la fermeture de l'appli) n'a jamais pu être fait avec un
+    vrai `llama-server.exe` depuis cette session. `flutter analyze`/
+    `flutter test`/`flutter build web` vérifiés propres ; `flutter build
+    windows` jamais tenté.
 - ~~Vérification/installation automatique des mises à jour (desktop)~~ -
   **fait, vérification en direct en attente (2026-08-02)**. Au démarrage,
   vérification silencieuse en arrière-plan de la dernière release GitHub
