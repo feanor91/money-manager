@@ -3,6 +3,20 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.37] - 2026-08-03
+
+- fix(local-ai): stop llama-server and free the model when the dialog closes
+- feat(local-ai): free-form fallback + configurable GPU/context/host/port
+- fix(state): notify listeners when a write-back finishes, not just when it starts
+- fix(state): serialize db write-backs, stop error banner from shifting UI, surface save status
+- fix(web): track sqlite3.wasm in git instead of a manual copy step
+- ci: fix branch-build's Windows job too - same slash-in-name bug
+- ci: fix branch-build artifact names containing a slash
+- ci: add a manual branch-build workflow, separate from the release pipeline
+- refactor(local-ai): talk to a llama-server.exe process instead of llama_cpp_dart FFI
+- feat(nl-query): richer answers, fix biggest-expenses ranking, add outlook question
+- feat(nl-query): natural language questions about spending/income/balances
+
 ## [1.0.36] - 2026-08-03
 
 - fix(state): stop the Sauvegarde... indicator sticking on forever
