@@ -47,13 +47,19 @@ dependencies:
   saf_stream: ^4.0.1
   http: ^1.6.0
 
-  # IA locale (Windows uniquement, optionnelle) - inference GGUF via llama.cpp
-  llama_cpp_dart: ^0.2.2
+  # IA locale (Windows uniquement, optionnelle) - voir
+  # lib/services/nl_query/local_llm/. N'utilise plus llama_cpp_dart depuis
+  # le 2026-08-03 (aucun binaire Windows pret a l'emploi, voir ROADMAP.md) -
+  # parle desormais en HTTP a un llama-server.exe lance en sous-processus,
+  # via le paquet http ci-dessus. Aucune dependance supplementaire requise.
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # In-memory shared_preferences backend for widget tests that reach
+  # AppPreferences.getInstance() - see nl_query_dialog_test.dart.
+  shared_preferences_platform_interface: ^2.4.2
 
 flutter:
   uses-material-design: true

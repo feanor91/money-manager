@@ -185,15 +185,17 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
                 label: Text('Télécharger (~${_approxSizeLabel(_selectedModel.approxSizeBytes)})'),
               ),
             const Divider(height: 32),
-            Text("Moteur d'inférence natif", style: Theme.of(context).textTheme.labelLarge),
+            Text('Serveur llama.cpp', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 8),
             Text(
               _runtimeAvailable
-                  ? 'Détecté - l\'IA locale peut être utilisée dès qu\'un modèle est téléchargé.'
-                  : "Non détecté - cette étape est manuelle : récupère un build Windows de "
-                      'llama.cpp compatible avec la version utilisée par ce dépôt (voir '
-                      'netdur/llama_cpp_dart sur GitHub) et place llama.dll, avec les DLL '
-                      'ggml*.dll qui l\'accompagnent, dans ce dossier :',
+                  ? 'Détecté - l\'IA locale peut être utilisée dès qu\'un modèle est téléchargé. '
+                      "L'appli démarre et arrête ce serveur elle-même, en arrière-plan."
+                  : 'Non détecté - cette étape est manuelle : télécharge la dernière release '
+                      'Windows de llama.cpp (voir github.com/ggml-org/llama.cpp/releases, un '
+                      'fichier "llama-*-bin-win-*.zip" correspondant à ton processeur) et place '
+                      'llama-server.exe, avec les .dll qui l\'accompagnent dans la même archive, '
+                      'dans ce dossier :',
             ),
             if (!_runtimeAvailable) ...[
               const SizedBox(height: 8),

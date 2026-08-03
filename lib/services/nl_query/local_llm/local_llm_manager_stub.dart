@@ -21,6 +21,10 @@ Future<void> deleteLocalLlmModel(LocalLlmModel model) async {}
 Future<String> localLlmRuntimeFolderPath() async => '';
 Future<bool> isLocalLlmRuntimeAvailable() async => false;
 
+Future<void> shutdownLocalLlmEngine() async {}
+
+void registerLocalLlmSignalShutdownHook() {}
+
 Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLlm(
   String question, {
   required List<Category> categories,

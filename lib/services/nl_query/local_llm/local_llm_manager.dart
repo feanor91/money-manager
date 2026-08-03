@@ -31,6 +31,15 @@ Future<void> deleteLocalLlmModel(LocalLlmModel model) => impl.deleteLocalLlmMode
 Future<String> localLlmRuntimeFolderPath() => impl.localLlmRuntimeFolderPath();
 Future<bool> isLocalLlmRuntimeAvailable() => impl.isLocalLlmRuntimeAvailable();
 
+/// Call once at app startup (see main.dart) so a still-running
+/// `llama-server.exe` never outlives the app itself - a no-op on any
+/// platform where local AI was never reachable in the first place.
+Future<void> shutdownLocalLlmEngine() => impl.shutdownLocalLlmEngine();
+
+/// Call once at app startup, alongside [shutdownLocalLlmEngine] - see
+/// local_llm_manager_io.dart's doc comment on why both exist.
+void registerLocalLlmSignalShutdownHook() => impl.registerLocalLlmSignalShutdownHook();
+
 /// Attempts to answer [question] using the local model - null if local AI
 /// isn't supported/enabled/ready, or on any failure. Never throws: the
 /// caller (nl_query_dialog.dart) always falls back to the rule-based

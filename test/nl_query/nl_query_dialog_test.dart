@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 
 import 'package:money_manager/data/mmex_database.dart';
 import 'package:money_manager/data/mmex_repository.dart';
@@ -16,9 +19,26 @@ import '../test_helpers.dart';
 /// through genuine taps/typing, the closest thing to a live manual check
 /// available in this environment (no Chrome/GTK here to open a real
 /// browser/desktop window - see the session notes).
+///
+/// KNOWN ISSUE (2026-08-03): the 3 tests below that actually tap "Demander"
+/// hang on pumpAndSettle on this machine - newly exposed now that this file
+/// compiles at all (it didn't before today, blocked by the unrelated
+/// llama_cpp_dart removal - see ROADMAP.md), so this was never run here
+/// until now. Root cause not confirmed: Platform.isWindows is true during
+/// `flutter test` on this real Windows machine, so NlQueryDialog._ask()
+/// really does reach the (Windows-only) local-LLM check, and the mocks
+/// below are a reasonable, harmless guard against shared_preferences
+/// needing a real platform channel there - but adding them did *not*
+/// resolve the hang, and a print placed immediately before that check
+/// never even printed, suggesting execution never gets that far in the
+/// first place. Needs a real debugging session on a Windows dev machine,
+/// not blind guessing from here - left failing rather than silently
+/// skipped so it stays visible.
 void main() {
   setUpAll(() async {
     await initializeDateFormatting('fr_FR');
+    SharedPreferencesAsyncPlatform.instance = InMemorySharedPreferencesAsync.empty();
+    SharedPreferences.setMockInitialValues({});
   });
 
   late MmexDatabase db;
@@ -47,7 +67,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         locale: const Locale('fr'),
-        home: Scaffold(body: NlQueryDialog(repo: repo)),
+        home: Scaffold(body: NlQueryDialog(repo: repo, forecastDay: 24)),
       ),
     );
   }
