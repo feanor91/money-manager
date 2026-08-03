@@ -89,10 +89,23 @@ class _HomeShellState extends State<HomeShell> {
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
     return Scaffold(
-      body: Column(
+      // A Stack overlay, not a Column - the banner floating on top of the
+      // current screen rather than pushing it down. It used to sit above
+      // an Expanded(IndexedStack(...)) in a Column, so it appearing/
+      // disappearing shifted every control on the current screen down or
+      // up by its own height, right when a save just failed - the exact
+      // moment a misplaced tap (now landing on whatever shifted into that
+      // spot) is most costly.
+      body: Stack(
         children: [
-          if (dbProvider.saveError != null) _SaveErrorBanner(error: dbProvider.saveError!),
-          Expanded(child: IndexedStack(index: _index, children: _screens)),
+          Positioned.fill(child: IndexedStack(index: _index, children: _screens)),
+          if (dbProvider.saveError != null)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _SaveErrorBanner(error: dbProvider.saveError!),
+            ),
         ],
       ),
       bottomNavigationBar: Stack(
@@ -109,6 +122,12 @@ class _HomeShellState extends State<HomeShell> {
               NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
             ],
           ),
+          if (dbProvider.hasPendingWrite)
+            const Positioned(
+              left: 8,
+              bottom: 4,
+              child: IgnorePointer(child: _SavingIndicator()),
+            ),
           if (_version != null)
             Padding(
               padding: const EdgeInsets.only(right: 6, bottom: 2),
@@ -124,6 +143,33 @@ class _HomeShellState extends State<HomeShell> {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Shown in the bottom nav bar whenever a write-back to the real .mmb file
+/// is scheduled or actively running (DatabaseProvider.hasPendingWrite). This
+/// is deliberately a presence indicator ("not yet safely on disk" vs "done"),
+/// not a percentage gauge - the File System Access API doesn't expose
+/// byte-level progress for a whole-file replace, so there's nothing to
+/// measure a percentage from.
+class _SavingIndicator extends StatelessWidget {
+  const _SavingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 11,
+          height: 11,
+          child: CircularProgressIndicator(strokeWidth: 1.8, color: color),
+        ),
+        const SizedBox(width: 5),
+        Text('Sauvegarde…', style: TextStyle(fontSize: 10, color: color)),
+      ],
     );
   }
 }

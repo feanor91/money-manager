@@ -8,6 +8,7 @@ import 'app.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'state/purchase_simulation_provider.dart';
+import 'state/unsaved_changes_guard.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,7 @@ Future<void> main() async {
     ),
   );
   unawaited(dbProvider.restoreLastDatabase());
+  registerUnsavedChangesGuard(() => dbProvider.hasPendingWrite);
 
   runApp(
     MultiProvider(
