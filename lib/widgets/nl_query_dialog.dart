@@ -83,6 +83,14 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   @override
   void dispose() {
     _controller.dispose();
+    // Kills the (Windows-only) llama-server.exe process and frees its
+    // multi-gigabyte model from RAM/VRAM the moment this dialog closes,
+    // rather than leaving it resident for the rest of the app session - a
+    // no-op if local AI was never used this session (see
+    // shutdownLocalLlmEngine's own doc comment). Fire-and-forget: dispose()
+    // can't be async, and nothing here needs to wait for the process to
+    // actually exit.
+    shutdownLocalLlmEngine();
     super.dispose();
   }
 

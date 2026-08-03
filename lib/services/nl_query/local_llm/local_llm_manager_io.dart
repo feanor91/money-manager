@@ -201,10 +201,12 @@ Future<void> _disposeEngine() async {
   }
 }
 
-/// Called once at app startup (see main.dart) so a still-running
-/// `llama-server.exe` never outlives the app - it would otherwise sit there
-/// holding a multi-gigabyte model in RAM indefinitely. Safe to call even if
-/// no engine was ever started (a no-op then).
+/// Called both when the "Poser une question" dialog closes
+/// (nl_query_dialog.dart) and at app startup (see main.dart) so a
+/// still-running `llama-server.exe` never outlives either - it would
+/// otherwise sit there holding a multi-gigabyte model in RAM/VRAM
+/// indefinitely. Safe to call even if no engine was ever started (a no-op
+/// then) - the next question after this simply pays the load time again.
 Future<void> shutdownLocalLlmEngine() => _disposeEngine();
 
 /// A belt-and-suspenders safety net for `flutter run`/a terminal-launched
@@ -223,8 +225,10 @@ void registerLocalLlmSignalShutdownHook() {
 
 /// Starts (or reuses) the server for whichever model is currently
 /// selected - loading a multi-gigabyte model takes real time, so this is
-/// kept alive across questions within the same app session rather than
-/// restarted every time. Returns null if anything required is missing
+/// kept alive across questions asked within the same open dialog rather
+/// than restarted every time (see [shutdownLocalLlmEngine], called when
+/// that dialog closes, for why this isn't kept alive any longer than
+/// that). Returns null if anything required is missing
 /// (runtime, model file) or starting fails for any reason (wrong build,
 /// port already in use, not enough RAM, corrupt file...) - never surfaced
 /// as a crash, the caller falls back to the rule-based parser exactly as
