@@ -576,6 +576,42 @@ class DatabaseProvider extends ChangeNotifier {
     }
   }
 
+  /// Serializes every write-back attempt (debounced, or a manual
+  /// "Réessayer") so at most one is ever actually talking to the file
+  /// handle at a time. Two `createWritable()` calls open at once on the
+  /// same handle is exactly what throws the File System Access API's
+  /// "state cached... changed since read from disk" InvalidStateError -
+  /// confirmed 2026-08-03: it surfaced during a burst of rapid deletes,
+  /// each one's debounced write starting before the previous one had
+  /// finished exporting+writing the whole database. The debounce timer
+  /// below only delays *starting* the next write; this is what actually
+  /// keeps two of them from running concurrently once they do start.
+  Future<void> _writeBackChain = Future.value();
+  bool _writeInFlight = false;
+
+  /// True while there's real risk of losing the most recent edit(s) if the
+  /// tab/window closed right now: either a debounced write hasn't started
+  /// yet, or one is actively running. Web-only in practice (desktop/Android
+  /// don't debounce a write-back at all - see [touch]) - see
+  /// unsaved_changes_guard.dart, which warns before closing exactly when
+  /// this is true.
+  bool get hasPendingWrite => _writeBackDebounce != null || _writeInFlight;
+
+  void _enqueueWriteBack(Future<void> Function() writeBack) {
+    _writeBackChain = _writeBackChain.then((_) async {
+      _writeInFlight = true;
+      // Notify right at the start/end of the actual write (not just when
+      // it's scheduled) so a UI indicator tied to hasPendingWrite can show
+      // "saving now" rather than only "something changed at some point".
+      notifyListeners();
+      try {
+        await writeBack();
+      } finally {
+        _writeInFlight = false;
+      }
+    });
+  }
+
   /// Re-attempts the last failed write-back after [saveError] was shown to
   /// the user (e.g. a "Réessayer" button), using the current in-memory
   /// state of the database (not just re-running the old attempt).
@@ -585,9 +621,9 @@ class DatabaseProvider extends ChangeNotifier {
     final webLink = _webFileLink;
     final androidLink = _androidFileLink;
     if (webLink != null) {
-      unawaited(_writeBackWeb(webLink, db));
+      _enqueueWriteBack(() => _writeBackWeb(webLink, db));
     } else if (androidLink != null) {
-      unawaited(_writeBackAndroid(androidLink, db));
+      _enqueueWriteBack(() => _writeBackAndroid(androidLink, db));
     }
   }
 
@@ -608,12 +644,12 @@ class DatabaseProvider extends ChangeNotifier {
     if (webLink != null) {
       _writeBackDebounce?.cancel();
       _writeBackDebounce = Timer(const Duration(milliseconds: 500), () {
-        unawaited(_writeBackWeb(webLink, db));
+        _enqueueWriteBack(() => _writeBackWeb(webLink, db));
       });
     } else if (androidLink != null) {
       _writeBackDebounce?.cancel();
       _writeBackDebounce = Timer(const Duration(milliseconds: 500), () {
-        unawaited(_writeBackAndroid(androidLink, db));
+        _enqueueWriteBack(() => _writeBackAndroid(androidLink, db));
       });
     }
   }

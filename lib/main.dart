@@ -9,6 +9,7 @@ import 'services/nl_query/local_llm/local_llm_manager.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'state/purchase_simulation_provider.dart';
+import 'state/unsaved_changes_guard.dart';
 
 /// Kills a still-running local-AI `llama-server.exe` (Windows desktop only
 /// - a no-op everywhere else, see local_llm_manager.dart) once the engine
@@ -46,6 +47,7 @@ Future<void> main() async {
     ),
   );
   unawaited(dbProvider.restoreLastDatabase());
+  registerUnsavedChangesGuard(() => dbProvider.hasPendingWrite);
 
   runApp(
     MultiProvider(
