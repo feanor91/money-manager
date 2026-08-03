@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../data/mmex_repository.dart';
+import '../models/budget_period.dart' show nextForecastDay;
 import '../services/nl_query/answer_formatter.dart';
 import '../services/nl_query/local_llm/local_llm_manager.dart';
 import '../services/nl_query/local_llm/local_llm_support.dart';
@@ -14,18 +16,25 @@ const _examples = [
   'Quel est le solde de mon compte ?',
   'Mes plus grosses dépenses des 3 derniers mois',
   'Revenus et dépenses de cette année',
+  'Pourquoi vais-je finir le mois en négatif ?',
 ];
 
 /// Opens the natural-language query tool as a dialog - same shape as
 /// [openCategorySpendAnalyzer] (a read-only research tool, not a record
 /// editor: dialog, not a bottom sheet, per CLAUDE.md's UI-consistency rule).
-/// [defaultAccountId] is only used as a fallback when a "solde" question
-/// doesn't name an account itself (e.g. the dashboard's currently selected
-/// account) - never silently applied to expense/income totals, which stay
-/// "every account combined" unless the question actually names one.
+/// [defaultAccountId] (e.g. the dashboard's currently selected account) is
+/// the fallback account for every question kind that didn't name one
+/// itself - by design (2026-08-03), a question is never silently answered
+/// "every account combined"; naming an account in the question itself still
+/// always wins over this default. [forecastDay] (Settings' "Jour de
+/// prévision du solde") is where an unqualified [QueryKind.outlook]
+/// question ("pourquoi vais-je finir le mois en négatif") ends its
+/// projection - the same day the dashboard's own forecast figures use,
+/// not the calendar month's end.
 Future<void> openNlQueryDialog({
   required BuildContext context,
   required MmexRepository repo,
+  required int forecastDay,
   int? defaultAccountId,
 }) {
   final screen = MediaQuery.sizeOf(context);
@@ -38,7 +47,11 @@ Future<void> openNlQueryDialog({
       child: SizedBox(
         width: width,
         height: height,
-        child: NlQueryDialog(repo: repo, defaultAccountId: defaultAccountId),
+        child: NlQueryDialog(
+          repo: repo,
+          defaultAccountId: defaultAccountId,
+          forecastDay: forecastDay,
+        ),
       ),
     ),
   );
@@ -47,8 +60,14 @@ Future<void> openNlQueryDialog({
 class NlQueryDialog extends StatefulWidget {
   final MmexRepository repo;
   final int? defaultAccountId;
+  final int forecastDay;
 
-  const NlQueryDialog({super.key, required this.repo, this.defaultAccountId});
+  const NlQueryDialog({
+    super.key,
+    required this.repo,
+    required this.forecastDay,
+    this.defaultAccountId,
+  });
 
   @override
   State<NlQueryDialog> createState() => _NlQueryDialogState();
@@ -64,6 +83,26 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Also fires for programmatic changes (e.g. the clear button below), not
+  /// just typing - so clearing the question by any means brings back the
+  /// example chips rather than leaving the last answer/error stuck on screen.
+  void _onQuestionChanged(String value) {
+    setState(() {
+      if (value.isEmpty) {
+        _answer = null;
+        _error = null;
+      }
+    });
+  }
+
+  void _clearQuestion() {
+    _controller.clear();
+    setState(() {
+      _answer = null;
+      _error = null;
+    });
   }
 
   Future<void> _ask(String question) async {
@@ -112,18 +151,19 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       return;
     }
 
-    // A "solde" question that didn't name an account itself falls back to
-    // the dashboard's currently selected account, or - if there's exactly
-    // one account - that one unambiguously. Never guessed when genuinely
-    // ambiguous: the user is asked to name one instead.
-    if (intent.kind == QueryKind.balance && intent.accountId == null) {
+    // Every question kind - not just "solde" - is scoped to one account: a
+    // question that didn't name one itself falls back to the dashboard's
+    // currently selected account, or - if there's exactly one account -
+    // that one unambiguously. Never guessed when genuinely ambiguous: the
+    // user is asked to name one instead.
+    if (intent.accountId == null) {
       final fallbackAccountId =
           widget.defaultAccountId ?? (accounts.length == 1 ? accounts.single.id : null);
       if (fallbackAccountId == null) {
         final example = accounts.isNotEmpty ? accounts.first.name : 'Compte Courant';
         setState(() {
           _loading = false;
-          _error = 'Précise le compte, par exemple : "quel est le solde de $example ?"';
+          _error = 'Précise le compte dans ta question, par exemple : "sur $example".';
         });
         return;
       }
@@ -132,6 +172,29 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         period: intent.period,
         categoryId: intent.categoryId,
         accountId: fallbackAccountId,
+        payeeId: intent.payeeId,
+        topN: intent.topN,
+        asOf: intent.asOf,
+      );
+    }
+
+    // An unqualified "outlook" question ("pourquoi vais-je finir le mois en
+    // négatif") means "d'ici mon prochain jour de prévision", not "d'ici la
+    // fin du mois calendaire" - every other kind's period-less default (the
+    // current calendar month) doesn't apply here. Naming an explicit period
+    // in the question ("... en juillet") still always wins over this.
+    if (intent.kind == QueryKind.outlook && !parsed.periodWasExplicit) {
+      final today = DateTime.now();
+      final forecastDate = nextForecastDay(today, widget.forecastDay);
+      intent = QueryIntent(
+        kind: intent.kind,
+        period: DateRange(
+          start: DateTime(today.year, today.month, today.day),
+          end: forecastDate.add(const Duration(days: 1)),
+          label: 'd\'ici le ${DateFormat('d MMMM yyyy', 'fr_FR').format(forecastDate)}',
+        ),
+        categoryId: intent.categoryId,
+        accountId: intent.accountId,
         payeeId: intent.payeeId,
         topN: intent.topN,
         asOf: intent.asOf,
@@ -192,12 +255,20 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                 children: [
                   TextField(
                     controller: _controller,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Ta question',
                       hintText: 'ex : quelles ont été mes dépenses en juillet ?',
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
+                      suffixIcon: _controller.text.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.clear),
+                              tooltip: 'Effacer',
+                              onPressed: _clearQuestion,
+                            ),
                     ),
                     textInputAction: TextInputAction.search,
+                    onChanged: _onQuestionChanged,
                     onSubmitted: _ask,
                   ),
                   const SizedBox(height: 12),

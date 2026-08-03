@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../models/budget_period.dart' show nextForecastDay;
 import '../models/currency.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
@@ -16,23 +17,6 @@ import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show openAccountEditor;
 import 'transactions_screen.dart' show TransactionEditorSheet;
-
-/// The next occurrence (this month, or next if already passed) of [day]
-/// as a calendar day, clamped to the last day of whichever month doesn't
-/// have that many (e.g. day 31 in a 30-day month).
-DateTime _nextForecastDate(DateTime now, int day) {
-  DateTime clampedForMonth(int year, int month) {
-    final lastDay = DateTime(year, month + 1, 0).day;
-    return DateTime(year, month, day > lastDay ? lastDay : day);
-  }
-
-  final today = DateTime(now.year, now.month, now.day);
-  var target = clampedForMonth(now.year, now.month);
-  if (target.isBefore(today)) {
-    target = clampedForMonth(now.year, now.month + 1);
-  }
-  return target;
-}
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -112,7 +96,7 @@ class DashboardScreen extends StatelessWidget {
     final scopedBalance = balances[selectedAccountId] ?? 0;
 
     final now = DateTime.now();
-    final forecastDate = _nextForecastDate(now, dbProvider.forecastDay);
+    final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
     final forecastDateLabel =
         'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
     final forecastBalances = {
@@ -134,7 +118,14 @@ class DashboardScreen extends StatelessWidget {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            floating: true,
+            pinned: true,
+            // The theme's AppBarTheme is deliberately transparent (fine for
+            // a non-pinned bar, or one nothing scrolls behind for long) -
+            // but a *pinned* bar has content sliding under it continuously,
+            // so without an opaque background here the scrolled-away
+            // content stays visible right through it instead of
+            // disappearing behind it.
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
             title: const Text('Tableau de bord'),
             actions: [
               PopupMenuButton<AppPalette>(
@@ -182,6 +173,7 @@ class DashboardScreen extends StatelessWidget {
                   context: context,
                   repo: repo,
                   defaultAccountId: selectedAccountId,
+                  forecastDay: dbProvider.forecastDay,
                 ),
               ),
               IconButton(

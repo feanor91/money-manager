@@ -41,6 +41,8 @@ import 'query_intent.dart';
     final n = int.tryParse(topMatch?.group(1) ?? '') ?? 5;
     intent = QueryIntent(
         kind: QueryKind.topExpenses, period: period, accountId: accountId, topN: n);
+  } else if (_asksWhyOutlook(text)) {
+    intent = QueryIntent(kind: QueryKind.outlook, period: period, accountId: accountId);
   } else if (payeeId != null) {
     intent = QueryIntent(
         kind: QueryKind.payeeSpend, period: period, accountId: accountId, payeeId: payeeId);
@@ -74,3 +76,12 @@ bool _mentionsExpense(String text) => RegExp(
 bool _mentionsIncome(String text) => RegExp(
       r'revenu|rentree|salaire|encaisse|recette|gagne|touche',
     ).hasMatch(text);
+
+/// "Pourquoi vais-je finir le mois en négatif ?", "vais-je finir en
+/// négatif", "pourquoi je vais être dans le rouge", "vais-je être à
+/// découvert" - anything asking about ending up (or already being)
+/// negative/overdrawn, not just a plain expense/income total.
+bool _asksWhyOutlook(String text) =>
+    RegExp(r'pourquoi.*(negatif|decouvert|rouge)').hasMatch(text) ||
+    RegExp(r'(finir|terminer).*(negatif|rouge|decouvert)').hasMatch(text) ||
+    RegExp(r'(vais|serai).*decouvert').hasMatch(text);

@@ -103,32 +103,6 @@ class _ForecastChartState extends State<ForecastChart> {
   /// data - the duration/simulation controls stay the same either way.
   bool _showAsTable = false;
 
-  // `accountBalance(asOf:)` scans the account's whole transaction history -
-  // too expensive to redo on every rebuild. It only actually changes once
-  // per calendar day, or when the account's data changes - and
-  // `widget.startingBalance` (the parent's all-time balance for this
-  // account) already changes exactly when the latter happens, so it doubles
-  // as a cheap invalidation signal without any extra plumbing.
-  int? _cachedBalanceAccountId;
-  DateTime? _cachedBalanceDay;
-  double? _cachedBalanceInput;
-  double _cachedBalance = 0;
-
-  double _balanceAsOfNow(DateTime now) {
-    if (widget.accountId == null) return widget.startingBalance;
-    final today = DateTime(now.year, now.month, now.day);
-    if (_cachedBalanceAccountId == widget.accountId &&
-        _cachedBalanceDay == today &&
-        _cachedBalanceInput == widget.startingBalance) {
-      return _cachedBalance;
-    }
-    _cachedBalance = widget.repository.accountBalance(widget.accountId!, asOf: now);
-    _cachedBalanceAccountId = widget.accountId;
-    _cachedBalanceDay = today;
-    _cachedBalanceInput = widget.startingBalance;
-    return _cachedBalance;
-  }
-
   @override
   Widget build(BuildContext context) {
     final sim = context.watch<PurchaseSimulationProvider>();
@@ -428,9 +402,17 @@ class _ForecastChartState extends State<ForecastChart> {
   }
 
   /// Every day from today (inclusive) forward through the selected
-  /// duration: today uses the real balance-as-of-now (so any transaction
-  /// already recorded for today is reflected), every later day layers on
-  /// the mechanical recurring-transaction projection only.
+  /// duration: today starts from [ForecastChart.startingBalance] (the same
+  /// all-transactions total "Solde actuel" shows - deliberately including
+  /// any transaction already entered with a future date, e.g. a bill
+  /// recorded ahead of schedule), every later day layers on the mechanical
+  /// recurring-transaction projection only. Never double-counts a postdated
+  /// entry against that projection: recording a recurring bill's occurrence
+  /// (on time, late, or ahead of schedule - see
+  /// MmexRepository.recordBillOccurrence/catchUpBillDeposit) always
+  /// advances that bill's own next-occurrence date past it, so the
+  /// projection can never re-project something already recorded as a real
+  /// transaction.
   List<_Point> _buildPoints(DateTime now) {
     final today = DateTime(now.year, now.month, now.day);
     final endDate = _addMonths(today, _duration.months);
@@ -442,7 +424,7 @@ class _ForecastChartState extends State<ForecastChart> {
       accountId: widget.accountId,
     );
 
-    final balanceNow = _balanceAsOfNow(now);
+    final balanceNow = widget.startingBalance;
     final points = <_Point>[_Point(today, 0, balanceNow, false)];
     var cumulative = balanceNow;
     var cursor = _addDays(today, 1);

@@ -92,6 +92,11 @@ void main() {
     expect(result.intent!.asOf, DateTime(2026, 7, 31));
   });
 
+  test('outlook decodes like any other recognized kind', () {
+    final result = decode('{"kind":"outlook"}');
+    expect(result.intent!.kind, QueryKind.outlook);
+  });
+
   test('topN as a string is parsed, defaulting to 5 if unparseable', () {
     expect(decode('{"kind":"topExpenses","topN":"10"}').intent!.topN, 10);
     expect(decode('{"kind":"topExpenses","topN":"not a number"}').intent!.topN, 5);

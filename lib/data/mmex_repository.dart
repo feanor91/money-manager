@@ -206,11 +206,15 @@ class MmexRepository {
   /// Current balance = initial balance + sum of signed transactions.
   /// The account's balance, summing every transaction regardless of date
   /// by default (matching MMEX's own total, which includes postdated
-  /// entries the user already entered for a known future expense/income).
-  /// Pass [asOf] to instead cap it at transactions dated on or before that
-  /// day - what the forecast chart needs as its historical anchor, so a
-  /// postdated entry further out doesn't bleed backwards into every
-  /// reconstructed past point.
+  /// entries the user already entered for a known future expense/income) -
+  /// this is deliberately also what the forecast chart/cards start their
+  /// projection from (2026-08-03: previously capped at today for that use,
+  /// but that silently hid an already-recorded future transaction from the
+  /// projection instead of counting it, see forecastAccountBalance and
+  /// ForecastChart._buildPoints). Pass [asOf] for a point-in-time answer
+  /// instead - "what was/will my balance be as of that day" (e.g. the
+  /// natural-language query feature's "solde" questions) - capping at
+  /// transactions dated on or before it.
   double accountBalance(int accountId, {DateTime? asOf}) {
     final account = db.query(
       'SELECT INITIALBAL FROM ACCOUNTLIST_V1 WHERE ACCOUNTID = ?',
@@ -943,16 +947,54 @@ class MmexRepository {
     return result;
   }
 
+  /// Net signed total *per category* from known recurring bills whose
+  /// occurrence(s) fall within [start, end] (both inclusive, matching
+  /// [_occurrencesInRange]'s own convention) - like [recurringDailyNet] but
+  /// bucketed by category instead of by day, so a "why" answer (see
+  /// QueryKind.outlook) can name *which* recurring bills drive a projected
+  /// change instead of just a day-by-day total. A bill with no category set
+  /// is dropped - nothing to attribute it to.
+  Map<int, double> recurringCategoryNet({
+    required DateTime start,
+    required DateTime end,
+    int? accountId,
+  }) {
+    final result = <int, double>{};
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      final involvesAccount = accountId == null ||
+          bill.accountId == accountId ||
+          bill.toAccountId == accountId;
+      if (!involvesAccount) continue;
+      if (accountId == null && bill.transCode == TransCode.transfer) continue;
+      final categoryId = bill.categoryId;
+      if (categoryId == null) continue;
+
+      final occurrenceCount = _occurrencesInRange(bill, start, end).length;
+      if (occurrenceCount == 0) continue;
+      final signedAmount = _billSignedAmount(bill, accountId);
+      result[categoryId] = (result[categoryId] ?? 0) + signedAmount * occurrenceCount;
+    }
+    return result;
+  }
+
   /// Projects [accountId]'s balance forward from today to [targetDate]
   /// using only known recurring transactions (see [recurringDailyNet]) -
   /// the same mechanical projection the forecast chart uses, collapsed to a
   /// single final figure. Returns the plain current balance if [targetDate]
   /// isn't in the future.
+  ///
+  /// Starts from the same all-transactions total [accountBalance] returns
+  /// with no [accountBalance.asOf] - deliberately including anything already
+  /// entered with a future date - not a same-day cap: recording a recurring
+  /// bill's occurrence always advances its own next-occurrence date past
+  /// it (see [recordBillOccurrence]/[catchUpBillDeposit]), so an
+  /// already-recorded postdated entry can never also get re-projected here.
   double forecastAccountBalance(int accountId, DateTime targetDate) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final target = DateTime(targetDate.year, targetDate.month, targetDate.day);
-    final balance = accountBalance(accountId, asOf: now);
+    final balance = accountBalance(accountId);
     if (!target.isAfter(today)) return balance;
 
     final recurring = recurringDailyNet(
@@ -1093,18 +1135,61 @@ class MmexRepository {
     return total;
   }
 
-  /// The [limit] largest withdrawals within [start, end) - "mes plus
-  /// grosses dépenses de tel mois" (natural-language query feature).
-  /// Ordered by amount descending; same exclusions as [categorySpendForPeriod].
-  List<MoneyTransaction> topExpenses(DateTime start, DateTime end, {int? accountId, int limit = 5}) {
+  /// Individual withdrawals within [start, end) tagged with any of
+  /// [categoryIds] - detail behind a single-category natural-language
+  /// answer ("combien j'ai dépensé en Alimentation"), biggest first. Pass
+  /// the category itself plus its direct children (see [rolledUpSpend])
+  /// so a parent-category question's detail also picks up transactions
+  /// recorded against a subcategory. Same exclusions as
+  /// [categorySpendForPeriod].
+  List<MoneyTransaction> transactionsForCategories(
+    List<int> categoryIds,
+    DateTime start,
+    DateTime end, {
+    int? accountId,
+    int limit = 5,
+  }) {
+    if (categoryIds.isEmpty) return const [];
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
       "TRANSCODE = 'Withdrawal'",
+      "CATEGID IN (${categoryIds.map((_) => '?').join(',')})",
       "UPPER(TRIM(STATUS)) != 'V'",
       "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
     ];
-    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    final params = <Object?>[_isoDate(start), _isoDate(end), ...categoryIds];
+    if (accountId != null) {
+      where.add('ACCOUNTID = ?');
+      params.add(accountId);
+    }
+    final rows = db.query(
+      'SELECT * FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')} '
+      'ORDER BY TRANSAMOUNT DESC LIMIT ?',
+      [...params, limit],
+    );
+    return rows.map(MoneyTransaction.fromRow).toList();
+  }
+
+  /// Individual withdrawals at [payeeId] within [start, end) - detail
+  /// behind "combien j'ai dépensé chez X" (natural-language query
+  /// feature), biggest first. Same exclusions as [payeeSpendForPeriod].
+  List<MoneyTransaction> transactionsForPayee(
+    int payeeId,
+    DateTime start,
+    DateTime end, {
+    int? accountId,
+    int limit = 5,
+  }) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "TRANSCODE = 'Withdrawal'",
+      "PAYEEID = ?",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end), payeeId];
     if (accountId != null) {
       where.add('ACCOUNTID = ?');
       params.add(accountId);

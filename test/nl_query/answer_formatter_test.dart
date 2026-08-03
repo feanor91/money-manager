@@ -4,6 +4,7 @@ import 'package:money_manager/models/account.dart';
 import 'package:money_manager/models/category.dart';
 import 'package:money_manager/models/currency.dart';
 import 'package:money_manager/models/payee.dart';
+import 'package:money_manager/models/transaction.dart';
 import 'package:money_manager/services/nl_query/answer_formatter.dart';
 import 'package:money_manager/services/nl_query/query_executor.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';
@@ -73,6 +74,28 @@ void main() {
     expect(text, contains('25,00 €'));
   });
 
+  test('expenseTotal for a specific category lists the transactions behind the total', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.expenseTotal, period: july, categoryId: restaurant.id),
+      QueryAnswer(total: 25, transactions: [
+        MoneyTransaction(
+          id: 1,
+          accountId: compteCourant.id,
+          payeeId: carrefour.id,
+          transCode: TransCode.withdrawal,
+          amount: 25,
+          toAmount: 25,
+          status: '',
+          categoryId: restaurant.id,
+          date: DateTime(2026, 7, 10),
+        ),
+      ]),
+    );
+    expect(text, contains('25,00 €'));
+    expect(text, contains('Carrefour'));
+    expect(text, contains('10 juil. 2026'));
+  });
+
   test('a defaulted (non-explicit) period is called out in the answer', () {
     final text = format(
       QueryIntent(kind: QueryKind.expenseTotal, period: july),
@@ -139,11 +162,105 @@ void main() {
     expect(text, contains('65,00 €'));
   });
 
+  test('payeeSpend lists the transactions behind the total', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.payeeSpend, period: july, payeeId: carrefour.id),
+      QueryAnswer(total: 65, transactions: [
+        MoneyTransaction(
+          id: 1,
+          accountId: compteCourant.id,
+          payeeId: carrefour.id,
+          transCode: TransCode.withdrawal,
+          amount: 40,
+          toAmount: 40,
+          status: '',
+          categoryId: alimentation.id,
+          date: DateTime(2026, 7, 5),
+        ),
+        MoneyTransaction(
+          id: 2,
+          accountId: compteCourant.id,
+          payeeId: carrefour.id,
+          transCode: TransCode.withdrawal,
+          amount: 25,
+          toAmount: 25,
+          status: '',
+          categoryId: restaurant.id,
+          date: DateTime(2026, 7, 10),
+        ),
+      ]),
+    );
+    expect(text, contains('40,00 €'));
+    expect(text, contains('Alimentation'));
+    expect(text, contains('25,00 €'));
+    expect(text, contains('Restaurant'));
+  });
+
   test('topExpenses with no results says so rather than an empty list', () {
     final text = format(
       QueryIntent(kind: QueryKind.topExpenses, period: july),
-      const QueryAnswer(transactions: []),
+      const QueryAnswer(categoryBreakdown: {}),
     );
     expect(text, contains('Aucune dépense trouvée'));
+  });
+
+  test('topExpenses ranks categories by total, biggest first', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.topExpenses, period: july),
+      const QueryAnswer(categoryBreakdown: {2: 25, 1: 40}),
+    );
+    final alimentationIndex = text.indexOf('Alimentation');
+    final restaurantIndex = text.indexOf('Restaurant');
+    expect(alimentationIndex, greaterThanOrEqualTo(0));
+    expect(restaurantIndex, greaterThanOrEqualTo(0));
+    expect(alimentationIndex, lessThan(restaurantIndex));
+    expect(text, contains('40,00 €'));
+    expect(text, contains('25,00 €'));
+  });
+
+  test('outlook staying positive reassures rather than warning', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.outlook, period: july),
+      const QueryAnswer(total: 500, forecastTotal: 350),
+    );
+    expect(text, contains('ne devrait pas passer en négatif'));
+    expect(text, contains('350,00 €'));
+    expect(text, contains('500,00 €'));
+  });
+
+  test('outlook going negative names the crossing date and the biggest recurring cause', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.outlook, period: july),
+      QueryAnswer(
+        total: 100,
+        forecastTotal: -200,
+        forecastCrossesNegativeOn: DateTime(2026, 7, 15),
+        categoryBreakdown: const {1: -300},
+      ),
+    );
+    expect(text, contains('devrait passer en négatif'));
+    expect(text, contains('15 juillet'));
+    expect(text, contains('-200,00 €'));
+    expect(text, contains('Alimentation'));
+    expect(text, contains('-300,00 €'));
+  });
+
+  test('outlook going negative with no recurring cause found points at the ledger instead', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.outlook, period: july),
+      const QueryAnswer(total: 100, forecastTotal: -50, categoryBreakdown: {}),
+    );
+    expect(text, contains('devrait passer en négatif'));
+    expect(text, contains("Aucune facture récurrente connue ne l'explique"));
+  });
+
+  test('outlook already negative today says so, distinctly from a future crossing', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.outlook, period: july),
+      const QueryAnswer(total: -50, forecastTotal: -80, categoryBreakdown: {1: -30}),
+    );
+    expect(text, contains('est déjà négatif'));
+    expect(text, contains('-50,00 €'));
+    expect(text, contains('-80,00 €'));
   });
 }

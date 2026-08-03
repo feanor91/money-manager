@@ -47,3 +47,19 @@ BudgetWindow previousBudgetWindow(BudgetWindow window, int startDay) =>
 
 BudgetWindow nextBudgetWindow(BudgetWindow window, int startDay) =>
     budgetWindowContaining(window.end, startDay);
+
+/// The next occurrence (this month, or next if already passed) of [day] as
+/// a calendar day - the "Jour de prévision du solde" (Settings). Unlike
+/// [BudgetWindow], which deliberately treats its own [startDay] as a
+/// half-open boundary so consecutive windows chain without double-counting
+/// it, this returns the day itself, *inclusive* - matching how the
+/// dashboard's own forecast figures and the natural-language "outlook"
+/// question both use it: "solde prévisionnel au 24 août" counts the 24th.
+DateTime nextForecastDay(DateTime reference, int day) {
+  final today = DateTime(reference.year, reference.month, reference.day);
+  var target = _clampedDay(today.year, today.month, day);
+  if (target.isBefore(today)) {
+    target = _clampedDay(today.year, today.month + 1, day);
+  }
+  return target;
+}

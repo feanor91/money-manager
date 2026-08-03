@@ -100,6 +100,8 @@ QueryKind? _kindFromString(String? s) {
       return QueryKind.topExpenses;
     case 'payeeSpend':
       return QueryKind.payeeSpend;
+    case 'outlook':
+      return QueryKind.outlook;
     default:
       return null;
   }

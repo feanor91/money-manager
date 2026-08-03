@@ -128,4 +128,28 @@ void main() {
     expect(result.intent!.kind, QueryKind.topExpenses);
     expect(result.intent!.topN, 10);
   });
+
+  test('"pourquoi ... negatif" -> outlook, current month default', () {
+    final result = parse('pourquoi vais-je finir le mois en négatif ?');
+    expect(result.intent!.kind, QueryKind.outlook);
+    expect(result.periodWasExplicit, isFalse);
+    expect(result.intent!.period.label, 'Août 2026');
+  });
+
+  test('"vais-je finir en negatif" without "pourquoi" still -> outlook', () {
+    final result = parse('vais-je finir en négatif ce mois-ci ?');
+    expect(result.intent!.kind, QueryKind.outlook);
+    expect(result.periodWasExplicit, isTrue);
+  });
+
+  test('"a decouvert" phrasing -> outlook too', () {
+    final result = parse('vais-je être à découvert ce mois-ci ?');
+    expect(result.intent!.kind, QueryKind.outlook);
+  });
+
+  test('outlook question naming an account resolves it, like every other kind', () {
+    final result = parse('pourquoi vais-je finir en négatif sur mon Livret A ?');
+    expect(result.intent!.kind, QueryKind.outlook);
+    expect(result.intent!.accountId, livretA.id);
+  });
 }

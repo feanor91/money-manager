@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:money_manager/data/mmex_database.dart';
 import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager/models/recurrence.dart';
 import 'package:money_manager/models/transaction.dart';
 import 'package:money_manager/services/nl_query/query_executor.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';
@@ -77,6 +78,8 @@ void main() {
     );
     // 40 (Alimentation itself) + 25 (Restaurant, its subcategory)
     expect(answer.total, 65);
+    // Detail transactions include both the parent's own and its subcategory's.
+    expect(answer.transactions!.map((t) => t.amount).toSet(), {40, 25});
   });
 
   test('expenseTotal for the subcategory alone does not include the parent', () {
@@ -85,6 +88,7 @@ void main() {
       repo,
     );
     expect(answer.total, 25);
+    expect(answer.transactions!.map((t) => t.amount), [25]);
   });
 
   test('incomeTotal sums deposits', () {
@@ -118,10 +122,38 @@ void main() {
     );
   });
 
-  test('topExpenses returns withdrawals biggest first', () {
+  test('topExpenses ranks categories by their total, biggest first', () {
     final answer =
         runQuery(QueryIntent(kind: QueryKind.topExpenses, period: july, topN: 5), repo);
-    expect(answer.transactions!.map((t) => t.amount), [40, 25]);
+    expect(answer.categoryBreakdown, {alimentationId: 40, restaurantId: 25});
+  });
+
+  test('topExpenses ranks by category total, not by a single transaction amount', () {
+    // A category with several smaller withdrawals (65 total here, on top of
+    // the 40 already seeded above) must outrank a single bigger one-off
+    // withdrawal in another category (80) - ranking individual transactions
+    // instead of category totals was the bug this guards against.
+    final facturesId = repo.insertCategory(name: 'Factures Test');
+    repo.insertTransaction(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 80,
+      date: DateTime(2026, 7, 15),
+      categoryId: facturesId,
+    );
+    repo.insertTransaction(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 65,
+      date: DateTime(2026, 7, 20),
+      categoryId: alimentationId,
+    );
+    final answer =
+        runQuery(QueryIntent(kind: QueryKind.topExpenses, period: july, topN: 1), repo);
+    // Alimentation: 40 (seeded) + 65 = 105, bigger than Factures' single 80.
+    expect(answer.categoryBreakdown, {alimentationId: 105});
   });
 
   test('payeeSpend sums withdrawals at that payee only', () {
@@ -130,6 +162,7 @@ void main() {
       repo,
     );
     expect(answer.total, 65);
+    expect(answer.transactions!.map((t) => t.amount).toSet(), {40, 25});
   });
 
   test('payeeSpend without a resolved payeeId throws rather than guessing', () {
@@ -144,5 +177,122 @@ void main() {
     final answer = runQuery(QueryIntent(kind: QueryKind.expenseTotal, period: empty), repo);
     expect(answer.total, 0);
     expect(answer.categoryBreakdown, isEmpty);
+  });
+
+  group('QueryKind.outlook', () {
+    // Fixed "today" so these stay deterministic - runQuery's `now` override
+    // exists precisely for this (unlike MmexRepository.forecastAccountBalance,
+    // which always reads the real clock).
+    final now = DateTime(2026, 8, 3, 10, 30);
+    final august = DateRange(
+        start: DateTime(2026, 8, 1), end: DateTime(2026, 9, 1), label: 'Août 2026');
+
+    test('requires a resolved accountId', () {
+      expect(
+        () => runQuery(QueryIntent(kind: QueryKind.outlook, period: august), repo, now: now),
+        throwsArgumentError,
+      );
+    });
+
+    test('stays positive: no crossing date even though a recurring bill is due', () {
+      final freshId = repo.insertAccount(
+          name: 'Fresh 1', type: 'Checking', initialBalance: 1000, currencyId: 2);
+      repo.insertBillDeposit(
+        accountId: freshId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 50,
+        nextOccurrence: DateTime(2026, 8, 10),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+        categoryId: alimentationId,
+      );
+      final answer = runQuery(
+        QueryIntent(kind: QueryKind.outlook, period: august, accountId: freshId),
+        repo,
+        now: now,
+      );
+      expect(answer.total, 1000);
+      expect(answer.forecastTotal, 950);
+      expect(answer.forecastCrossesNegativeOn, isNull);
+    });
+
+    test('goes negative: crossing date and category breakdown both point at the real cause', () {
+      final freshId = repo.insertAccount(
+          name: 'Fresh 2', type: 'Checking', initialBalance: 100, currencyId: 2);
+      repo.insertBillDeposit(
+        accountId: freshId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 300,
+        nextOccurrence: DateTime(2026, 8, 15),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+        categoryId: alimentationId,
+      );
+      final answer = runQuery(
+        QueryIntent(kind: QueryKind.outlook, period: august, accountId: freshId),
+        repo,
+        now: now,
+      );
+      expect(answer.total, 100);
+      expect(answer.forecastTotal, -200);
+      expect(answer.forecastCrossesNegativeOn, DateTime(2026, 8, 15));
+      expect(answer.categoryBreakdown, {alimentationId: -300});
+    });
+
+    test('already negative today: projects forward flat when nothing recurring is due', () {
+      final freshId = repo.insertAccount(
+          name: 'Fresh 3', type: 'Checking', initialBalance: -50, currencyId: 2);
+      final answer = runQuery(
+        QueryIntent(kind: QueryKind.outlook, period: august, accountId: freshId),
+        repo,
+        now: now,
+      );
+      expect(answer.total, -50);
+      expect(answer.forecastTotal, -50);
+      // No *new* crossing to report - it was already negative before today.
+      expect(answer.forecastCrossesNegativeOn, isNull);
+    });
+
+    test('an already-recorded future transaction lands in the total but is not '
+        'attributed to any category - it is not a recurring bill', () {
+      final freshId = repo.insertAccount(
+          name: 'Fresh 4', type: 'Checking', initialBalance: 100, currencyId: 2);
+      repo.insertTransaction(
+        accountId: freshId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 150,
+        date: DateTime(2026, 8, 20),
+        categoryId: restaurantId,
+      );
+      final answer = runQuery(
+        QueryIntent(kind: QueryKind.outlook, period: august, accountId: freshId),
+        repo,
+        now: now,
+      );
+      // accountBalance() already includes the postdated transaction (see
+      // MmexRepository.accountBalance's own doc comment) - the outlook's
+      // total/forecast must too, but the breakdown can only ever explain
+      // *recurring* bills, so it stays empty here.
+      expect(answer.total, -50);
+      expect(answer.forecastTotal, -50);
+      expect(answer.categoryBreakdown, isEmpty);
+    });
+
+    test('a period that has already ended returns the plain balance, no projection', () {
+      final freshId = repo.insertAccount(
+          name: 'Fresh 5', type: 'Checking', initialBalance: 100, currencyId: 2);
+      final july = DateRange(
+          start: DateTime(2026, 7, 1), end: DateTime(2026, 8, 1), label: 'Juillet 2026');
+      final answer = runQuery(
+        QueryIntent(kind: QueryKind.outlook, period: july, accountId: freshId),
+        repo,
+        now: now,
+      );
+      expect(answer.total, 100);
+      expect(answer.forecastTotal, 100);
+    });
   });
 }

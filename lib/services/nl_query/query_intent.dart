@@ -14,12 +14,29 @@ enum QueryKind {
   /// "Quel est le solde de mon compte courant ?" (optionally "au 15 juin").
   balance,
 
-  /// "Mes plus grosses dépenses du mois dernier" - a ranked list of
-  /// individual withdrawals, not a total.
+  /// "Mes plus grosses dépenses du mois dernier" - the biggest spending
+  /// *categories* over the period, ranked by their total (not individual
+  /// withdrawals: ranking single transactions let one big one-off
+  /// purchase crowd out a category like "Alimentation" that actually
+  /// costs more in aggregate across many smaller ones).
   topExpenses,
 
   /// "Combien j'ai dépensé chez Carrefour ?" - total spend at one payee.
   payeeSpend,
+
+  /// "Pourquoi vais-je finir le mois en négatif ?" - projects the balance
+  /// forward to the end of [QueryIntent.period], using the same known-
+  /// recurring-bills projection the forecast chart uses, and - when that
+  /// lands negative - which recurring categories weigh the most between now
+  /// and then. Unlike every other kind, an unqualified question here does
+  /// *not* default [period] to the current calendar month - it defaults to
+  /// "d'ici mon prochain jour de prévision" (Settings' forecast day, the
+  /// same one the dashboard's own forecast figures use), applied by the
+  /// caller (see nl_query_dialog.dart) rather than the rule-based
+  /// parser/local LLM, neither of which know that setting. Never explains a
+  /// one-off future transaction the user hasn't told the app about some
+  /// other way; there's nothing to reason from for that.
+  outlook,
 }
 
 /// A half-open date window [start, end) plus a human-readable French label
