@@ -19,6 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compute a filesystem-safe branch name
+        # github.ref_name keeps any "/" a branch name has (e.g.
+        # claude/foo) - not allowed in an artifact name.
+        id: safe_ref
+        run: echo "value=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -78,14 +84,14 @@ jobs:
       - name: Upload web artifact
         uses: actions/upload-artifact@v4
         with:
-          name: money-manager-web-${{ github.ref_name }}-run${{ github.run_number }}
+          name: money-manager-web-${{ steps.safe_ref.outputs.value }}-run${{ github.run_number }}
           path: money-manager-web.zip
           retention-days: 14
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: money-manager-android-${{ github.ref_name }}-run${{ github.run_number }}
+          name: money-manager-android-${{ steps.safe_ref.outputs.value }}-run${{ github.run_number }}
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 14
 
