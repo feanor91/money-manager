@@ -595,7 +595,13 @@ class DatabaseProvider extends ChangeNotifier {
   /// don't debounce a write-back at all - see [touch]) - see
   /// unsaved_changes_guard.dart, which warns before closing exactly when
   /// this is true.
-  bool get hasPendingWrite => _writeBackDebounce != null || _writeInFlight;
+  ///
+  /// Checks `isActive`, not just non-null: a one-shot [Timer] object stays
+  /// non-null forever after it fires (only `cancel()` or reassignment
+  /// clears the reference), so a plain null-check here left the indicator
+  /// stuck on permanently after the very first save - confirmed 2026-08-03.
+  bool get hasPendingWrite =>
+      (_writeBackDebounce?.isActive ?? false) || _writeInFlight;
 
   void _enqueueWriteBack(Future<void> Function() writeBack) {
     _writeBackChain = _writeBackChain.then((_) async {
