@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.33] - 2026-08-03
+
+- fix(web): track sqlite3.wasm in git instead of a manual copy step
+- ci: add a manual branch-build workflow, separate from the release pipeline
+
 ## [1.0.32] - 2026-08-02
 
 - feat(dashboard): quick transaction entry, reordered nav, first-account onboarding
