@@ -101,6 +101,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compute a filesystem-safe branch name
+        # Same fix as build-web-and-apk's own copy of this step - job
+        # outputs don't carry across jobs, each needs its own.
+        id: safe_ref
+        shell: bash
+        run: echo "value=$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -147,13 +154,13 @@ jobs:
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: money-manager-windows-portable-${{ github.ref_name }}-run${{ github.run_number }}
+          name: money-manager-windows-portable-${{ steps.safe_ref.outputs.value }}-run${{ github.run_number }}
           path: dist/money-manager-windows-portable.zip
           retention-days: 14
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: money-manager-windows-setup-${{ github.ref_name }}-run${{ github.run_number }}
+          name: money-manager-windows-setup-${{ steps.safe_ref.outputs.value }}-run${{ github.run_number }}
           path: dist/*-setup-win64.exe
           retention-days: 14
