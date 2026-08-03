@@ -600,14 +600,18 @@ class DatabaseProvider extends ChangeNotifier {
   void _enqueueWriteBack(Future<void> Function() writeBack) {
     _writeBackChain = _writeBackChain.then((_) async {
       _writeInFlight = true;
-      // Notify right at the start/end of the actual write (not just when
-      // it's scheduled) so a UI indicator tied to hasPendingWrite can show
-      // "saving now" rather than only "something changed at some point".
+      // Notify right at the start AND end of the actual write (not just
+      // when it's scheduled), so a UI indicator tied to hasPendingWrite
+      // reflects "saving now" instead of freezing on whatever it last
+      // showed. Missing the end-of-write notify here made the indicator
+      // get stuck permanently on after the first save, since nothing else
+      // necessarily rebuilds HomeShell afterwards - confirmed 2026-08-03.
       notifyListeners();
       try {
         await writeBack();
       } finally {
         _writeInFlight = false;
+        notifyListeners();
       }
     });
   }
