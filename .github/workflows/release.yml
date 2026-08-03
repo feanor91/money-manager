@@ -7,13 +7,15 @@ name: Build, test & release
 on:
   push:
     branches: [main]
-    # Doc-only commits (roadmap, readme, changelog, ...) don't need a build
-    # or a release - only trigger when something in these paths also
-    # changes. Ignored if the commit touches nothing else.
+    # Doc-only or CI-config-only commits (roadmap, readme, changelog, a
+    # workflow file tweak...) don't need a build or a release - only
+    # trigger when something in these paths also changes. Ignored if the
+    # commit touches nothing else.
     paths-ignore:
       - '**.md'
       - '.gitignore'
       - 'LICENSE'
+      - '.github/**'
   workflow_dispatch: {} # allows a manual "Run workflow" trigger, e.g. for testing
 
 # A second push to main while one release is still running would race it
