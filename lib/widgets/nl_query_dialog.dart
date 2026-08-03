@@ -78,6 +78,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   bool _loading = false;
   String? _answer;
   String? _error;
+  bool _isAiFreeform = false;
 
   @override
   void dispose() {
@@ -93,6 +94,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       if (value.isEmpty) {
         _answer = null;
         _error = null;
+        _isAiFreeform = false;
       }
     });
   }
@@ -102,6 +104,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     setState(() {
       _answer = null;
       _error = null;
+      _isAiFreeform = false;
     });
   }
 
@@ -111,6 +114,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       _loading = true;
       _answer = null;
       _error = null;
+      _isAiFreeform = false;
     });
 
     final repo = widget.repo;
@@ -143,10 +147,23 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     }
     var intent = parsed.intent;
     if (intent == null) {
+      // Neither the intent extractor nor the rule-based parser recognized
+      // this as a financial question - rather than a flat rejection, let
+      // the same local model answer as ordinary conversation instead (see
+      // the badge on the answer container below, which is what keeps this
+      // visually distinct from a real computed-from-your-data answer).
+      // Only attempted when local AI is actually usable; otherwise there
+      // is no model left to ask and the message below is all there is.
+      final freeform = isLocalLlmSupported ? await askLocalLlmFreeform(question) : null;
       setState(() {
         _loading = false;
-        _error = "Je n'ai pas compris cette question. Essaie une "
-            'formulation comme celles ci-dessous.';
+        if (freeform != null) {
+          _answer = freeform;
+          _isAiFreeform = true;
+        } else {
+          _error = "Je n'ai pas compris cette question. Essaie une "
+              'formulation comme celles ci-dessous.';
+        }
       });
       return;
     }
@@ -298,7 +315,42 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                                 : Theme.of(context).colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: Text(_error ?? _answer ?? ''),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // A computed answer comes straight from the
+                              // database and is always exact; this badge is
+                              // what tells them apart at a glance, since a
+                              // free-form one is the model improvising, not
+                              // a real figure from their data (see CLAUDE.md
+                              // - a financial figure must never look like it
+                              // could be an invention of the model).
+                              if (_isAiFreeform)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.auto_awesome,
+                                        size: 14,
+                                        color: Theme.of(context).colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        "Réponse libre de l'IA, pas un calcul sur tes données",
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Theme.of(context).colorScheme.primary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              Text(_error ?? _answer ?? ''),
+                            ],
+                          ),
                         ),
                       ),
                     )

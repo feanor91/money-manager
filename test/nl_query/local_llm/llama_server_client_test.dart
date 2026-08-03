@@ -120,6 +120,61 @@ void main() {
       expect(await client.ask('...'), '');
       client.close();
     });
+
+    test('honors an explicit host instead of only the 127.0.0.1 default', () async {
+      final port = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'content': 'ok'}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port, host: '127.0.0.1');
+      expect(await client.ask('...'), 'ok');
+      client.close();
+    });
+  });
+
+  group('askFreeform', () {
+    test('sends an ungrammared completion request and returns the content field', () async {
+      Map<String, dynamic>? capturedBody;
+      final port = await startFakeServer((request) async {
+        if (request.uri.path == '/completion') {
+          final body = await utf8.decoder.bind(request).join();
+          capturedBody = jsonDecode(body) as Map<String, dynamic>;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'content': 'Je suis un assistant.'}));
+        }
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      final result = await client.askFreeform('qui es-tu ?');
+      expect(result, 'Je suis un assistant.');
+      expect(capturedBody!.containsKey('grammar'), isFalse);
+      expect(capturedBody!['prompt'], contains('qui es-tu ?'));
+      expect(capturedBody!['prompt'], contains('<|im_start|>system'));
+      expect(capturedBody!['stop'], contains('<|im_end|>'));
+      client.close();
+    });
+
+    test('throws on a non-200 response', () async {
+      final port = await startFakeServer((request) async {
+        request.response.statusCode = 500;
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      await expectLater(client.askFreeform('...'), throwsStateError);
+      client.close();
+    });
+
+    test('an empty/missing content field returns an empty string, not a crash', () async {
+      final port = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'stop': true}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      expect(await client.askFreeform('...'), '');
+      client.close();
+    });
   });
 
   test('chatMlPrompt wraps the question in ChatML turns', () {
@@ -127,5 +182,15 @@ void main() {
     expect(prompt, startsWith('<|im_start|>system\n'));
     expect(prompt, contains('<|im_start|>user\nbonjour<|im_end|>'));
     expect(prompt, endsWith('<|im_start|>assistant\n'));
+  });
+
+  test('freeformChatMlPrompt wraps the question in ChatML turns with a plain '
+      'conversational system prompt', () {
+    final prompt = freeformChatMlPrompt('bonjour');
+    expect(prompt, startsWith('<|im_start|>system\n'));
+    expect(prompt, contains('<|im_start|>user\nbonjour<|im_end|>'));
+    expect(prompt, endsWith('<|im_start|>assistant\n'));
+    // Distinct from the intent-extraction prompt: no JSON-shape instructions.
+    expect(prompt, isNot(contains('"kind"')));
   });
 }

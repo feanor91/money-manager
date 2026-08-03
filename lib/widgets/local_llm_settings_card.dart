@@ -32,6 +32,12 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
   String? _downloadError;
   StreamSubscription<double?>? _downloadSub;
 
+  final _hostController = TextEditingController();
+  final _portController = TextEditingController();
+  final _contextSizeController = TextEditingController();
+  final _gpuLayersController = TextEditingController();
+  String? _serverSettingsError;
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +47,10 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
   @override
   void dispose() {
     _downloadSub?.cancel();
+    _hostController.dispose();
+    _portController.dispose();
+    _contextSizeController.dispose();
+    _gpuLayersController.dispose();
     super.dispose();
   }
 
@@ -52,6 +62,10 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     final downloaded = await isLocalLlmModelDownloaded(localLlmModelById(modelId) ?? localLlmModels.first);
     final runtimeAvailable = await isLocalLlmRuntimeAvailable();
     final runtimePath = await localLlmRuntimeFolderPath();
+    final host = await localLlmServerHost();
+    final port = await localLlmServerPort();
+    final contextSize = await localLlmContextSize();
+    final gpuLayers = await localLlmGpuLayers();
     if (!mounted) return;
     setState(() {
       _enabled = enabled;
@@ -59,6 +73,10 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
       _modelDownloaded = downloaded;
       _runtimeAvailable = runtimeAvailable;
       _runtimePath = runtimePath;
+      _hostController.text = host;
+      _portController.text = '$port';
+      _contextSizeController.text = '$contextSize';
+      _gpuLayersController.text = '$gpuLayers';
       _loading = false;
     });
   }
@@ -118,6 +136,36 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     final available = await isLocalLlmRuntimeAvailable();
     if (!mounted) return;
     setState(() => _runtimeAvailable = available);
+  }
+
+  /// Validates and saves all four server launch settings together, rather
+  /// than as each field changes - a half-typed port number is not a value
+  /// worth persisting (or restarting the running server over) on every
+  /// keystroke.
+  Future<void> _applyServerSettings() async {
+    final host = _hostController.text.trim();
+    final port = int.tryParse(_portController.text.trim());
+    final contextSize = int.tryParse(_contextSizeController.text.trim());
+    final gpuLayers = int.tryParse(_gpuLayersController.text.trim());
+    if (host.isEmpty ||
+        port == null || port <= 0 || port > 65535 ||
+        contextSize == null || contextSize <= 0 ||
+        gpuLayers == null || gpuLayers < 0) {
+      setState(() {
+        _serverSettingsError = 'Vérifie les valeurs : hôte non vide, port entre 1 et 65535, '
+            'taille de contexte et couches GPU positives.';
+      });
+      return;
+    }
+    await setLocalLlmServerHost(host);
+    await setLocalLlmServerPort(port);
+    await setLocalLlmContextSize(contextSize);
+    await setLocalLlmGpuLayers(gpuLayers);
+    if (!mounted) return;
+    setState(() => _serverSettingsError = null);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
+    );
   }
 
   @override
@@ -206,6 +254,72 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               onPressed: _recheckRuntime,
               icon: const Icon(Icons.refresh),
               label: const Text('Vérifier à nouveau'),
+            ),
+            const Divider(height: 32),
+            Text('Paramètres du serveur', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 4),
+            Text(
+              "Un changement redémarre le serveur local à la prochaine question, pas "
+              'immédiatement.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _hostController,
+                    decoration: const InputDecoration(labelText: 'Hôte', isDense: true),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _portController,
+                    decoration: const InputDecoration(labelText: 'Port', isDense: true),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _contextSizeController,
+                    decoration:
+                        const InputDecoration(labelText: 'Taille de contexte', isDense: true),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _gpuLayersController,
+                    decoration: const InputDecoration(
+                      labelText: 'Couches sur GPU (0 = CPU seul)',
+                      isDense: true,
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+              ],
+            ),
+            if (_serverSettingsError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _serverSettingsError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton(
+                onPressed: _applyServerSettings,
+                child: const Text('Appliquer'),
+              ),
             ),
           ],
         ),

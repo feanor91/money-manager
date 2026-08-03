@@ -31,6 +31,20 @@ Future<void> deleteLocalLlmModel(LocalLlmModel model) => impl.deleteLocalLlmMode
 Future<String> localLlmRuntimeFolderPath() => impl.localLlmRuntimeFolderPath();
 Future<bool> isLocalLlmRuntimeAvailable() => impl.isLocalLlmRuntimeAvailable();
 
+/// User-configurable `llama-server.exe` launch settings (see Settings'
+/// "Paramètres du serveur") - each setter restarts the running server (if
+/// any) so a change actually takes effect on the next question, rather
+/// than silently continuing to run with the old value until the app
+/// restarts.
+Future<String> localLlmServerHost() => impl.localLlmServerHost();
+Future<void> setLocalLlmServerHost(String value) => impl.setLocalLlmServerHost(value);
+Future<int> localLlmServerPort() => impl.localLlmServerPort();
+Future<void> setLocalLlmServerPort(int value) => impl.setLocalLlmServerPort(value);
+Future<int> localLlmContextSize() => impl.localLlmContextSize();
+Future<void> setLocalLlmContextSize(int value) => impl.setLocalLlmContextSize(value);
+Future<int> localLlmGpuLayers() => impl.localLlmGpuLayers();
+Future<void> setLocalLlmGpuLayers(int value) => impl.setLocalLlmGpuLayers(value);
+
 /// Call once at app startup (see main.dart) so a still-running
 /// `llama-server.exe` never outlives the app itself - a no-op on any
 /// platform where local AI was never reachable in the first place.
@@ -59,3 +73,9 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
       payees: payees,
       now: now,
     );
+
+/// Free-form fallback once neither the local AI's intent extractor nor the
+/// rule-based parser recognized [question] as a financial one - null under
+/// the same conditions as [extractIntentWithLocalLlm] (unsupported,
+/// disabled, not ready, or any failure). Never throws.
+Future<String?> askLocalLlmFreeform(String question) => impl.askLocalLlmFreeform(question);

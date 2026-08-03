@@ -88,23 +88,38 @@ String chatMlPrompt(String question) =>
     '<|im_start|>user\n$question<|im_end|>\n'
     '<|im_start|>assistant\n';
 
-/// Talks HTTP to whatever's already listening on 127.0.0.1:[port] -
-/// entirely unaware of whether that's a real `llama-server.exe` process or
-/// (in tests) a fake stand-in; spawning/killing the real process is
-/// local_llm_manager_io.dart's job, not this class's.
+const _freeformSystemPrompt = '''
+Tu es un assistant utile qui répond en français, de façon concise. Tu fais partie d'une application de gestion de finances personnelles, mais tu n'as ici accès à aucune donnée financière de l'utilisateur (ni comptes, ni transactions, ni soldes) - si la question porte sur ses dépenses, revenus ou soldes, dis-le et invite-le à la reformuler comme une question sur ses finances plutôt que d'inventer un chiffre.
+''';
+
+/// Same ChatML framing as [chatMlPrompt], but the plain conversational
+/// system prompt used by [LlamaServerClient.askFreeform] instead of the
+/// intent-extraction one - kept as a top-level function (rather than
+/// inlined) purely so it's directly unit-testable the same way
+/// [chatMlPrompt] already is.
+String freeformChatMlPrompt(String question) =>
+    '<|im_start|>system\n$_freeformSystemPrompt<|im_end|>\n'
+    '<|im_start|>user\n$question<|im_end|>\n'
+    '<|im_start|>assistant\n';
+
+/// Talks HTTP to whatever's already listening on [host]:[port] - entirely
+/// unaware of whether that's a real `llama-server.exe` process or (in
+/// tests) a fake stand-in; spawning/killing the real process, and deciding
+/// what host/port it listens on, is local_llm_manager_io.dart's job, not
+/// this class's.
 class LlamaServerClient {
   final int port;
+  final String host;
   final http.Client _client;
 
-  LlamaServerClient(this.port) : _client = http.Client();
+  LlamaServerClient(this.port, {this.host = '127.0.0.1'}) : _client = http.Client();
 
   /// Polls `/health` until it answers 200, or throws once [timeout]
-  /// elapses - a large model can genuinely take a while to load on CPU
-  /// (see local_llm_manager_io.dart's rationale for staying CPU-only: no
-  /// way to verify a GPU path works without hands-on access to the real
-  /// machine). [hasExited] lets the caller report "the process already
-  /// died" so this can fail fast instead of waiting out the full timeout
-  /// polling a port nothing will ever answer on again.
+  /// elapses - loading a multi-gigabyte model, especially with layers
+  /// offloaded to the GPU for the first time on a cold disk cache, is
+  /// genuinely slow to start. [hasExited] lets the caller report "the
+  /// process already died" so this can fail fast instead of waiting out
+  /// the full timeout polling a port nothing will ever answer on again.
   Future<void> waitUntilHealthy({
     required Duration timeout,
     bool Function() hasExited = _neverExited,
@@ -116,7 +131,7 @@ class LlamaServerClient {
       }
       try {
         final response = await _client
-            .get(Uri.parse('http://127.0.0.1:$port/health'))
+            .get(Uri.parse('http://$host:$port/health'))
             .timeout(const Duration(seconds: 2));
         if (response.statusCode == 200) return;
       } catch (_) {
@@ -135,13 +150,41 @@ class LlamaServerClient {
   /// to the rule-based parser.
   Future<String> ask(String question) async {
     final response = await _client.post(
-      Uri.parse('http://127.0.0.1:$port/completion'),
+      Uri.parse('http://$host:$port/completion'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
         'prompt': chatMlPrompt(question),
         'grammar': jsonGrammar,
         'temperature': 0.1,
         'n_predict': 256,
+        'stop': ['<|im_end|>'],
+        'stream': false,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('llama-server a répondu ${response.statusCode}.');
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return decoded['content'] as String? ?? '';
+  }
+
+  /// Same shape as [ask], but no JSON grammar and a plain conversational
+  /// system prompt instead of the intent-extraction one - used only once
+  /// nl_query_dialog.dart has already established the question matches no
+  /// recognized financial-question shape (see [chatMlPrompt]/[jsonGrammar]),
+  /// so there is nothing left to lose by letting the model just answer in
+  /// prose instead of returning "je n'ai pas compris". A higher
+  /// [n_predict]/temperature than [ask] on purpose: that one wants a short,
+  /// deterministic JSON object, this one wants a normal, natural-sounding
+  /// reply.
+  Future<String> askFreeform(String question) async {
+    final response = await _client.post(
+      Uri.parse('http://$host:$port/completion'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'prompt': freeformChatMlPrompt(question),
+        'temperature': 0.7,
+        'n_predict': 512,
         'stop': ['<|im_end|>'],
         'stream': false,
       }),

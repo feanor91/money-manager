@@ -17,19 +17,88 @@ import 'model_downloader.dart' as downloader;
 /// feature targets Windows desktop only for now (see CLAUDE.md/ROADMAP.md).
 const _prefsKeyEnabled = 'mmex_local_llm_enabled';
 const _prefsKeySelectedModel = 'mmex_local_llm_selected_model';
+const _prefsKeyServerHost = 'mmex_local_llm_server_host';
+const _prefsKeyServerPort = 'mmex_local_llm_server_port';
+const _prefsKeyContextSize = 'mmex_local_llm_context_size';
+const _prefsKeyGpuLayers = 'mmex_local_llm_gpu_layers';
 
-/// Fixed, never user-facing - the server is only ever reached from this
-/// same process on 127.0.0.1, so there's nothing to remember or configure.
-/// Picked arbitrarily distinct from this project's own web dev-server port
-/// (8791) purely so the two are never confused in logs/discussion, not
-/// because they could ever actually collide (this is desktop-only; the web
-/// build never reaches this file at all).
-const _serverPort = 8792;
+/// Loopback-only by default (nothing outside this PC can reach it unless
+/// the user deliberately opens it up via Settings) - distinct from this
+/// project's own web dev-server port (8791) purely so the two are never
+/// confused in logs/discussion, not because they could ever actually
+/// collide (this is desktop-only; the web build never reaches this file at
+/// all).
+const _defaultServerHost = '127.0.0.1';
+const _defaultServerPort = 8792;
 
-/// How long a model load may take before giving up - CPU-only inference of
-/// a multi-gigabyte model is genuinely slow to start, especially the first
-/// time (disk cache cold).
+/// Generous enough for a multi-turn-feeling conversation and long-ish
+/// financial questions without a real reason not to be - see Settings if a
+/// user wants to trade this for lower RAM/VRAM use.
+const _defaultContextSize = 32768;
+
+/// 999 is llama.cpp's own convention for "offload every layer that fits" -
+/// harmless even on a build with no GPU backend compiled in (ggml just
+/// keeps everything on CPU then) or on a GPU too small to fit them all
+/// (llama.cpp falls back to keeping the remainder on CPU rather than
+/// failing outright).
+const _defaultGpuLayers = 999;
+
+/// How long a model load may take before giving up - a multi-gigabyte
+/// model, especially the first time it's read from a cold disk cache, is
+/// genuinely slow to start.
 const _startupTimeout = Duration(seconds: 90);
+
+Future<String> localLlmServerHost() async {
+  if (!Platform.isWindows) return _defaultServerHost;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyServerHost) ?? _defaultServerHost;
+}
+
+Future<void> setLocalLlmServerHost(String value) async {
+  if (!Platform.isWindows) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyServerHost, value);
+  await _disposeEngine(); // the running server was bound to the old host
+}
+
+Future<int> localLlmServerPort() async {
+  if (!Platform.isWindows) return _defaultServerPort;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getInt(_prefsKeyServerPort) ?? _defaultServerPort;
+}
+
+Future<void> setLocalLlmServerPort(int value) async {
+  if (!Platform.isWindows) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setInt(_prefsKeyServerPort, value);
+  await _disposeEngine(); // the running server was bound to the old port
+}
+
+Future<int> localLlmContextSize() async {
+  if (!Platform.isWindows) return _defaultContextSize;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getInt(_prefsKeyContextSize) ?? _defaultContextSize;
+}
+
+Future<void> setLocalLlmContextSize(int value) async {
+  if (!Platform.isWindows) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setInt(_prefsKeyContextSize, value);
+  await _disposeEngine(); // context size is only applied at model load time
+}
+
+Future<int> localLlmGpuLayers() async {
+  if (!Platform.isWindows) return _defaultGpuLayers;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getInt(_prefsKeyGpuLayers) ?? _defaultGpuLayers;
+}
+
+Future<void> setLocalLlmGpuLayers(int value) async {
+  if (!Platform.isWindows) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setInt(_prefsKeyGpuLayers, value);
+  await _disposeEngine(); // GPU offload is only applied at model load time
+}
 
 Future<bool> isLocalLlmEnabled() async {
   if (!Platform.isWindows) return false;
@@ -79,14 +148,15 @@ Future<void> deleteLocalLlmModel(LocalLlmModel model) async {
 /// user must manually place a llama.cpp Windows server build - download the
 /// latest Windows release zip from the official llama.cpp GitHub releases
 /// (github.com/ggml-org/llama.cpp/releases - a `llama-<version>-bin-win-*.zip`
-/// asset matching this machine's CPU) and extract `llama-server.exe` plus
-/// every `.dll` next to it from that zip into this folder. Unlike the
+/// asset matching this machine's CPU/GPU) and extract `llama-server.exe`
+/// plus every `.dll` next to it from that zip into this folder. Unlike the
 /// earlier `llama_cpp_dart`-based approach (see ROADMAP.md, 2026-08-03),
 /// this step could plausibly be automated later (llama.cpp's own releases
 /// are genuinely ready-to-run, unlike the Dart FFI packages' were) - not
 /// done yet since picking the right asset (CPU/CUDA/Vulkan variant) needs
-/// real hardware to verify against, same reason the GPU path below stays
-/// off.
+/// real hardware to verify against. GPU offload itself (see
+/// [localLlmGpuLayers]) no longer waits on that: it's on by default and
+/// simply has no effect on a runtime build with no GPU backend compiled in.
 Future<Directory> _runtimeDirectory() async {
   final modelsDir = await downloader.localLlmModelsDirectory();
   final dir = Directory('${modelsDir.parent.path}${Platform.pathSeparator}local_llm_runtime');
@@ -108,12 +178,22 @@ Process? _serverProcess;
 LlamaServerClient? _serverClient;
 String? _engineModelPath;
 
+/// (host, port, contextSize, gpuLayers) the currently-running server was
+/// actually launched with - records use value equality, so comparing this
+/// against the *current* Settings values is how [_ensureEngine] notices a
+/// config change and restarts the server, on top of the explicit
+/// [_disposeEngine] each setter already does (belt and suspenders: this
+/// catches drift from any future call site that reads these prefs some
+/// other way too).
+(String, int, int, int)? _engineConfig;
+
 Future<void> _disposeEngine() async {
   final client = _serverClient;
   final process = _serverProcess;
   _serverClient = null;
   _serverProcess = null;
   _engineModelPath = null;
+  _engineConfig = null;
   client?.close();
   if (process != null) {
     process.kill();
@@ -156,15 +236,23 @@ Future<LlamaServerClient?> _ensureEngine() async {
   final modelPath = await downloader.downloadedModelPath(model);
   if (modelPath == null) return null;
 
-  if (_serverClient != null && _engineModelPath == modelPath) return _serverClient;
+  final host = await localLlmServerHost();
+  final port = await localLlmServerPort();
+  final contextSize = await localLlmContextSize();
+  final gpuLayers = await localLlmGpuLayers();
+  final config = (host, port, contextSize, gpuLayers);
+
+  if (_serverClient != null && _engineModelPath == modelPath && _engineConfig == config) {
+    return _serverClient;
+  }
   await _disposeEngine();
   try {
     final process = await Process.start(await _serverExePath(), [
       '-m', modelPath,
-      '--port', '$_serverPort',
-      '--host', '127.0.0.1',
-      '-c', '4096',
-      '-ngl', '0', // CPU-only - see this file's own doc comment above.
+      '--port', '$port',
+      '--host', host,
+      '-c', '$contextSize',
+      '-ngl', '$gpuLayers',
     ]);
     // Drain stdout/stderr so the process's own pipe buffers can't fill up
     // and stall it - this app never needs to show that output anywhere.
@@ -173,12 +261,13 @@ Future<LlamaServerClient?> _ensureEngine() async {
     var processExited = false;
     unawaited(process.exitCode.then((_) => processExited = true));
 
-    final client = LlamaServerClient(_serverPort);
+    final client = LlamaServerClient(port, host: host);
     await client.waitUntilHealthy(timeout: _startupTimeout, hasExited: () => processExited);
 
     _serverProcess = process;
     _serverClient = client;
     _engineModelPath = modelPath;
+    _engineConfig = config;
     return client;
   } catch (_) {
     await _disposeEngine();
@@ -208,5 +297,25 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
     );
   } catch (_) {
     return (intent: null, periodWasExplicit: false);
+  }
+}
+
+/// Free-form fallback for a question that matched no financial intent
+/// (see [extractIntentWithLocalLlm]) and no rule-based pattern either -
+/// null under the same conditions (unsupported, disabled, not ready, or
+/// any failure), same never-throws contract, so the caller
+/// (nl_query_dialog.dart) can fall back to the "not understood" message
+/// exactly as if local AI were off.
+Future<String?> askLocalLlmFreeform(String question) async {
+  if (!Platform.isWindows) return null;
+  if (!await isLocalLlmEnabled()) return null;
+  final engine = await _ensureEngine();
+  if (engine == null) return null;
+  try {
+    final raw = await engine.askFreeform(question);
+    final trimmed = raw.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  } catch (_) {
+    return null;
   }
 }
