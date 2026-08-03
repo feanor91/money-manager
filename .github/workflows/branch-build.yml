@@ -1,0 +1,153 @@
+name: Build a branch (no release)
+
+# Manually triggered only - pick any branch from the "Run workflow" button
+# (Actions tab) or `gh workflow run branch-build.yml --ref <branch>`, and
+# get downloadable web/Android/Windows builds from it as run artifacts.
+# Unlike release.yml, this never bumps the version, tags anything,
+# publishes a GitHub Release, or pushes to any branch - release.yml's
+# version-bump step always pushes to `main` regardless of which branch
+# triggered the run, which is exactly what this workflow exists to avoid
+# when someone just wants to try a branch's build without merging it.
+# Artifacts expire automatically after 14 days.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-web-and-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;28.0.3" "build-tools;34.0.0"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build web
+        run: flutter build web --release --build-number=${{ github.run_number }}
+
+      - name: Set up Android release signing
+        # Same real keystore release.yml uses (see its own comment) - a
+        # debug-signed test APK couldn't install as an "update" over
+        # whatever release build is already on the tester's phone.
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/release.keystore.jks
+          cat > android/key.properties <<PROPS
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=../release.keystore.jks
+          PROPS
+
+      - name: Build APK
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Package web build
+        run: |
+          cd build/web
+          zip -r "../../money-manager-web.zip" .
+
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: money-manager-web-${{ github.ref_name }}-run${{ github.run_number }}
+          path: money-manager-web.zip
+          retention-days: 14
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: money-manager-android-${{ github.ref_name }}-run${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Package portable build
+        shell: pwsh
+        run: |
+          $releaseDir = "build\windows\x64\runner\Release"
+          $portableDir = "dist\portable"
+          New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
+          Copy-Item "$releaseDir\*" $portableDir -Recurse
+          Set-Content -Path "$portableDir\portable.txt" -Encoding utf8 -Value @"
+          Ce fichier indique a Money Manager de stocker ses preferences (code PIN, dernier fichier ouvert, theme...) dans un fichier local chiffre a cote de cet executable, plutot que dans le profil Windows - ce dossier reste ainsi vraiment portable (fonctionne pareil sur n'importe quel PC / cle USB).
+
+          Ne supprimez pas ce fichier.
+          "@
+          Compress-Archive -Path "$portableDir\*" -DestinationPath "dist\money-manager-windows-portable.zip"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # Not a real version number - just marks this clearly as a
+          # branch test build, distinct from a real release.yml artifact.
+          $label = "test-run${{ github.run_number }}"
+          (Get-Content installer\money_manager.iss) `
+            -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$label`"" |
+            Set-Content installer\money_manager.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\money_manager.iss
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: money-manager-windows-portable-${{ github.ref_name }}-run${{ github.run_number }}
+          path: dist/money-manager-windows-portable.zip
+          retention-days: 14
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: money-manager-windows-setup-${{ github.ref_name }}-run${{ github.run_number }}
+          path: dist/*-setup-win64.exe
+          retention-days: 14
