@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.36] - 2026-08-03
+
+- fix(state): stop the Sauvegarde... indicator sticking on forever
+
 ## [1.0.35] - 2026-08-03
 
 - fix(state): notify listeners when a write-back finishes, not just when it starts
