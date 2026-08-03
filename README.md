@@ -60,13 +60,17 @@ sélecteur de fichiers natif.
   disque automatiquement ; pensez à "Télécharger une copie .mmb" depuis les
   Paramètres avant de fermer l'onglet.
 
-### Étape manuelle requise pour le web : `sqlite3.wasm`
+### `sqlite3.wasm`
 
-Le moteur SQLite compilé en WebAssembly n'est pas embarqué dans ce dépôt.
-Après `flutter pub get`, copiez le binaire `sqlite3.wasm` fourni par le
-package `sqlite3` dans `web/sqlite3.wasm` (voir la doc du package
-[`sqlite3` sur pub.dev](https://pub.dev/packages/sqlite3), section web, pour
-la commande exacte selon la version installée).
+Le moteur SQLite compilé en WebAssembly, requis pour la version web, est
+commité directement dans ce dépôt (`web/sqlite3.wasm`) plutôt que copié
+manuellement à chaque poste - une étape manuelle avait déjà causé une
+régression en production (le fichier supprimé par erreur lors d'un
+déploiement à la main, 2026-08-03) qu'un fichier absent du dépôt ne peut
+plus provoquer. Si le package `sqlite3` est mis à jour vers une version
+dont le binaire WASM diffère, remplacez ce fichier par la nouvelle version
+fournie par le package (voir sa doc sur
+[pub.dev](https://pub.dev/packages/sqlite3), section web) et commitez-le.
 
 ## Sauvegardes automatiques
 
