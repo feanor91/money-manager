@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.34] - 2026-08-03
+
+- fix(state): serialize db write-backs, stop error banner from shifting UI, surface save status
+- ci: fix branch-build's Windows job too - same slash-in-name bug
+
 ## [1.0.33] - 2026-08-03
 
 - fix(web): track sqlite3.wasm in git instead of a manual copy step
