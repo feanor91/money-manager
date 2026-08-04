@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.46] - 2026-08-04
+
+- feat(webdav): bidirectional auto-sync on app resume/pause + version fallback
+
 ## [1.0.45] - 2026-08-04
 
 - fix(webdav): show feedback when conflict resolution has nothing to ask
