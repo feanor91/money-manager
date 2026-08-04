@@ -3,15 +3,6 @@
 Idées et pistes pour la suite, non planifiées ni engagées - une liste de
 courses, pas des engagements.
 
-## Demandées
-
-- **Vérification/installation des mises à jour côté Android** (suite du
-  2026-08-02). La version desktop est faite (voir Récemment fait) ; Android
-  a besoin de son propre déclencheur d'installation natif
-  (`REQUEST_INSTALL_PACKAGES` + `FileProvider` dans `AndroidManifest.xml`),
-  volontairement traité à part plutôt que mélangé au changement desktop, vu
-  les frictions Kotlin/Gradle déjà rencontrées sur ce projet le même jour.
-
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
@@ -46,6 +37,63 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Vérification/installation des mises à jour côté Android~~ - **fait,
+  vérification en direct par l'utilisateur en attente (2026-08-04)**. Suite
+  du 2026-08-02 (desktop fait ce jour-là). Android a son propre chemin
+  maintenant : `checkForUpdatesAndPrompt` (`update_prompt_io.dart`) prend
+  en charge Android en plus de Windows, télécharge l'APK depuis la release
+  GitHub (`androidApkUrl`, déjà extrait par `update_checker.dart` mais
+  jamais branché avant), puis le remet au programme d'installation système
+  d'Android - contrairement à desktop, ça ne peut jamais être silencieux,
+  Android demande toujours une confirmation de l'utilisateur pour installer
+  un APK. Nécessite un peu de code natif Kotlin
+  (`MainActivity.kt`) : construire l'URI `content://` à remettre à
+  l'installateur passe par `FileProvider.getUriForFile()`, une API
+  Java/Kotlin sans équivalent Dart - tout le reste (téléchargement,
+  décision si une mise à jour existe) reste en Dart. Ajouts au manifeste :
+  permission `REQUEST_INSTALL_PACKAGES` + déclaration `FileProvider` +
+  `res/xml/file_paths.xml` exposant le dossier cache de l'appli (là où
+  l'APK est téléchargé). `flutter analyze`/`flutter test`/
+  `flutter build apk --release` vérifiés propres (aucun conflit de fusion
+  du manifeste, aucune erreur Kotlin) ; le vrai scénario "une mise à jour
+  existe, taper Installer, confirmer l'installation système" reste à tester
+  en conditions réelles sur un téléphone.
+- ~~3 tests IA locale qui échouaient (pumpAndSettle timeout)~~ - **fait
+  (2026-08-04)**. Ces 3 tests de `nl_query_dialog_test.dart` (ceux qui
+  tapent "Demander") étaient marqués comme problème connu depuis le
+  2026-08-03, cause non trouvée à l'époque. Cause réelle, trouvée avec la
+  même méthode d'instrumentation que le bug du PIN ci-dessous :
+  `NlQueryDialog._ask()` appelle `AppPreferences.getInstance()` (via
+  `isLocalLlmEnabled()`), qui - sans instance déjà en cache - fait un vrai
+  accès disque (`File(...).exists()`) pour chercher un marqueur
+  `portable.txt` à côté de l'exécutable du test lui-même
+  (`flutter_tester.exe`) - un accès disque réel qui ne se termine jamais
+  dans l'exécution pilotée par `pumpAndSettle`. Corrigé en pré-remplissant
+  le cache d'`AppPreferences` dans `setUpAll` via un nouveau point d'accès
+  `debugOverrideInstance`/`debugResetInstance` (réservés aux tests), pour
+  que ce chemin de code ne soit jamais atteint. Les 170 tests passent
+  maintenant, en ~5 secondes.
+- ~~Bug de saisie du code PIN sur desktop/Android~~ - **fait, vérification
+  en direct par l'utilisateur en attente (2026-08-04)**. Signalé le
+  2026-08-04 : après une erreur de frappe suivie d'un backspace pour
+  corriger, retaper faisait réapparaître les chiffres déjà effacés -
+  impossible de corriger une erreur une fois commencée. Plusieurs fausses
+  pistes explorées d'abord (le masquage web `pinMaskFormatter`, puis
+  plusieurs répliques isolées du champ qui ne reproduisaient jamais le
+  bug). Cause réelle : `_PinGate` (`app.dart`) affichait l'écran de
+  déverrouillage *à la place* du contenu normal de `MaterialApp.builder`
+  plutôt qu'imbriqué dedans, donc sans ancêtre `Navigator`/`Overlay`. Dès
+  que le champ PIN prenait le focus, Flutter plantait silencieusement dans
+  `Overlay.of()` en essayant d'afficher les poignées de sélection de
+  texte, laissant l'état interne du champ corrompu - confirmé en
+  instrumentant l'écran réel et en capturant sa sortie console (le
+  build de test tournait déjà, mais sans base de données configurée,
+  donc pas de code PIN à taper avant ça). Corrigé en enveloppant chaque
+  écran de substitution dans son propre `Navigator`
+  (`_PinGate._gated()`). Au passage, desktop/Android utilisent maintenant
+  `obscureText: true` natif plutôt que le masquage personnalisé (qui reste
+  la bonne pratique sur web pour éviter l'autofill navigateur, mais
+  n'était pas la vraie cause ici).
 - ~~Grand livre : afficher tout l'historique plutôt que mois par mois~~ -
   **fait pour desktop et Android, web élargi à 2 mois - vérification en
   direct par l'utilisateur en attente (2026-08-04)**. Signalé le 2026-08-04 :

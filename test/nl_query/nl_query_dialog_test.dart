@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -8,6 +10,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_async_p
 import 'package:money_manager/data/mmex_database.dart';
 import 'package:money_manager/data/mmex_repository.dart';
 import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager/state/app_preferences.dart';
 import 'package:money_manager/widgets/nl_query_dialog.dart';
 
 import '../test_helpers.dart';
@@ -19,26 +22,37 @@ import '../test_helpers.dart';
 /// through genuine taps/typing, the closest thing to a live manual check
 /// available in this environment (no Chrome/GTK here to open a real
 /// browser/desktop window - see the session notes).
-///
-/// KNOWN ISSUE (2026-08-03): the 3 tests below that actually tap "Demander"
-/// hang on pumpAndSettle on this machine - newly exposed now that this file
-/// compiles at all (it didn't before today, blocked by the unrelated
-/// llama_cpp_dart removal - see ROADMAP.md), so this was never run here
-/// until now. Root cause not confirmed: Platform.isWindows is true during
-/// `flutter test` on this real Windows machine, so NlQueryDialog._ask()
-/// really does reach the (Windows-only) local-LLM check, and the mocks
-/// below are a reasonable, harmless guard against shared_preferences
-/// needing a real platform channel there - but adding them did *not*
-/// resolve the hang, and a print placed immediately before that check
-/// never even printed, suggesting execution never gets that far in the
-/// first place. Needs a real debugging session on a Windows dev machine,
-/// not blind guessing from here - left failing rather than silently
-/// skipped so it stays visible.
 void main() {
+  late Directory tempPrefsDir;
+
   setUpAll(() async {
     await initializeDateFormatting('fr_FR');
     SharedPreferencesAsyncPlatform.instance = InMemorySharedPreferencesAsync.empty();
     SharedPreferences.setMockInitialValues({});
+
+    // The 3 tests below that tap "Demander" reach NlQueryDialog._ask(),
+    // which - Platform.isWindows is true during `flutter test` on a real
+    // Windows machine - calls isLocalLlmEnabled(), which calls
+    // AppPreferences.getInstance(). Without seeding it here, that method's
+    // real _portableStoreFilePath() check awaits File(...).exists() against
+    // a path next to flutter_tester.exe - real, uncontrolled file I/O that
+    // never resolves inside pumpAndSettle's pumped/faked execution, hanging
+    // every one of those 3 tests forever (confirmed 2026-08-04 by tracing
+    // it with prints: execution reached the exists() call and never
+    // returned from it). Seeding the singleton makes getInstance() take its
+    // early cached-instance return instead, so that file check is never
+    // reached - isLocalLlmEnabled() then correctly resolves to false
+    // (nothing set the enabled key), exactly like a real user who never
+    // opted into local AI, letting the rule-based parser take over as
+    // these tests expect.
+    tempPrefsDir = Directory.systemTemp.createTempSync('nl_query_dialog_test_');
+    AppPreferences.debugOverrideInstance(await AppPreferences.forTestingAtPath(
+        '${tempPrefsDir.path}${Platform.pathSeparator}preferences.dat'));
+  });
+
+  tearDownAll(() {
+    AppPreferences.debugResetInstance();
+    tempPrefsDir.deleteSync(recursive: true);
   });
 
   late MmexDatabase db;

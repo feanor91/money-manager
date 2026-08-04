@@ -1,4 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Lets this app trigger the system installer for a downloaded APK
+         (see AndroidApkInstaller/update_prompt_io.dart) - required on
+         Android 8+ regardless of the FileProvider below; without it the OS
+         blocks installation from this app with a "for your security"
+         prompt instead of asking the user to grant "install unknown apps"
+         access. Harmless to declare even though this app is never
+         distributed through the Play Store (sideloaded from GitHub
+         releases only), which is the only context where this permission
+         draws extra review scrutiny. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="money_manager"
         android:name="${applicationName}"
@@ -32,6 +42,24 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Hands the downloaded update APK (see AndroidApkInstaller, which
+             writes it to the app's cache dir via path_provider's
+             getTemporaryDirectory()) to the system package installer as a
+             content:// URI - a plain file:// URI is blocked on API 24+
+             (StrictMode FileUriExposedException) for anything shared
+             outside this app's own process. android:exported="false" -
+             nothing outside this app can reach it directly; the installer
+             app it's handed to gets a one-off grant instead (see
+             FLAG_GRANT_READ_URI_PERMISSION in MainActivity.kt). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

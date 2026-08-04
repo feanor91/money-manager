@@ -36,6 +36,36 @@ abstract class AppPreferences {
   static Future<AppPreferences> forTestingAtPath(String path) =>
       EncryptedFilePreferences.load(path);
 
+  /// Seeds the singleton [getInstance] returns, so any code that calls
+  /// `AppPreferences.getInstance()` internally (not just code a test can
+  /// pass an instance to directly) gets this one instead of ever reaching
+  /// [_portableStoreFilePath]'s real file I/O.
+  ///
+  /// Found 2026-08-04 diagnosing why nl_query_dialog_test.dart's 3 widget
+  /// tests that trigger NlQueryDialog._ask() hung forever on
+  /// pumpAndSettle: that path calls isLocalLlmEnabled(), which calls this
+  /// class's real getInstance(), which - with no seeded instance -
+  /// evaluates _portableStoreFilePath() and awaits `File(...).exists()`
+  /// against a path next to flutter_tester.exe. That await never resolves
+  /// inside a widget test's pumped/faked execution (confirmed via prints:
+  /// execution reached "about to check marker.exists()" and never printed
+  /// again) - real, uncontrolled OS file I/O doesn't integrate with
+  /// WidgetTester.pumpAndSettle the way Timers/microtasks do. Seeding the
+  /// cache in setUpAll (see nl_query_dialog_test.dart) makes getInstance()
+  /// take its early `existing != null` return instead, so that file check
+  /// is never reached at all.
+  @visibleForTesting
+  static void debugOverrideInstance(AppPreferences instance) {
+    _instance = instance;
+  }
+
+  /// Pairs with [debugOverrideInstance] - clears the seeded instance so a
+  /// later, unrelated test/run doesn't keep reusing it.
+  @visibleForTesting
+  static void debugResetInstance() {
+    _instance = null;
+  }
+
   /// A "portable" build is one distributed as a folder that runs from
   /// anywhere (a USB stick, a different PC) without installing - detected
   /// by a `portable.txt` marker file sitting next to the executable (the

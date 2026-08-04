@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes only the app's cache dir (path ".", relative to getCacheDir())
+     through the FileProvider declared in AndroidManifest.xml - matches
+     where AndroidApkInstaller downloads the update APK to via
+     path_provider's getTemporaryDirectory(). -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="apk_cache" path="." />
+</paths>

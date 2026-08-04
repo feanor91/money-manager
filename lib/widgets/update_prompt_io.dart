@@ -1,26 +1,37 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../services/update_checker.dart';
 
-/// Android also compiles this file (dart.library.io covers both), but only
-/// has an APK download URL to offer, not an install trigger yet - Android
-/// requires REQUEST_INSTALL_PACKAGES + a FileProvider to launch the system
-/// installer, deliberately left for a separate change (see ROADMAP.md)
-/// rather than half-building it alongside the desktop path.
+/// Only used from _downloadAndInstall's Android branch, to hand a
+/// downloaded APK to MainActivity.kt's platform-channel handler - see that
+/// file's doc comment for why this one step needs native code at all
+/// (FileProvider.getUriForFile() has no Dart-callable equivalent).
+const _apkInstallChannel =
+    MethodChannel('com.bteuile.moneymanager.money_manager/apk_installer');
+
+/// Desktop and Android both compile this file (dart.library.io covers
+/// both) and, as of 2026-08-04, both get a real check-and-install flow -
+/// see _downloadAndInstall for how the final step differs: a silent
+/// installer run + app exit on desktop, versus handing the APK to
+/// Android's system package installer (which - unlike desktop - always
+/// requires an explicit user tap to confirm; Android has no fully-silent
+/// equivalent, by design, for an app installing another package).
 Future<void> checkForUpdatesAndPrompt(BuildContext context) async {
-  if (!Platform.isWindows) return;
+  if (!Platform.isWindows && !Platform.isAndroid) return;
 
   final info = await PackageInfo.fromPlatform();
   final release = await fetchLatestRelease();
   if (release == null) return;
   if (!isNewerVersion(release.version, info.version)) return;
-  final installerUrl = release.windowsInstallerUrl;
-  if (installerUrl == null) return;
+  final assetUrl =
+      Platform.isWindows ? release.windowsInstallerUrl : release.androidApkUrl;
+  if (assetUrl == null) return;
   if (!context.mounted) return;
 
   final shouldInstall = await showDialog<bool>(
@@ -56,16 +67,19 @@ Future<void> checkForUpdatesAndPrompt(BuildContext context) async {
   );
   if (shouldInstall != true || !context.mounted) return;
 
-  await _downloadAndRunInstaller(context, installerUrl);
+  await _downloadAndInstall(context, assetUrl);
 }
 
-/// Downloads the installer, launches it detached (so it survives after this
-/// process exits), then closes this app - Inno Setup's installer handles
-/// replacing the running app's files itself once it's the only thing still
-/// holding them open. A failed download/launch shows an error and leaves
-/// the app running rather than exiting into nothing.
-Future<void> _downloadAndRunInstaller(
-    BuildContext context, String installerUrl) async {
+/// Downloads the update (an installer .exe on Windows, an .apk on Android)
+/// into the temp dir, then hands it to whatever actually installs it - a
+/// detached process launch + app exit on Windows (Inno Setup's installer
+/// handles replacing the running app's files itself once it's the only
+/// thing still holding them open), or the system package installer via
+/// MainActivity.kt's platform channel on Android (which shows its own UI
+/// on top rather than anything this app controls further - no reason to
+/// exit this app first, unlike Windows). A failed download/install shows
+/// an error and leaves the app running rather than exiting into nothing.
+Future<void> _downloadAndInstall(BuildContext context, String assetUrl) async {
   showDialog(
     context: context,
     barrierDismissible: false,
@@ -86,13 +100,21 @@ Future<void> _downloadAndRunInstaller(
 
   try {
     final response = await http
-        .get(Uri.parse(installerUrl))
+        .get(Uri.parse(assetUrl))
         .timeout(const Duration(minutes: 5));
     final tempDir = await getTemporaryDirectory();
-    final file = File('${tempDir.path}/MoneyManagerSetup.exe');
+    final fileName =
+        Platform.isWindows ? 'MoneyManagerSetup.exe' : 'money-manager-update.apk';
+    final file = File('${tempDir.path}/$fileName');
     await file.writeAsBytes(response.bodyBytes, flush: true);
-    await Process.start(file.path, [], mode: ProcessStartMode.detached);
-    exit(0);
+    if (Platform.isWindows) {
+      await Process.start(file.path, [], mode: ProcessStartMode.detached);
+      exit(0);
+    } else {
+      await _apkInstallChannel
+          .invokeMethod<void>('installApk', {'path': file.path});
+      if (context.mounted) Navigator.of(context).pop(); // close the progress dialog
+    }
   } catch (e) {
     if (context.mounted) {
       Navigator.of(context).pop(); // close the download progress dialog
