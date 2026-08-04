@@ -15,6 +15,7 @@ import '../widgets/forecast_chart.dart';
 import '../widgets/nl_query_dialog.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
+import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart' show openAccountEditor;
 import 'transactions_screen.dart' show TransactionEditorSheet;
 
@@ -176,6 +177,31 @@ class DashboardScreen extends StatelessWidget {
                   forecastDay: dbProvider.forecastDay,
                 ),
               ),
+              if (dbProvider.webDavConfigured)
+                IconButton(
+                  icon: switch (dbProvider.syncStatus) {
+                    SyncStatus.syncing => const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                    SyncStatus.conflictPending ||
+                    SyncStatus.remoteMissing ||
+                    SyncStatus.error =>
+                      Icon(Icons.sync_problem_outlined,
+                          color: Theme.of(context).colorScheme.error),
+                    SyncStatus.idle => const Icon(Icons.cloud_sync_outlined),
+                  },
+                  tooltip: switch (dbProvider.syncStatus) {
+                    SyncStatus.syncing => 'Synchronisation en cours',
+                    SyncStatus.conflictPending => 'Conflit de synchronisation à résoudre',
+                    SyncStatus.remoteMissing => 'Fichier distant introuvable',
+                    SyncStatus.error => 'Échec de la dernière synchronisation',
+                    SyncStatus.idle => 'Synchroniser avec le serveur',
+                  },
+                  onPressed: dbProvider.syncStatus == SyncStatus.syncing
+                      ? null
+                      : () => handleWebDavSyncTap(context),
+                ),
               IconButton(
                 icon: const Icon(Icons.settings_outlined),
                 tooltip: 'Paramètres',

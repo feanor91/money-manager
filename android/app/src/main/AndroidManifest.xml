@@ -1,4 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Found 2026-08-04 missing entirely from this (release) manifest -
+         debug/profile builds get it for free from Flutter's own tooling
+         boilerplate, which masked that it was never actually declared here.
+         Without it, every network call from a real release APK fails
+         outright (not a runtime-grantable permission - it gates whether the
+         OS allows sockets at all), which silently broke the Android update
+         checker (update_prompt_io.dart, shipped earlier the same day) and
+         would have equally broken WebDAV sync before it ever got the chance
+         to run. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Lets this app trigger the system installer for a downloaded APK
          (see AndroidApkInstaller/update_prompt_io.dart) - required on
          Android 8+ regardless of the FileProvider below; without it the OS

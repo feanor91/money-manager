@@ -37,6 +37,46 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Synchronisation WebDAV intégrée (Android)~~ - **fait, vérification en
+  conditions réelles par l'utilisateur en attente (2026-08-04)**. Remplace
+  Autosync (app tierce payante, qui créait des conflits inexpliqués - dont
+  un sur la base elle-même juste avant ce chantier, désactivée par
+  l'utilisateur au passage). Nouvelle section `lib/services/webdav/` :
+  client HTTP minimal (`webdav_client.dart` - HEAD/GET/PUT contre l'URL
+  Nextcloud standard, auth HTTP Basic avec mot de passe d'application, pas
+  de PROPFIND/XML) ; logique de décision pure et testée exhaustivement
+  (`webdav_sync_decision.dart` - un conflit n'est signalé QUE si le
+  téléphone ET le serveur ont changé depuis la dernière synchro connue,
+  jamais par simple comparaison d'horodatage) ; identifiants + repère de
+  synchro stockés chiffrés et 100% locaux au téléphone
+  (`webdav_sync_store.dart`, réutilise `EncryptedFilePreferences` - même
+  mécanisme que le hash du code PIN, nouveau fichier dans le dossier de
+  support de l'appli, jamais dans le dossier SAF synchronisé) ;
+  orchestration (`webdav_sync_service.dart`). `DatabaseProvider` reste le
+  seul point d'entrée (comme pour `AndroidFileLink`/`MmexDatabase`
+  ailleurs dans ce fichier) : réconciliation automatique et silencieuse au
+  lancement (sauf conflit détecté, jamais résolu à l'aveugle), bouton
+  "Synchroniser maintenant" dans Paramètres, icône dans le tableau de bord,
+  bannière de conflit dans l'appli. La version non choisie lors d'un
+  conflit est toujours sauvegardée dans le dossier "backup" existant avant
+  d'être écrasée.
+
+  Découverte importante en cours de route : le manifeste Android de
+  production n'avait **aucune permission INTERNET** déclarée - elle
+  n'avait jamais manqué car tous les appels réseau précédents étaient
+  Windows uniquement, mais la vérification de mise à jour Android
+  (livrée plus tôt le même jour) faisait déjà de vrais appels HTTP.
+  Corrigée au passage - les deux fonctionnalités en dépendaient.
+
+  `flutter analyze`/`flutter test` (223 tests, dont 55 nouveaux pour cette
+  fonctionnalité - logique de décision, client HTTP via `MockClient`,
+  stockage chiffré, orchestration complète avec un faux serveur)/
+  `flutter build apk --release`/`flutter build web --release` tous
+  vérifiés propres. Reste à vérifier en conditions réelles sur le vrai
+  serveur Nextcloud de l'utilisateur : présence effective d'un en-tête
+  ETag, comportement de la toute première synchro contre les vraies
+  données, et un vrai scénario de conflit de bout en bout.
+
 - ~~Régression critique : plus aucune base ne s'ouvrait, sur les 3
   plateformes~~ - **fait, confirmé résolu en direct par l'utilisateur
   (2026-08-04)**. Introduite par le correctif du même jour "PIN gate

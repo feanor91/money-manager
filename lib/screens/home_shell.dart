@@ -9,6 +9,7 @@ import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import '../state/database_provider.dart';
 import '../widgets/update_prompt.dart';
+import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart';
 import 'budget_screen.dart';
 import 'dashboard_screen.dart';
@@ -99,12 +100,27 @@ class _HomeShellState extends State<HomeShell> {
       body: Stack(
         children: [
           Positioned.fill(child: IndexedStack(index: _index, children: _screens)),
-          if (dbProvider.saveError != null)
+          // Both banners can in principle be relevant at once (a failed
+          // local save and a pending WebDAV conflict are independent
+          // states) - a Column of whichever are currently active, not an
+          // assumption that only one can ever show.
+          if (dbProvider.saveError != null ||
+              dbProvider.syncStatus == SyncStatus.conflictPending ||
+              dbProvider.syncStatus == SyncStatus.remoteMissing)
             Positioned(
               top: 0,
               left: 0,
               right: 0,
-              child: _SaveErrorBanner(error: dbProvider.saveError!),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (dbProvider.saveError != null)
+                    _SaveErrorBanner(error: dbProvider.saveError!),
+                  if (dbProvider.syncStatus == SyncStatus.conflictPending ||
+                      dbProvider.syncStatus == SyncStatus.remoteMissing)
+                    _SyncConflictBanner(status: dbProvider.syncStatus),
+                ],
+              ),
             ),
         ],
       ),
@@ -206,6 +222,52 @@ class _SaveErrorBanner extends StatelessWidget {
               TextButton(
                 onPressed: () => context.read<DatabaseProvider>().retrySave(),
                 child: const Text('Réessayer'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown whenever Android WebDAV sync needs a decision from the user - a
+/// genuine conflict, or the remote file having gone missing. Tinted
+/// tertiary rather than error: unlike a failed save, this is an expected,
+/// resolvable state (see DatabaseProvider's WebDAV sync section), not a
+/// failure - a transient network/server error alone doesn't get a
+/// persistent banner here (only visible via the dashboard's sync icon and
+/// the settings card), since it may well resolve itself on the next
+/// automatic retry at the next launch.
+class _SyncConflictBanner extends StatelessWidget {
+  final SyncStatus status;
+
+  const _SyncConflictBanner({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final message = status == SyncStatus.conflictPending
+        ? 'La base a été modifiée à la fois sur ce téléphone et sur le serveur - '
+            'une décision est nécessaire.'
+        : 'Le fichier n\'est plus trouvé sur le serveur WebDAV.';
+    return Material(
+      color: theme.colorScheme.tertiaryContainer,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Row(
+            children: [
+              Icon(Icons.cloud_sync_outlined, color: theme.colorScheme.onTertiaryContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(message,
+                    style: TextStyle(color: theme.colorScheme.onTertiaryContainer)),
+              ),
+              TextButton(
+                onPressed: () => handleWebDavSyncTap(context),
+                child: const Text('Résoudre'),
               ),
             ],
           ),

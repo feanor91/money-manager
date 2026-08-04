@@ -7,6 +7,7 @@ import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/local_llm_settings_card.dart';
+import '../widgets/webdav_settings_card.dart';
 import 'categories_screen.dart';
 import 'database_diagnostics_screen.dart';
 import 'pin_lock_screen.dart';
@@ -101,6 +102,8 @@ class SettingsScreen extends StatelessWidget {
                     ),
             ),
           ),
+          const SizedBox(height: 12),
+          const WebDavSettingsCard(),
           const SizedBox(height: 12),
           Card(
             child: ListTile(

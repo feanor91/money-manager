@@ -11,6 +11,10 @@ import '../data/db_companion_settings.dart';
 import '../data/mmex_database.dart';
 import '../data/mmex_repository.dart';
 import '../data/web_file_link.dart';
+import '../services/webdav/webdav_client.dart' show WebDavTestResult;
+import '../services/webdav/webdav_sync_decision.dart' show SyncAction;
+import '../services/webdav/webdav_sync_service.dart';
+import '../services/webdav/webdav_sync_store.dart';
 import '../theme/app_theme.dart';
 import 'app_preferences.dart';
 
@@ -83,6 +87,15 @@ enum DbStatus {
   /// see [DatabaseProvider.reconnectWebFile].
   needsReconnect,
 }
+
+/// Android-only WebDAV sync status, surfaced to the UI (see HomeShell's
+/// conflict banner, dashboard_screen.dart's sync icon) - distinct from
+/// [DbStatus], which is about whether a database is open at all, not
+/// whether it's in sync with a remote copy. [idle] covers both "sync
+/// disabled/not configured" and "configured, nothing to reconcile right
+/// now" - [DatabaseProvider.webDavConfigured] tells those apart if the UI
+/// needs to.
+enum SyncStatus { idle, syncing, conflictPending, remoteMissing, error }
 
 /// Holds the currently opened MMEX database + repository, and lets the user
 /// pick a different .mmb file location at any time from Settings.
@@ -322,7 +335,9 @@ class DatabaseProvider extends ChangeNotifier {
       notifyListeners();
       try {
         final bytes = await link.readBytes();
-        final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
+        final reconciled = await _reconcileWebDavBeforeOpen(
+            link: link, localBytes: bytes, allowAutoPush: true);
+        final db = await MmexDatabase.openFromBytes(reconciled, label: link.name);
         await _finishOpeningAndroid(db, link);
       } catch (e) {
         status = DbStatus.error;
@@ -441,7 +456,15 @@ class DatabaseProvider extends ChangeNotifier {
       notifyListeners();
       try {
         final bytes = await link.readBytes();
-        final db = await MmexDatabase.openFromBytes(bytes, label: link.name);
+        // allowAutoPush: false - unlike restoreLastDatabase()'s
+        // continuously-used file, a freshly-picked folder here could be an
+        // unrelated file (an old backup, a wrong folder) with no real
+        // relationship to the stored sync marker, so a would-be "push"
+        // verdict is downgraded to a conflict instead of ever guessed - see
+        // _reconcileWebDavBeforeOpen's own doc comment.
+        final reconciled = await _reconcileWebDavBeforeOpen(
+            link: link, localBytes: bytes, allowAutoPush: false);
+        final db = await MmexDatabase.openFromBytes(reconciled, label: link.name);
         await _finishOpeningAndroid(db, link);
       } catch (e) {
         status = DbStatus.error;
@@ -603,8 +626,12 @@ class DatabaseProvider extends ChangeNotifier {
   bool get hasPendingWrite =>
       (_writeBackDebounce?.isActive ?? false) || _writeInFlight;
 
-  void _enqueueWriteBack(Future<void> Function() writeBack) {
-    _writeBackChain = _writeBackChain.then((_) async {
+  /// Returns the chained Future (was `void`-returning until the WebDAV sync
+  /// feature needed to await it - see [_flushPendingWriteBack] - purely
+  /// additive, existing fire-and-forget call sites in [touch]/[retrySave]
+  /// are unaffected by a return value they don't use).
+  Future<void> _enqueueWriteBack(Future<void> Function() writeBack) {
+    final result = _writeBackChain.then((_) async {
       _writeInFlight = true;
       // Notify right at the start AND end of the actual write (not just
       // when it's scheduled), so a UI indicator tied to hasPendingWrite
@@ -620,6 +647,38 @@ class DatabaseProvider extends ChangeNotifier {
         notifyListeners();
       }
     });
+    _writeBackChain = result;
+    return result;
+  }
+
+  /// Cancels any pending debounced write-back and waits for it - or for
+  /// whatever's already in flight - to actually finish, before a WebDAV
+  /// pull/conflict-resolution overwrite proceeds. Needed because [touch]'s
+  /// debounced [Timer] closure captures `db`/the file link *by value* at
+  /// schedule time - if a stale one were left to fire after a pull already
+  /// replaced [_db] (disposing the old one), it could either throw against
+  /// a disposed database or, worse, silently re-persist old pre-pull bytes
+  /// over the freshly-synced ones. Only guards against *this* specific
+  /// race - deliberately doesn't route the sync operation itself through
+  /// [_writeBackChain]: [touch] always re-reads `_db`/the file link fresh
+  /// at call time, so a genuinely new edit made during or after a sync
+  /// still targets the correct (already-swapped) database on its own,
+  /// without needing the two chains to be one.
+  Future<void> _flushPendingWriteBack() async {
+    final hadPending = hasPendingWrite;
+    _writeBackDebounce?.cancel();
+    final db = _db;
+    final webLink = _webFileLink;
+    final androidLink = _androidFileLink;
+    if (hadPending && db != null) {
+      if (webLink != null) {
+        await _enqueueWriteBack(() => _writeBackWeb(webLink, db));
+      } else if (androidLink != null) {
+        await _enqueueWriteBack(() => _writeBackAndroid(androidLink, db));
+      }
+    } else {
+      await _writeBackChain;
+    }
   }
 
   /// Re-attempts the last failed write-back after [saveError] was shown to
@@ -787,9 +846,263 @@ class DatabaseProvider extends ChangeNotifier {
     );
   }
 
+  // ---------------------------------------------------------------------
+  // WebDAV sync (Android only) - keeps the SAF-local .mmb reconciled with a
+  // Nextcloud server directly, replacing the third-party sync app this
+  // project previously relied on. See lib/services/webdav/ for the actual
+  // HTTP client, pure decision logic, and credential/marker storage - this
+  // provider is the sole caller, owning *when* to reconcile and turning the
+  // result into real local file writes/database reloads/UI state, the same
+  // role it already plays for MmexDatabase/AndroidFileLink/
+  // DatabaseCompanionSettings elsewhere in this file.
+  // ---------------------------------------------------------------------
+
+  WebDavSyncService? _webDavSync;
+  SyncStatus syncStatus = SyncStatus.idle;
+  String? syncError;
+  SyncConflictInfo? _pendingConflict;
+
+  /// Non-null once [prepareConflictResolution] has actually fetched the
+  /// remote bytes to show - distinct from `syncStatus ==
+  /// SyncStatus.conflictPending`, which just means a conflict was *detected*
+  /// via a cheap HEAD request and the full details haven't been fetched yet.
+  SyncConflictInfo? get pendingConflict => _pendingConflict;
+
+  bool get webDavConfigured => _webDavSync?.isConfiguredAndEnabled ?? false;
+
+  /// Reads directly off the store's marker rather than a cached field, so
+  /// it's never stale after any operation that updates it.
+  DateTime? get webDavLastSyncedAt => _webDavSync?.store.marker.lastSyncedAt;
+
+  Future<WebDavSyncService?> _ensureWebDavSync() async {
+    if (!_isAndroid) return null;
+    final existing = _webDavSync;
+    if (existing != null) return existing;
+    final service = WebDavSyncService(await WebDavSyncStore.load());
+    _webDavSync = service;
+    return service;
+  }
+
+  Future<WebDavCredentials> webDavCredentials() async =>
+      (await _ensureWebDavSync())?.store.credentials ?? const WebDavCredentials();
+
+  Future<bool> webDavEnabled() async => (await _ensureWebDavSync())?.store.enabled ?? false;
+
+  Future<void> setWebDavEnabled(bool value) async {
+    final sync = await _ensureWebDavSync();
+    if (sync == null) return;
+    await sync.store.setEnabled(value);
+    notifyListeners();
+  }
+
+  Future<void> saveWebDavCredentials(WebDavCredentials creds) async {
+    final sync = await _ensureWebDavSync();
+    if (sync == null) return;
+    await sync.store.saveCredentials(creds);
+    sync.invalidateClient();
+    syncStatus = SyncStatus.idle;
+    syncError = null;
+    notifyListeners();
+  }
+
+  Future<void> forgetWebDavCredentials() async {
+    final sync = await _ensureWebDavSync();
+    if (sync == null) return;
+    await sync.store.forgetCredentials();
+    sync.invalidateClient();
+    _pendingConflict = null;
+    syncStatus = SyncStatus.idle;
+    syncError = null;
+    notifyListeners();
+  }
+
+  Future<WebDavTestResult> testWebDavConnection(WebDavCredentials creds) async {
+    final sync = await _ensureWebDavSync();
+    return sync?.testConnection(creds) ??
+        WebDavTestResult.failed('Non disponible sur cette plateforme.');
+  }
+
+  /// Reconciles [localBytes] against WebDAV (if configured+enabled) before
+  /// they're actually opened - returns the bytes that should be opened:
+  /// either [localBytes] unchanged, or freshly pulled remote bytes (already
+  /// written back into [link] first, so what's on disk and what gets opened
+  /// never diverge). Never throws and never blocks longer than a genuine
+  /// pull requires - a failed check or a detected conflict must never
+  /// delay app startup, see [WebDavSyncService.reconcile]'s own doc comment
+  /// for the full reasoning.
+  Future<List<int>> _reconcileWebDavBeforeOpen({
+    required AndroidFileLink link,
+    required List<int> localBytes,
+    required bool allowAutoPush,
+  }) async {
+    final sync = await _ensureWebDavSync();
+    if (sync == null || !sync.isConfiguredAndEnabled) return localBytes;
+    final result =
+        await sync.reconcile(localBytes: localBytes, allowAutoPush: allowAutoPush);
+    _applyReconcileStatus(result);
+    if (result.action == SyncAction.pullRemote && result.pulledBytes != null) {
+      try {
+        await link.writeBytes(result.pulledBytes!);
+      } catch (_) {
+        // Couldn't persist the pulled bytes locally - open what was already
+        // on disk instead of opening remote bytes that failed to actually
+        // save, which would look "open" but silently diverge from disk the
+        // moment anything else reads the file again.
+        return localBytes;
+      }
+      return result.pulledBytes!;
+    }
+    return localBytes;
+  }
+
+  void _applyReconcileStatus(ReconcileResult result) {
+    if (result.errorMessage != null) {
+      syncStatus = SyncStatus.error;
+      syncError = result.errorMessage;
+      return;
+    }
+    syncError = null;
+    switch (result.action) {
+      case SyncAction.noop:
+      case SyncAction.pushLocal:
+      case SyncAction.pullRemote:
+        syncStatus = SyncStatus.idle;
+        break;
+      case SyncAction.conflict:
+        syncStatus = SyncStatus.conflictPending;
+        break;
+      case SyncAction.remoteMissing:
+        syncStatus = SyncStatus.remoteMissing;
+        break;
+    }
+  }
+
+  /// Manual "Synchroniser maintenant" trigger - flushes any pending
+  /// debounced local write-back first (see [_flushPendingWriteBack]), then
+  /// reconciles the *live* database's current bytes (`db.exportBytes()`,
+  /// always fresher than re-reading the SAF file - see
+  /// mmex_database_io.dart) against the WebDAV server. Always allows
+  /// auto-push, unlike [pickDatabaseFile]'s reconciliation - the user
+  /// explicitly asked to sync *this* open, continuously-used database, so
+  /// an apparent local change here can be trusted to mean real new edits.
+  Future<void> syncNow() async {
+    final sync = await _ensureWebDavSync();
+    final link = _androidFileLink;
+    final db = _db;
+    if (sync == null || link == null || db == null || !sync.isConfiguredAndEnabled) {
+      return;
+    }
+    await _flushPendingWriteBack();
+    syncStatus = SyncStatus.syncing;
+    syncError = null;
+    notifyListeners();
+    final result = await sync.reconcile(localBytes: db.exportBytes(), allowAutoPush: true);
+    if (result.action == SyncAction.pullRemote && result.pulledBytes != null) {
+      try {
+        _backupNow(db);
+        await link.writeBytes(result.pulledBytes!);
+        final newDb =
+            await MmexDatabase.openFromBytes(result.pulledBytes!, label: link.name);
+        await _swapDatabase(newDb);
+      } catch (e) {
+        syncStatus = SyncStatus.error;
+        syncError = e.toString();
+        notifyListeners();
+        return;
+      }
+    }
+    _applyReconcileStatus(result);
+    notifyListeners();
+  }
+
+  /// Called when the user opens the conflict dialog (never automatically) -
+  /// downloads the remote version once and either resolves silently (byte-
+  /// identical to the local copy despite differing WebDAV identities - a
+  /// real, likely first-run scenario after switching away from a different
+  /// sync tool) or populates [pendingConflict] for the dialog to show.
+  /// Flushes any pending local write-back first, same reasoning as
+  /// [syncNow]. Never throws - a failure sets [syncError]/[syncStatus] and
+  /// returns null, same as "resolved silently"; callers distinguish the two
+  /// by checking [syncError] afterward.
+  Future<SyncConflictInfo?> prepareConflictResolution() async {
+    final sync = _webDavSync;
+    final db = _db;
+    if (sync == null || db == null) return null;
+    await _flushPendingWriteBack();
+    try {
+      final info = await sync.prepareConflictResolution(localBytes: db.exportBytes());
+      if (info == null) {
+        _pendingConflict = null;
+        syncStatus = SyncStatus.idle;
+        syncError = null;
+        notifyListeners();
+        return null;
+      }
+      _pendingConflict = info;
+      notifyListeners();
+      return info;
+    } catch (e) {
+      syncStatus = SyncStatus.error;
+      syncError = e.toString();
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Executes the user's choice from the conflict dialog. The losing
+  /// version is backed up (via the existing AndroidFileLink.writeBackup
+  /// mechanism, same "backup" folder every other automatic snapshot uses)
+  /// *before* being discarded - never a definitive loss even from a wrong
+  /// choice.
+  Future<void> resolveConflict(ConflictChoice choice) async {
+    final sync = _webDavSync;
+    final link = _androidFileLink;
+    final info = _pendingConflict;
+    if (sync == null || link == null || info == null) return;
+    try {
+      final resolution = await sync.resolveConflict(choice: choice, info: info);
+      await link.writeBackup(resolution.losingBytes, backupFileName(link.name));
+      if (!resolution.localWon) {
+        await link.writeBytes(resolution.winningBytes);
+        final newDb =
+            await MmexDatabase.openFromBytes(resolution.winningBytes, label: link.name);
+        await _swapDatabase(newDb);
+      }
+      _pendingConflict = null;
+      syncStatus = SyncStatus.idle;
+      syncError = null;
+    } catch (e) {
+      syncStatus = SyncStatus.error;
+      syncError = e.toString();
+    }
+    notifyListeners();
+  }
+
+  /// remoteMissing: the marker says this device synced against a real
+  /// remote file before, but it's gone now (deleted or moved server-side).
+  /// [reupload] true recreates it from the current database; false just
+  /// stops flagging this same state every launch. See
+  /// WebDavSyncService.resolveRemoteMissing for why this is never
+  /// auto-resolved either way.
+  Future<void> resolveWebDavRemoteMissing({required bool reupload}) async {
+    final sync = _webDavSync;
+    final db = _db;
+    if (sync == null || db == null) return;
+    try {
+      await sync.resolveRemoteMissing(localBytes: db.exportBytes(), reupload: reupload);
+      syncStatus = SyncStatus.idle;
+      syncError = null;
+    } catch (e) {
+      syncStatus = SyncStatus.error;
+      syncError = e.toString();
+    }
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _writeBackDebounce?.cancel();
+    _webDavSync?.invalidateClient();
     _db?.dispose();
     super.dispose();
   }
