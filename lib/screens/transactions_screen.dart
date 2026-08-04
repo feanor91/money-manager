@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -19,17 +19,16 @@ import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import 'recurring_screen.dart' show RecurringEditorSheet;
 
-/// True on Windows/Linux/macOS specifically - deliberately not dart:io's
-/// Platform.isWindows, which would fail to compile for web (this file also
-/// compiles there). Same pattern/reasoning as database_provider.dart's
-/// _isAndroid: defaultTargetPlatform is web-safe, kIsWeb is checked first
-/// since defaultTargetPlatform on web reflects the browser's own OS, not
-/// "there is no native platform here".
-bool get _isDesktop =>
-    !kIsWeb &&
-    (defaultTargetPlatform == TargetPlatform.windows ||
-        defaultTargetPlatform == TargetPlatform.linux ||
-        defaultTargetPlatform == TargetPlatform.macOS);
+/// True on every platform except web - i.e. desktop (Windows/Linux/macOS)
+/// *and* Android. Simplifies to `!kIsWeb` rather than enumerating
+/// TargetPlatform values: Android belongs on this side too (added
+/// 2026-08-04), since it runs the same native AOT-compiled Dart + native FFI
+/// SQLite as desktop (see pubspec.yaml's sqlite3_flutter_libs comment -
+/// "bundle la lib native sqlite3 pour Android/desktop"), not web's slower
+/// Dart-compiled-to-JS/Wasm + sqlite3.wasm combination. See
+/// [getTransactionsWithRunningBalance]'s doc comment for what this actually
+/// gates (skipping the month-bounded ledger query).
+bool get _showFullLedger => !kIsWeb;
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
@@ -42,18 +41,21 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchController = TextEditingController();
   String _search = '';
 
-  /// Always the 1st of some month - on web/Android the ledger shows one
-  /// calendar month at a time (see [getTransactionsWithRunningBalance]'s doc
-  /// comment for why: computing the running balance for an account's
-  /// *entire* history on every rebuild could freeze the tab once it spanned
-  /// years). On desktop ([_isDesktop]) that restriction is lifted instead -
-  /// this field is simply ignored there and the whole ledger is shown, since
-  /// native AOT-compiled Dart plus native FFI SQLite make that same
-  /// full-history computation effectively instant even at this user's real
-  /// data scale (checked 2026-08-04: ~12k transactions total, largest single
-  /// account ~4.5k, across 13 years - comfortably small for a per-keystroke
-  /// recompute on native code). Starts on the current month; [_shiftMonth]
-  /// moves it.
+  /// Always the 1st of some month - the anchor/latest month of the visible
+  /// window. On web (![_showFullLedger]) the ledger shows this month plus
+  /// the one immediately before it (see [getTransactionsWithRunningBalance]'s
+  /// doc comment for why it stays bounded there at all: computing the
+  /// running balance for an account's *entire* history on every rebuild
+  /// could freeze the tab once it spanned years). Everywhere else
+  /// ([_showFullLedger] - desktop and Android) that restriction is lifted
+  /// entirely instead - this field is then only used for the "Aujourd'hui"
+  /// button's current-month check, not for bounding any query - since native
+  /// AOT-compiled Dart plus native FFI SQLite make the full-history
+  /// computation effectively instant even at this user's real data scale
+  /// (checked 2026-08-04: ~12k transactions total, largest single account
+  /// ~4.5k, across 13 years - comfortably small for a per-keystroke recompute
+  /// on native code, and still comfortably small doubled for web's 2-month
+  /// window). Starts on the current month; [_shiftMonth] moves it.
   late DateTime _selectedMonth =
       DateTime(DateTime.now().year, DateTime.now().month);
 
@@ -100,12 +102,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
     final recurringTxIds = repo.recurringTransactionIds();
     final recurringOccurrences = repo.recurringTransactionOccurrences();
+    final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
     final allRows = accountId == null
         ? const <TransactionWithBalance>[]
         : repo.getTransactionsWithRunningBalance(accountId,
-            from: _isDesktop ? null : _selectedMonth,
-            to: _isDesktop ? null : nextMonth);
+            from: _showFullLedger ? null : previousMonth,
+            to: _showFullLedger ? null : nextMonth);
 
     // Bounds the year dropdown to years that actually have data for this
     // account, always widened to also include today's year and whatever
@@ -167,11 +170,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(_isDesktop ? 60 : 108),
+          preferredSize: Size.fromHeight(_showFullLedger ? 60 : 108),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (!_isDesktop)
+              if (!_showFullLedger)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
                   child: Row(
@@ -256,8 +259,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       body: rows.isEmpty
           ? Center(
               child: Text(query.isEmpty
-                  ? (_isDesktop ? 'Aucune transaction' : 'Aucune transaction ce mois-ci')
-                  : (_isDesktop ? 'Aucun résultat' : 'Aucun résultat ce mois-ci')),
+                  ? (_showFullLedger ? 'Aucune transaction' : 'Aucune transaction sur cette période')
+                  : (_showFullLedger ? 'Aucun résultat' : 'Aucun résultat sur cette période')),
             )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
