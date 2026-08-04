@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -6,9 +7,11 @@ import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
 
-/// Masks a PIN field as bullets while tracking the real digits via
-/// [setValue]/[getValue], WITHOUT ever using `obscureText: true`. That
-/// matters specifically on web: `obscureText: true` renders as a genuine
+/// Web-only mask (see the `kIsWeb` branches at each call site - desktop/
+/// Android use plain `obscureText: true` instead, see below). Masks a PIN
+/// field as bullets while tracking the real digits via [setValue]/
+/// [getValue], WITHOUT ever using `obscureText: true`. That matters
+/// specifically on web: `obscureText: true` renders as a genuine
 /// `<input type="password">` under the hood, and browsers/password
 /// managers target that for autofill/autosuggest *regardless* of
 /// `autofillHints`/`autocomplete` - browsers have widely ignored
@@ -21,7 +24,20 @@ import '../theme/app_theme.dart';
 /// no mid-string cursor editing), which keeps the masking logic simple: the
 /// masked text's length always equals the real value's length, so the
 /// diff between old/new masked lengths tells us exactly how many real
-/// characters were typed or removed.
+/// characters were typed or removed - *assuming* the platform's own text
+/// input buffer has fully round-tripped back to Flutter's corrected value
+/// before the next keystroke arrives.
+///
+/// Found 2026-08-04 that assumption doesn't hold on desktop/Android: a fast
+/// backspace-then-retype could resurrect the just-deleted digit(s), because
+/// the engine-level text input channel on those platforms can deliver the
+/// next keystroke's raw delta computed against a not-yet-corrected buffer,
+/// so `oldValue` here ends up stale and `updated` gets reconstructed too
+/// long. Web's browser-DOM-based text editing doesn't hit this (never
+/// reported there). Rather than trying to make this diffing scheme
+/// race-proof, desktop/Android sidestep the whole mechanism - real digits
+/// live directly in the controller (`obscureText` only changes how it's
+/// *painted*), so there's no separate shadow state that can drift.
 TextInputFormatter pinMaskFormatter({
   required String Function() getValue,
   required void Function(String) setValue,
@@ -196,13 +212,15 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                   controller: _controller,
                   focusNode: _focusNode,
                   autofocus: true,
-                  obscureText: false,
-                  inputFormatters: [
-                    pinMaskFormatter(
-                      getValue: () => _pin,
-                      setValue: (v) => _pin = v,
-                    ),
-                  ],
+                  obscureText: !kIsWeb,
+                  inputFormatters: kIsWeb
+                      ? [
+                          pinMaskFormatter(
+                            getValue: () => _pin,
+                            setValue: (v) => _pin = v,
+                          ),
+                        ]
+                      : null,
                   autofillHints: const [],
                   enableSuggestions: false,
                   keyboardType: TextInputType.number,
@@ -212,7 +230,10 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
                     labelText: 'Code PIN',
                     errorText: _error,
                   ),
-                  onChanged: (_) => setState(() => _error = null),
+                  onChanged: (v) => setState(() {
+                    if (!kIsWeb) _pin = v;
+                    _error = null;
+                  }),
                   onSubmitted: (_) => _submit(),
                 ),
                 const SizedBox(height: 20),
@@ -313,32 +334,42 @@ class _PinSetupScreenState extends State<PinSetupScreen> {
             TextField(
               controller: _pinController,
               autofocus: true,
-              obscureText: false,
-              inputFormatters: [
-                pinMaskFormatter(
-                  getValue: () => _pin,
-                  setValue: (v) => _pin = v,
-                ),
-              ],
+              obscureText: !kIsWeb,
+              inputFormatters: kIsWeb
+                  ? [
+                      pinMaskFormatter(
+                        getValue: () => _pin,
+                        setValue: (v) => _pin = v,
+                      ),
+                    ]
+                  : null,
               autofillHints: const [],
               enableSuggestions: false,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Nouveau code PIN'),
+              onChanged: (v) {
+                if (!kIsWeb) _pin = v;
+              },
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _confirmController,
-              obscureText: false,
-              inputFormatters: [
-                pinMaskFormatter(
-                  getValue: () => _confirm,
-                  setValue: (v) => _confirm = v,
-                ),
-              ],
+              obscureText: !kIsWeb,
+              inputFormatters: kIsWeb
+                  ? [
+                      pinMaskFormatter(
+                        getValue: () => _confirm,
+                        setValue: (v) => _confirm = v,
+                      ),
+                    ]
+                  : null,
               autofillHints: const [],
               enableSuggestions: false,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Confirmer le code'),
+              onChanged: (v) {
+                if (!kIsWeb) _confirm = v;
+              },
             ),
             const SizedBox(height: 20),
             Row(

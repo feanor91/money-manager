@@ -111,17 +111,47 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
     // PinLockProvider.attachDatabase and CLAUDE.md.
     final dbProvider = context.watch<DatabaseProvider>();
     if (!dbProvider.isReady) {
-      return const DbPickerScreen();
+      return _gated(const DbPickerScreen());
     }
     final pinLock = context.watch<PinLockProvider>();
     switch (pinLock.status) {
       case PinGateStatus.needsCompanionAccess:
-        return const PinCompanionAccessScreen();
+        return _gated(const PinCompanionAccessScreen());
       case PinGateStatus.locked:
-        return const PinUnlockScreen();
+        return _gated(const PinUnlockScreen());
       case PinGateStatus.none:
       case PinGateStatus.unlocked:
         return widget.child!;
     }
+  }
+
+  /// Wraps a gate substitute screen (shown *instead of* [widget.child] -
+  /// i.e. instead of the Navigator MaterialApp itself already built) in its
+  /// own single-route Navigator, so it has an Overlay ancestor of its own.
+  ///
+  /// Found 2026-08-04 diagnosing a PIN entry bug (desktop backspace-then-
+  /// retype could resurrect deleted digits): without this, these screens sit
+  /// directly in MaterialApp.builder's slot, entirely outside the real
+  /// Navigator/Overlay `widget.child` represents. The instant PinUnlockScreen's
+  /// autofocused field actually gained focus, EditableText's focus-changed
+  /// handler tried to show selection handles via Overlay.of(context) and hit
+  /// a null-check crash (no Overlay ancestor exists) - confirmed via a
+  /// debug-logged real run: initState → one build() → the crash's stack
+  /// trace (Overlay.of → SelectionOverlay.showHandles →
+  /// TextSelectionOverlay.showHandles → EditableTextState.
+  /// _handleSelectionChanged/_handleFocusChanged) → then dozens of build()
+  /// calls in ~200ms as the framework tried to recover. That crash happening
+  /// mid-way through EditableText's own focus/selection bookkeeping is what
+  /// left it in a state where later backspace/retype edits could desync -
+  /// not a bug in the PIN field's own code at all (an isolated clone of its
+  /// exact TextField/FocusNode setup, still properly nested under a normal
+  /// Navigator, never reproduced the issue). DbPickerScreen/
+  /// PinCompanionAccessScreen never surfaced this only because neither
+  /// happens to autofocus a text field - they were silently exposed to the
+  /// exact same missing-Overlay condition the whole time.
+  Widget _gated(Widget child) {
+    return Navigator(
+      onGenerateRoute: (_) => MaterialPageRoute(builder: (_) => child),
+    );
   }
 }
