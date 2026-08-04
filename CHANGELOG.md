@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.40] - 2026-08-04
+
+- fix(pin): give the PIN gate's substitute screens their own Navigator/Overlay
+
 ## [1.0.39] - 2026-08-04
 
 - feat(transactions): full ledger on Android too, widen web to a 2-month window
