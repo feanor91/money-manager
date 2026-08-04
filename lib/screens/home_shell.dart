@@ -145,8 +145,23 @@ class _HomeShellState extends State<HomeShell> {
               child: IgnorePointer(child: _SavingIndicator()),
             ),
           if (_version != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 6, bottom: 2),
+            // Positioned explicitly, like _SavingIndicator above - found
+            // 2026-08-04 that this used to be a plain Padding, relying on
+            // the Stack's own alignment: bottomRight to place it. That's
+            // measured against the Stack's bounding box, which NavigationBar
+            // (the Stack's sizing child) grows to accommodate Android's own
+            // system gesture/button navigation bar - not something desktop
+            // or web ever has to account for, which is almost certainly why
+            // this went unnoticed until now: the label was very plausibly
+            // being laid out correctly but ending up under/behind that
+            // system bar on a real Android device. Positioned coordinates
+            // are anchored directly to the Stack's edges the same way
+            // _SavingIndicator's already are, sidestepping the question
+            // entirely rather than trying to out-guess NavigationBar's own
+            // inset math.
+            Positioned(
+              right: 6,
+              bottom: 2,
               child: IgnorePointer(
                 child: Text(
                   'v$_version',
