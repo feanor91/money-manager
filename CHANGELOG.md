@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.39] - 2026-08-04
+
+- feat(transactions): full ledger on Android too, widen web to a 2-month window
+
 ## [1.0.38] - 2026-08-04
 
 - feat(transactions): show full ledger history on desktop instead of month-by-month
