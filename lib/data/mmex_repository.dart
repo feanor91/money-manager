@@ -469,11 +469,17 @@ class MmexRepository {
   /// one - confirmed 2026-07-31 that the latter (this method's previous
   /// design: always walk *every* transaction ever recorded for the account,
   /// regardless of how many were actually going to be shown) could freeze
-  /// the tab once an account had years of history. Callers (see
-  /// transactions_screen.dart) are expected to pass a bounded window - e.g.
-  /// one month - rather than relying on this method to stay cheap with no
-  /// bounds at all; passing neither [from] nor [to] still works but is
-  /// exactly as expensive as before.
+  /// the tab once an account had years of history. Web/Android callers (see
+  /// transactions_screen.dart) still pass a bounded window - e.g. one month -
+  /// rather than relying on this method to stay cheap with no bounds at all;
+  /// passing neither [from] nor [to] still works but is exactly as expensive
+  /// as before (every matching row walked into a Dart object). Desktop
+  /// callers pass no bounds at all deliberately (added 2026-08-04) - safe
+  /// there because that per-row walk runs as native AOT-compiled Dart
+  /// against native FFI SQLite, not web's slower dart2js/Wasm stack, and
+  /// this app's real per-account transaction counts are in the low
+  /// thousands even after 13 years - nowhere near where an O(n) walk would
+  /// be felt.
   List<TransactionWithBalance> getTransactionsWithRunningBalance(
     int accountId, {
     DateTime? from,

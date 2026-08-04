@@ -46,6 +46,26 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Grand livre : afficher tout l'historique plutôt que mois par mois~~ -
+  **fait pour desktop uniquement, vérification en direct par l'utilisateur
+  en attente (2026-08-04)**. Signalé le 2026-08-04 : la navigation mois par
+  mois (ajoutée le 2026-07-31 pour éviter de recalculer le solde courant sur
+  tout l'historique à chaque frappe/interaction - voir
+  `getTransactionsWithRunningBalance` dans `mmex_repository.dart`) restait
+  gênante pour parcourir le grand livre. Desktop affiche maintenant tout
+  l'historique du compte sélectionné (plus de bornes de date), barre de
+  navigation mois/année masquée en conséquence (recherche toujours visible en
+  haut) - viable car Dart compilé nativement (AOT) + SQLite natif (FFI) sur
+  desktop rendent ce même calcul quasi instantané, confirmé sur les vraies
+  données de l'utilisateur (le plus gros compte ne totalise qu'environ 4 500
+  transactions sur 13 ans d'historique). Web et Android inchangés - même
+  calcul nettement plus coûteux dans un navigateur (Dart compilé en JS/Wasm)
+  ou sur du matériel mobile plus modeste, donc gardé mois par mois là où le
+  problème d'origine a été observé. `flutter analyze`/`flutter test`/
+  `flutter build windows --release` vérifiés propres ; l'écran du grand livre
+  en lui-même reste à confirmer sur la vraie appli desktop (voir CLAUDE.md -
+  la vérification UI en direct nécessite un vrai fichier .mmb ouvert via le
+  sélecteur, pas automatisable depuis cette session).
 - ~~Questions en langage naturel ("quelles ont été mes dépenses en
   juillet ?")~~ - **fait pour la partie sans IA, IA locale Windows en
   attente de vérification sur une vraie machine (2026-08-02)**. Nouvelle

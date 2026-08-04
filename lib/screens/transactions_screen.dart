@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +19,18 @@ import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import 'recurring_screen.dart' show RecurringEditorSheet;
 
+/// True on Windows/Linux/macOS specifically - deliberately not dart:io's
+/// Platform.isWindows, which would fail to compile for web (this file also
+/// compiles there). Same pattern/reasoning as database_provider.dart's
+/// _isAndroid: defaultTargetPlatform is web-safe, kIsWeb is checked first
+/// since defaultTargetPlatform on web reflects the browser's own OS, not
+/// "there is no native platform here".
+bool get _isDesktop =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.macOS);
+
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
 
@@ -29,12 +42,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchController = TextEditingController();
   String _search = '';
 
-  /// Always the 1st of some month - the ledger shows one calendar month at
-  /// a time (see [getTransactionsWithRunningBalance]'s doc comment for why:
-  /// computing the running balance for an account's *entire* history on
-  /// every rebuild could freeze the tab once it spanned years). Starts on
-  /// the current month; [_shiftMonth] moves it, there is no "show
-  /// everything" option since that's exactly the cost this avoids.
+  /// Always the 1st of some month - on web/Android the ledger shows one
+  /// calendar month at a time (see [getTransactionsWithRunningBalance]'s doc
+  /// comment for why: computing the running balance for an account's
+  /// *entire* history on every rebuild could freeze the tab once it spanned
+  /// years). On desktop ([_isDesktop]) that restriction is lifted instead -
+  /// this field is simply ignored there and the whole ledger is shown, since
+  /// native AOT-compiled Dart plus native FFI SQLite make that same
+  /// full-history computation effectively instant even at this user's real
+  /// data scale (checked 2026-08-04: ~12k transactions total, largest single
+  /// account ~4.5k, across 13 years - comfortably small for a per-keystroke
+  /// recompute on native code). Starts on the current month; [_shiftMonth]
+  /// moves it.
   late DateTime _selectedMonth =
       DateTime(DateTime.now().year, DateTime.now().month);
 
@@ -85,7 +104,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final allRows = accountId == null
         ? const <TransactionWithBalance>[]
         : repo.getTransactionsWithRunningBalance(accountId,
-            from: _selectedMonth, to: nextMonth);
+            from: _isDesktop ? null : _selectedMonth,
+            to: _isDesktop ? null : nextMonth);
 
     // Bounds the year dropdown to years that actually have data for this
     // account, always widened to also include today's year and whatever
@@ -147,60 +167,61 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(108),
+          preferredSize: Size.fromHeight(_isDesktop ? 60 : 108),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-                child: Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      tooltip: 'Mois précédent',
-                      onPressed: () => _shiftMonth(-1),
-                    ),
-                    Expanded(
-                      child: DropdownButton<int>(
-                        isExpanded: true,
-                        value: _selectedMonth.month,
+              if (!_isDesktop)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.chevron_left),
+                        tooltip: 'Mois précédent',
+                        onPressed: () => _shiftMonth(-1),
+                      ),
+                      Expanded(
+                        child: DropdownButton<int>(
+                          isExpanded: true,
+                          value: _selectedMonth.month,
+                          items: [
+                            for (var m = 1; m <= 12; m++)
+                              DropdownMenuItem(value: m, child: Text(_monthNames[m - 1])),
+                          ],
+                          onChanged: (m) {
+                            if (m == null) return;
+                            setState(() => _selectedMonth = DateTime(_selectedMonth.year, m));
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      DropdownButton<int>(
+                        value: _selectedMonth.year,
                         items: [
-                          for (var m = 1; m <= 12; m++)
-                            DropdownMenuItem(value: m, child: Text(_monthNames[m - 1])),
+                          for (final y in yearOptions) DropdownMenuItem(value: y, child: Text('$y')),
                         ],
-                        onChanged: (m) {
-                          if (m == null) return;
-                          setState(() => _selectedMonth = DateTime(_selectedMonth.year, m));
+                        onChanged: (y) {
+                          if (y == null) return;
+                          setState(() => _selectedMonth = DateTime(y, _selectedMonth.month));
                         },
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    DropdownButton<int>(
-                      value: _selectedMonth.year,
-                      items: [
-                        for (final y in yearOptions) DropdownMenuItem(value: y, child: Text('$y')),
-                      ],
-                      onChanged: (y) {
-                        if (y == null) return;
-                        setState(() => _selectedMonth = DateTime(y, _selectedMonth.month));
-                      },
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      tooltip: 'Mois suivant',
-                      onPressed: () => _shiftMonth(1),
-                    ),
-                    if (!_isCurrentMonth)
-                      TextButton(
-                        onPressed: () => setState(() {
-                          final now = DateTime.now();
-                          _selectedMonth = DateTime(now.year, now.month);
-                        }),
-                        child: const Text('Aujourd\'hui'),
+                      IconButton(
+                        icon: const Icon(Icons.chevron_right),
+                        tooltip: 'Mois suivant',
+                        onPressed: () => _shiftMonth(1),
                       ),
-                  ],
+                      if (!_isCurrentMonth)
+                        TextButton(
+                          onPressed: () => setState(() {
+                            final now = DateTime.now();
+                            _selectedMonth = DateTime(now.year, now.month);
+                          }),
+                          child: const Text('Aujourd\'hui'),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 child: TextField(
@@ -235,8 +256,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       body: rows.isEmpty
           ? Center(
               child: Text(query.isEmpty
-                  ? 'Aucune transaction ce mois-ci'
-                  : 'Aucun résultat ce mois-ci'),
+                  ? (_isDesktop ? 'Aucune transaction' : 'Aucune transaction ce mois-ci')
+                  : (_isDesktop ? 'Aucun résultat' : 'Aucun résultat ce mois-ci')),
             )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
