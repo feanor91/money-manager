@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +8,7 @@ import 'screens/db_picker_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/pin_lock_screen.dart';
 import 'screens/settings_screen.dart';
+import 'services/notifications/sync_notification_service.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'theme/app_theme.dart';
@@ -100,6 +103,38 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
     // locks again after an actual page reload.
     if (state == AppLifecycleState.paused) {
       context.read<PinLockProvider>().lockOnBackground();
+      // Push local edits out as soon as the user leaves, not just on the
+      // *next* resume - user-requested 2026-08-04, symmetric with the
+      // resume-triggered pull below. Best-effort only: Android can suspend
+      // the process shortly after `paused` fires, so a slow upload isn't
+      // guaranteed to finish (see SyncNotificationService's doc comment) -
+      // this is a real improvement over "only on manual tap or next
+      // resume", not a guarantee. Nobody's looking at the screen for this
+      // one, so the in-app banner alone wouldn't be seen - a system
+      // notification confirms it instead.
+      unawaited(_syncInBackground(context.read<DatabaseProvider>()));
+    } else if (state == AppLifecycleState.resumed) {
+      // restoreLastDatabase() (main.dart) only runs once per process, at a
+      // true cold start - on Android, switching away and back (the common
+      // case; the OS keeps the process alive) never re-runs it, so without
+      // this a WebDAV change made elsewhere could sit unpicked-up until the
+      // user remembered to tap "Synchroniser maintenant" - confirmed
+      // 2026-08-04 (desktop edit invisible on Android until a manual sync).
+      // syncNow() already no-ops harmlessly off-Android/unconfigured, and
+      // is safe to fire while the PIN screen is still showing (it only
+      // touches DatabaseProvider state, not navigation). No notification
+      // here - the user is looking at the screen as it resumes, so the
+      // in-app banner (home_shell.dart's _SyncMessageBanner) already covers
+      // it without needing a second, redundant channel.
+      unawaited(context.read<DatabaseProvider>().syncNow());
+    }
+  }
+
+  Future<void> _syncInBackground(DatabaseProvider dbProvider) async {
+    await dbProvider.syncNow();
+    final message = dbProvider.syncMessage;
+    if (message != null) {
+      await SyncNotificationService.showSyncMessage(message);
     }
   }
 

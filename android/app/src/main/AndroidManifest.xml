@@ -19,6 +19,12 @@
          releases only), which is the only context where this permission
          draws extra review scrutiny. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Android 13+ (API 33) requires this declared *and* granted at runtime
+         before any notification can show - see SyncNotificationService,
+         which requests it lazily on the first background auto-sync rather
+         than up front at first launch. Silently ignored (auto-granted) on
+         older Android versions. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="money_manager"
         android:name="${applicationName}"

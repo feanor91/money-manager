@@ -106,7 +106,8 @@ class _HomeShellState extends State<HomeShell> {
           // assumption that only one can ever show.
           if (dbProvider.saveError != null ||
               dbProvider.syncStatus == SyncStatus.conflictPending ||
-              dbProvider.syncStatus == SyncStatus.remoteMissing)
+              dbProvider.syncStatus == SyncStatus.remoteMissing ||
+              dbProvider.syncMessage != null)
             Positioned(
               top: 0,
               left: 0,
@@ -119,6 +120,8 @@ class _HomeShellState extends State<HomeShell> {
                   if (dbProvider.syncStatus == SyncStatus.conflictPending ||
                       dbProvider.syncStatus == SyncStatus.remoteMissing)
                     _SyncConflictBanner(status: dbProvider.syncStatus),
+                  if (dbProvider.syncMessage != null)
+                    _SyncMessageBanner(message: dbProvider.syncMessage!),
                 ],
               ),
             ),
@@ -283,6 +286,42 @@ class _SyncConflictBanner extends StatelessWidget {
               TextButton(
                 onPressed: () => handleWebDavSyncTap(context),
                 child: const Text('Résoudre'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown briefly (auto-clears itself, see DatabaseProvider.syncMessage) after
+/// a launch/resume/manual sync silently pushed or pulled something -
+/// otherwise a successful automatic sync had zero visible confirmation,
+/// which read exactly like nothing had happened at all. Tinted primary, not
+/// tertiary/error: purely informational, nothing to resolve, no action
+/// button.
+class _SyncMessageBanner extends StatelessWidget {
+  final String message;
+
+  const _SyncMessageBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.primaryContainer,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: Row(
+            children: [
+              Icon(Icons.cloud_done_outlined, color: theme.colorScheme.onPrimaryContainer),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(message,
+                    style: TextStyle(color: theme.colorScheme.onPrimaryContainer)),
               ),
             ],
           ),

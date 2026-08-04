@@ -37,8 +37,10 @@ courses, pas des engagements.
 
 ## Récemment fait
 
-- ~~Synchronisation WebDAV intégrée (Android)~~ - **fait, vérification en
-  conditions réelles par l'utilisateur en attente (2026-08-04)**. Remplace
+- ~~Synchronisation WebDAV intégrée (Android)~~ - **fait, vérifié en
+  conditions réelles par l'utilisateur (2026-08-04)** - a trouvé deux
+  vrais manques, corrigés le jour même, voir l'entrée "Suite de la
+  synchronisation WebDAV" plus bas. Remplace
   Autosync (app tierce payante, qui créait des conflits inexpliqués - dont
   un sur la base elle-même juste avant ce chantier, désactivée par
   l'utilisateur au passage). Nouvelle section `lib/services/webdav/` :
@@ -77,6 +79,48 @@ courses, pas des engagements.
   ETag, comportement de la toute première synchro contre les vraies
   données, et un vrai scénario de conflit de bout en bout.
 
+- ~~Suite de la synchronisation WebDAV : 3 manques trouvés en conditions
+  réelles~~ - **fait (2026-08-04)**. La toute première synchro réelle de
+  l'utilisateur a immédiatement révélé ce que la conception n'avait pas
+  anticipé :
+  1. **"J'ai tapé Résoudre, rien ne s'est affiché"** - en fait le
+     comportement prévu (les deux copies se sont révélées identiques une
+     fois vraiment comparées, rien à choisir - cas plausible juste après
+     avoir désactivé Autosync), mais totalement silencieux : aucun signe
+     que quoi que ce soit s'était passé. `handleWebDavSyncTap`
+     (`webdav_conflict_dialog.dart`) affiche maintenant un SnackBar dans
+     les deux cas (résolution silencieuse vs vrai échec), et un autre
+     après une vraie résolution de conflit confirmant la version gardée.
+  2. **Un vrai bug** : une modification faite sur desktop restait
+     invisible sur Android tant que l'appli n'était pas relancée à froid -
+     `restoreLastDatabase()` (seul point d'entrée de la réconciliation
+     WebDAV) ne s'exécute qu'une fois par processus, au tout premier
+     lancement. Or sur Android, "rouvrir l'appli" veut presque toujours
+     dire "revenir depuis le multitâche" (l'OS garde le processus vivant),
+     pas un vrai redémarrage - ce cas ne redéclenchait donc jamais la
+     vérification. Corrigé en réconciliant aussi sur
+     `AppLifecycleState.resumed` (`app.dart`), via le `syncNow()` déjà
+     existant du bouton manuel (gère déjà correctement le cas "base
+     ouverte en direct").
+  3. Demande de l'utilisateur au passage : pousser aussi automatiquement
+     les modifications faites sur Android **en quittant** l'appli
+     (`AppLifecycleState.paused`), pas seulement au prochain lancement -
+     symétrique du point 2. Comme personne ne regarde l'écran à ce
+     moment-là, la bannière in-app ne suffit pas : ajout d'une vraie
+     notification Android locale (`flutter_local_notifications`, nouvelle
+     dépendance - nécessite `POST_NOTIFICATIONS` au manifeste et
+     `coreLibraryDesugaringEnabled` côté Gradle, sinon le build release
+     échoue à `checkReleaseAarMetadata`) confirmant l'envoi. Best-effort
+     assumé : Android peut suspendre le processus peu après `paused`, donc
+     un envoi lent n'est pas garanti d'aboutir - net progrès sur "il fallait
+     y penser", pas une garantie absolue.
+
+  Les deux déclencheurs automatiques réutilisent `syncNow()` tel quel (déjà
+  bidirectionnel : pousse ou tire selon ce qui a réellement changé), donc
+  aucune nouvelle logique de décision - seulement de nouveaux points
+  d'appel. `flutter analyze`/`flutter test` (223)/`flutter build web
+  --release`/`flutter build apk --release` tous vérifiés propres.
+
 - ~~Régression critique : plus aucune base ne s'ouvrait, sur les 3
   plateformes~~ - **fait, confirmé résolu en direct par l'utilisateur
   (2026-08-04)**. Introduite par le correctif du même jour "PIN gate
@@ -105,7 +149,7 @@ courses, pas des engagements.
   fonctionnel) - web et Android partagent le même code corrigé mais
   restent à confirmer séparément.
 - ~~Vérification/installation des mises à jour côté Android~~ - **fait,
-  vérification en direct par l'utilisateur en attente (2026-08-04)**. Suite
+  confirmé fonctionnel en direct par l'utilisateur (2026-08-04)**. Suite
   du 2026-08-02 (desktop fait ce jour-là). Android a son propre chemin
   maintenant : `checkForUpdatesAndPrompt` (`update_prompt_io.dart`) prend
   en charge Android en plus de Windows, télécharge l'APK depuis la release
@@ -123,8 +167,30 @@ courses, pas des engagements.
   l'APK est téléchargé). `flutter analyze`/`flutter test`/
   `flutter build apk --release` vérifiés propres (aucun conflit de fusion
   du manifeste, aucune erreur Kotlin) ; le vrai scénario "une mise à jour
-  existe, taper Installer, confirmer l'installation système" reste à tester
-  en conditions réelles sur un téléphone.
+  existe, taper Installer, confirmer l'installation système" confirmé
+  fonctionnel sur un vrai téléphone (2026-08-04).
+
+- ~~Numéro de version invisible sur Android~~ - **fait (2026-08-04)**. Le
+  correctif du jour même ("Petits ajustements" plus bas avait ajouté
+  l'affichage, mais restait invisible sur Android précisément - voir
+  `home_shell.dart`) - passage d'un `Padding` implicite (aligné via le
+  `alignment` du `Stack`) à un `Positioned` explicite, par analogie avec
+  `_SavingIndicator` déjà correctement positionné - a été vérifié en
+  conditions réelles et **ne suffisait pas** : toujours invisible sur un
+  vrai téléphone malgré une appli à jour (mise à jour automatique
+  confirmée fonctionnelle par ailleurs, voir entrée ci-dessus). Cause
+  exacte non déterminée avec certitude (probablement un contraste trop
+  faible - texte 9sp à 50% d'opacité sur la barre de navigation - plutôt
+  qu'un vrai problème de positionnement). Plutôt que de continuer à
+  deviner sans pouvoir tester sur l'appareil réel soi-même, ajout d'un
+  second emplacement fiable, à la demande explicite de l'utilisateur
+  ("au pire, met le n° de version dans les paramètres") : ligne "Version
+  X.X.X" en bas de l'écran Paramètres (`_VersionLabel`, petit
+  `StatefulWidget` dédié pour ne lire `PackageInfo.fromPlatform()` qu'une
+  fois - `settings_screen.dart` est par ailleurs `Stateless` et se
+  reconstruit souvent). L'emplacement d'origine dans la barre de
+  navigation est conservé tel quel (fonctionne sur desktop/web).
+
 - ~~3 tests IA locale qui échouaient (pumpAndSettle timeout)~~ - **fait
   (2026-08-04)**. Ces 3 tests de `nl_query_dialog_test.dart` (ceux qui
   tapent "Demander") étaient marqués comme problème connu depuis le

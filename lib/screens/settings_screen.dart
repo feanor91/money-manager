@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../state/database_provider.dart';
@@ -209,6 +210,8 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ],
+          const SizedBox(height: 16),
+          const Center(child: _VersionLabel()),
         ],
       ),
     );
@@ -221,6 +224,46 @@ class SettingsScreen extends StatelessWidget {
     await FilePicker.saveFile(
       fileName: 'MyMoney_export.mmb',
       bytes: Uint8List.fromList(bytes),
+    );
+  }
+}
+
+/// Own small StatefulWidget (not folded into SettingsScreen, which is
+/// Stateless) so PackageInfo.fromPlatform() is only ever fetched once, in
+/// initState - inlining it as a FutureBuilder in SettingsScreen.build would
+/// re-run the future (and briefly flash back to nothing) on every rebuild
+/// this screen already gets from watching DatabaseProvider. Added as a
+/// reliable fallback 2026-08-04 after the bottom-nav-bar version label
+/// (home_shell.dart) was confirmed still invisible on a real Android device
+/// even after an earlier positioning fix - a plain line in a scrollable
+/// list has no equivalent risk of being laid out under a system bar.
+class _VersionLabel extends StatefulWidget {
+  const _VersionLabel();
+
+  @override
+  State<_VersionLabel> createState() => _VersionLabelState();
+}
+
+class _VersionLabelState extends State<_VersionLabel> {
+  String? _version;
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) setState(() => _version = info.version);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_version == null) return const SizedBox.shrink();
+    return Text(
+      'Version $_version',
+      style: Theme.of(context)
+          .textTheme
+          .bodySmall
+          ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
     );
   }
 }

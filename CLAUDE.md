@@ -323,33 +323,39 @@ compiles instead). Also bumped the Kotlin Gradle plugin
 unrelated internal-compiler-error was blocking `package_info_plus` (added
 earlier the same day) from building at all until fixed.
 
-## Auto-update (desktop only so far)
+## Auto-update (desktop + Android, confirmed working on both)
 
 `lib/widgets/update_prompt.dart` checks GitHub's public releases API on
 every `HomeShell` startup (`services/update_checker.dart` has the actual
 HTTP call + version comparison, no Flutter dependency, unit-tested
-directly) and offers to download+install a newer Windows installer if one
-exists - see the "Récemment fait" entry in ROADMAP.md for the user-facing
-behavior. Same conditional-import shell as `android_file_link.dart`/
-`web_file_link.dart` (`update_prompt_stub.dart` on web, `update_prompt_io.dart`
-everywhere with `dart.library.io` - both desktop *and* Android satisfy that
-condition, so the io version itself gates on `Platform.isWindows` and is a
-no-op on Android) for the same reason: the download/launch step needs
-`dart:io` (`Process.start`, `File`), which doesn't exist on web at all and
-would break `flutter build web` if imported unconditionally from a file
-`HomeShell` (web-compiled) pulls in - confirmed this stays broken-web-safe
-by actually running both `flutter build web --release` and `flutter build
-windows --release` after adding this, not just `flutter analyze` (analyze
-alone missed the exact same class of problem for the Android SAF fix
-earlier the same day - it's a real gap, not a one-off).
+directly) and offers to download+install a newer release if one exists -
+see the "Récemment fait" entries in ROADMAP.md for the user-facing
+behavior (desktop: 2026-08-02; Android: 2026-08-04, confirmed working live
+by the user the same day). Same conditional-import shell as
+`android_file_link.dart`/`web_file_link.dart` (`update_prompt_stub.dart` on
+web, `update_prompt_io.dart` everywhere with `dart.library.io` - desktop
+*and* Android both satisfy that condition) for the same reason: the
+download/launch step needs `dart:io` (`Process.start`, `File`), which
+doesn't exist on web at all and would break `flutter build web` if
+imported unconditionally from a file `HomeShell` (web-compiled) pulls in -
+confirmed this stays broken-web-safe by actually running both
+`flutter build web --release` and `flutter build windows --release`/
+`flutter build apk --release` after adding this, not just `flutter
+analyze` (analyze alone missed the exact same class of problem for the
+Android SAF fix the same day the desktop version shipped - a real gap,
+not a one-off).
 
-Android intentionally does nothing yet beyond the `Platform.isWindows`
-early return - it needs its own native install trigger
-(`REQUEST_INSTALL_PACKAGES` permission + a `FileProvider` manifest entry to
-hand a downloaded APK to the system installer, which - unlike this desktop
-flow - can never be fully silent; Android always requires a user tap to
-confirm installing a sideloaded APK). Deliberately not bundled into the
-same change as the desktop version - see ROADMAP.md.
+Desktop installs silently (no user confirmation beyond the initial
+"install now?" prompt). Android can never be fully silent - installing a
+sideloaded APK always requires an explicit user tap to confirm in
+Android's own system installer UI, even after this app hands it the
+downloaded file. That hand-off needs a little native Kotlin
+(`MainActivity.kt`): building the `content://` URI to give the installer
+goes through `FileProvider.getUriForFile()`, a Java/Kotlin API with no
+Dart equivalent - everything else (download, deciding whether an update
+exists) stays in Dart. Manifest additions: `REQUEST_INSTALL_PACKAGES`
+permission + a `FileProvider` declaration + `res/xml/file_paths.xml`
+exposing the app's cache dir (where the APK downloads to).
 
 ## Android release signing
 

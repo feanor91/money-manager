@@ -862,6 +862,26 @@ class DatabaseProvider extends ChangeNotifier {
   String? syncError;
   SyncConflictInfo? _pendingConflict;
 
+  /// Transient, human-readable confirmation that an automatic (launch or
+  /// app-resume) or manual sync actually did something - set only for
+  /// pushLocal/pullRemote (a silent noop stays silent, and
+  /// conflict/remoteMissing already get their own persistent banner). Clears
+  /// itself after a few seconds via [_syncMessageTimer] so it reads as a
+  /// toast, not a standing status line.
+  String? syncMessage;
+  Timer? _syncMessageTimer;
+
+  void _setSyncMessage(String? message) {
+    syncMessage = message;
+    _syncMessageTimer?.cancel();
+    if (message != null) {
+      _syncMessageTimer = Timer(const Duration(seconds: 4), () {
+        syncMessage = null;
+        notifyListeners();
+      });
+    }
+  }
+
   /// Non-null once [prepareConflictResolution] has actually fetched the
   /// remote bytes to show - distinct from `syncStatus ==
   /// SyncStatus.conflictPending`, which just means a conflict was *detected*
@@ -959,20 +979,30 @@ class DatabaseProvider extends ChangeNotifier {
     if (result.errorMessage != null) {
       syncStatus = SyncStatus.error;
       syncError = result.errorMessage;
+      _setSyncMessage(null);
       return;
     }
     syncError = null;
     switch (result.action) {
       case SyncAction.noop:
+        syncStatus = SyncStatus.idle;
+        _setSyncMessage(null);
+        break;
       case SyncAction.pushLocal:
+        syncStatus = SyncStatus.idle;
+        _setSyncMessage('Vos modifications ont été envoyées au serveur.');
+        break;
       case SyncAction.pullRemote:
         syncStatus = SyncStatus.idle;
+        _setSyncMessage('Les dernières modifications du serveur ont été récupérées.');
         break;
       case SyncAction.conflict:
         syncStatus = SyncStatus.conflictPending;
+        _setSyncMessage(null);
         break;
       case SyncAction.remoteMissing:
         syncStatus = SyncStatus.remoteMissing;
+        _setSyncMessage(null);
         break;
     }
   }
@@ -1102,6 +1132,7 @@ class DatabaseProvider extends ChangeNotifier {
   @override
   void dispose() {
     _writeBackDebounce?.cancel();
+    _syncMessageTimer?.cancel();
     _webDavSync?.invalidateClient();
     _db?.dispose();
     super.dispose();
