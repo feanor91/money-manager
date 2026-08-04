@@ -21,10 +21,43 @@ Future<void> handleWebDavSyncTap(BuildContext context) async {
       break;
     case SyncStatus.conflictPending:
       final info = await dbProvider.prepareConflictResolution();
-      if (info == null || !context.mounted) return;
+      if (!context.mounted) return;
+      if (info == null) {
+        // Two different reasons this can come back empty - tell them apart
+        // rather than silently doing nothing either way, which is exactly
+        // what looked like a bug (tap "Résoudre", nothing visibly happens):
+        // either the fetch itself failed (dbProvider.syncError set), or -
+        // the far more likely case on a first-ever sync - the phone and
+        // server copies turned out to be genuinely byte-identical despite
+        // looking different (e.g. two WebDAV identities for the same
+        // content), so DatabaseProvider already resolved it and there was
+        // never anything to actually choose between.
+        final error = dbProvider.syncError;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error != null
+                  ? 'Échec de la vérification du conflit : $error'
+                  : 'Les deux versions étaient en fait identiques - rien à choisir, '
+                      'synchronisation terminée.',
+            ),
+          ),
+        );
+        return;
+      }
       final choice = await showWebDavConflictDialog(context, info: info);
       if (choice == null || !context.mounted) return;
       await dbProvider.resolveConflict(choice);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(dbProvider.syncError != null
+              ? 'Échec de la résolution : ${dbProvider.syncError}'
+              : choice == ConflictChoice.keepLocal
+                  ? 'Version du téléphone envoyée sur le serveur.'
+                  : 'Version du serveur récupérée.'),
+        ),
+      );
     case SyncStatus.remoteMissing:
       final reupload = await showDialog<bool>(
         context: context,
