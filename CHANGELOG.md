@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.43] - 2026-08-04
+
+- feat(android): built-in WebDAV sync, replacing the third-party Autosync app
+
 ## [1.0.42] - 2026-08-04
 
 - fix(app): key the PIN gate's Navigator so the screen actually advances
