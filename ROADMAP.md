@@ -37,6 +37,33 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Régression critique : plus aucune base ne s'ouvrait, sur les 3
+  plateformes~~ - **fait, confirmé résolu en direct par l'utilisateur
+  (2026-08-04)**. Introduite par le correctif du même jour "PIN gate
+  substitute screens Navigator/Overlay" (voir plus bas) : `_gated()`
+  construisait un nouveau `Navigator` à chaque reconstruction de
+  `_PinGate`, mais `Navigator.onGenerateRoute` n'est consulté qu'une seule
+  fois, à la création - passer un `child` différent (DbPickerScreen →
+  PinUnlockScreen → l'appli réelle) sur les reconstructions suivantes ne
+  faisait donc plus rien : Flutter réutilisait le même `NavigatorState`
+  sans jamais rafraîchir l'écran affiché. Résultat : l'appli restait
+  bloquée sur "Choisir un fichier .mmb" indéfiniment, alors même que
+  `DatabaseProvider`/`PinLockProvider` avaient parfaitement fini d'ouvrir
+  la base en interne (confirmé par une trace de diagnostic capturée en
+  conditions réelles - le fichier s'ouvrait bien, le statut passait à
+  `ready`/`locked`, mais l'écran ne bougeait jamais). Le bouton "Créer une
+  nouvelle base", resté cliquable sur cet écran fantôme, pouvait alors
+  écraser un fichier déjà ouvert avec un schéma déjà initialisé
+  (`SqliteException: table ACCOUNTLIST_V1 already exists`) - sans
+  toutefois rien corrompre, `CREATE TABLE` échoue proprement sans modifier
+  la table existante. Corrigé en donnant à chaque `Navigator` une clé
+  dérivée de l'écran affiché (`ValueKey(child.runtimeType)`), pour que
+  Flutter le reconstruise réellement (et réinvoque `onGenerateRoute`)
+  quand l'écran affiché change vraiment, plutôt que de le réutiliser à
+  tort. `flutter analyze`/`flutter test` propres ; vérifié en conditions
+  réelles sur desktop par l'utilisateur (base ouverte, code PIN backspace
+  fonctionnel) - web et Android partagent le même code corrigé mais
+  restent à confirmer séparément.
 - ~~Vérification/installation des mises à jour côté Android~~ - **fait,
   vérification en direct par l'utilisateur en attente (2026-08-04)**. Suite
   du 2026-08-02 (desktop fait ce jour-là). Android a son propre chemin
@@ -120,8 +147,8 @@ courses, pas des engagements.
   CLAUDE.md - la vérification UI en direct nécessite un vrai fichier .mmb
   ouvert via le sélecteur, pas automatisable depuis cette session).
 - ~~Questions en langage naturel ("quelles ont été mes dépenses en
-  juillet ?")~~ - **fait pour la partie sans IA, IA locale Windows en
-  attente de vérification sur une vraie machine (2026-08-02)**. Nouvelle
+  juillet ?")~~ - **fait, IA locale Windows vérifiée fonctionnelle en
+  conditions réelles par l'utilisateur (2026-08-04)**. Nouvelle
   icône bulle de dialogue sur le tableau de bord ("Poser une question"),
   ouvre un dialogue texte libre. Deux moteurs, avec repli automatique du
   second vers le premier :
@@ -158,12 +185,12 @@ courses, pas des engagements.
     et placer `llama-server.exe` + ses DLL dans le dossier indiqué par
     l'écran Paramètres - étape documentée dans l'appli, pas automatisée
     (le choix de la variante CPU/CUDA/Vulkan dépend du matériel).
-    **Non vérifié en conditions réelles** : le vrai test (démarrage du
-    process, chargement du modèle, qualité du JSON produit, arrêt propre
-    du process à la fermeture de l'appli) n'a jamais pu être fait avec un
-    vrai `llama-server.exe` depuis cette session. `flutter analyze`/
-    `flutter test`/`flutter build web` vérifiés propres ; `flutter build
-    windows` jamais tenté.
+    **Vérifié fonctionnel en conditions réelles (2026-08-04)** : confirmé
+    par l'utilisateur sur sa vraie machine Windows avec un vrai
+    `llama-server.exe` - démarrage du process, chargement du modèle,
+    extraction d'intention fonctionnent bien. `flutter analyze`/
+    `flutter test`/`flutter build web`/`flutter build windows` tous
+    vérifiés propres.
 - ~~Vérification/installation automatique des mises à jour (desktop)~~ -
   **fait, vérification en direct en attente (2026-08-02)**. Au démarrage,
   vérification silencieuse en arrière-plan de la dernière release GitHub

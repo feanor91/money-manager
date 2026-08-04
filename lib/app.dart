@@ -149,8 +149,32 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
   /// PinCompanionAccessScreen never surfaced this only because neither
   /// happens to autofocus a text field - they were silently exposed to the
   /// exact same missing-Overlay condition the whole time.
+  ///
+  /// **`key: ValueKey(child.runtimeType)` is load-bearing, not decoration -
+  /// found 2026-08-04, same day, breaking database opening on all three
+  /// platforms.** Without it, going from `_gated(DbPickerScreen())` to
+  /// `_gated(PinUnlockScreen())` across rebuilds produces two `Navigator`
+  /// widgets of the same type at the same tree position with no key -
+  /// Flutter's reconciliation treats that as "the same Navigator, just
+  /// re-passed a new onGenerateRoute", reuses the existing NavigatorState,
+  /// and does NOT re-invoke onGenerateRoute (that only happens once, to
+  /// build the *initial* route - not on every rebuild of the Navigator
+  /// widget itself). The screen visibly shown never advances past whatever
+  /// was first displayed - confirmed via a debug-logged real run where
+  /// DatabaseProvider/PinLockProvider's state correctly progressed all the
+  /// way to `isReady=true, status=locked` (proving the open genuinely
+  /// succeeded) while the UI stayed frozen on DbPickerScreen regardless,
+  /// letting its still-live "Créer une nouvelle base" button fire against
+  /// an already-open, already-schema'd database and throw "ACCOUNTLIST_V1
+  /// already exists". Keying by the child's runtimeType makes the Navigator
+  /// change identity - and therefore get properly torn down and rebuilt via
+  /// a fresh onGenerateRoute call - exactly when the *conceptual* screen
+  /// changes, while still preserving state across same-screen rebuilds
+  /// (e.g. DbPickerScreen re-rendering through its own loading/error
+  /// states) that don't actually need a reset.
   Widget _gated(Widget child) {
     return Navigator(
+      key: ValueKey(child.runtimeType),
       onGenerateRoute: (_) => MaterialPageRoute(builder: (_) => child),
     );
   }
