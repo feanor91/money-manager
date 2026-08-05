@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../models/budget_period.dart' show nextForecastDay;
 import '../models/currency.dart';
+import '../services/voice_entry/voice_transaction_parser.dart' show VoiceTransactionDraft;
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
@@ -15,9 +18,16 @@ import '../widgets/forecast_chart.dart';
 import '../widgets/nl_query_dialog.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_tile.dart';
+import '../widgets/voice_transaction_sheet.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart' show openAccountEditor;
 import 'transactions_screen.dart' show TransactionEditorSheet;
+
+/// Same convention as transactions_screen.dart / webdav_settings_card.dart -
+/// re-declared locally rather than shared, per this codebase's existing
+/// pattern for this one-line platform check.
+bool get _isAndroidPlatform =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -112,8 +122,14 @@ class DashboardScreen extends StatelessWidget {
     return Scaffold(
       floatingActionButton: FloatingActionButton(
         tooltip: 'Nouvelle transaction',
-        onPressed: () => _openTransactionEditor(context,
-            defaultAccountId: selectedAccountId),
+        // Android gets an extra "Par la voix" choice first (same mechanic as
+        // TransactionsScreen's own FAB) - everywhere else this stays exactly
+        // the single direct tap it always was, since there'd be nothing else
+        // to choose from there.
+        onPressed: () => _isAndroidPlatform
+            ? _showAddChoice(context, selectedAccountId)
+            : _openTransactionEditor(context,
+                defaultAccountId: selectedAccountId),
         child: const Icon(Icons.add),
       ),
       body: CustomScrollView(
@@ -428,7 +444,7 @@ class DashboardScreen extends StatelessWidget {
 /// existing category for offerBulkCategoryReassign to ever actually fire
 /// on, but it's kept for consistency in case that ever changes.
 Future<void> _openTransactionEditor(BuildContext context,
-    {int? defaultAccountId}) async {
+    {int? defaultAccountId, VoiceTransactionDraft? voicePrefill}) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
   final categoryChange = await showModalBottomSheet<CategoryChange?>(
@@ -437,6 +453,7 @@ Future<void> _openTransactionEditor(BuildContext context,
     builder: (_) => TransactionEditorSheet(
       repo: repo,
       defaultAccountId: defaultAccountId,
+      voicePrefill: voicePrefill,
     ),
   );
   dbProvider.touch();
@@ -447,6 +464,56 @@ Future<void> _openTransactionEditor(BuildContext context,
       dbProvider: dbProvider,
       change: categoryChange,
     );
+  }
+}
+
+/// Same two-step flow as TransactionsScreen._startVoiceEntry: capture +
+/// parse first, then hand off to the normal "Nouvelle transaction" sheet for
+/// confirmation - nothing is ever saved straight from speech.
+Future<void> _startVoiceEntry(BuildContext context, int? accountId) async {
+  final repo = context.read<DatabaseProvider>().repository!;
+  final draft = await showModalBottomSheet<VoiceTransactionDraft>(
+    context: context,
+    isScrollControlled: true,
+    builder: (_) => VoiceTransactionSheet(
+      payees: repo.getPayees(onlyActive: false),
+      categories: repo.getCategories(),
+    ),
+  );
+  if (!context.mounted || draft == null) return;
+  await _openTransactionEditor(context,
+      defaultAccountId: accountId, voicePrefill: draft);
+}
+
+/// Same choice-sheet mechanic as TransactionsScreen's own FAB, minus the
+/// "opération récurrente" option that only makes sense from that screen -
+/// only shown at all when [_isAndroidPlatform], see the FAB above.
+Future<void> _showAddChoice(BuildContext context, int? accountId) async {
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    builder: (context) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Nouvelle transaction'),
+            onTap: () => Navigator.of(context).pop('transaction'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.mic_outlined),
+            title: const Text('Par la voix'),
+            onTap: () => Navigator.of(context).pop('voice'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (!context.mounted || choice == null) return;
+  if (choice == 'voice') {
+    await _startVoiceEntry(context, accountId);
+  } else {
+    await _openTransactionEditor(context, defaultAccountId: accountId);
   }
 }
 
