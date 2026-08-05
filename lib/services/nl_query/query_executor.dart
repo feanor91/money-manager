@@ -47,6 +47,11 @@ class QueryAnswer {
   /// [answer_formatter.dart] for how those two are told apart).
   final DateTime? forecastCrossesNegativeOn;
 
+  /// [QueryKind.expenseByMonth] only - one total per calendar month across
+  /// [QueryIntent.period], keyed by each month's 1st, oldest first. See
+  /// [MmexRepository.categorySpendByMonth].
+  final Map<DateTime, double>? monthlyBreakdown;
+
   const QueryAnswer({
     this.total,
     this.income,
@@ -55,6 +60,7 @@ class QueryAnswer {
     this.transactions,
     this.forecastTotal,
     this.forecastCrossesNegativeOn,
+    this.monthlyBreakdown,
   });
 }
 
@@ -73,11 +79,17 @@ DateTime _addDays(DateTime date, int days) => DateTime(date.year, date.month, da
 QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
   switch (intent.kind) {
     case QueryKind.expenseTotal:
-      final totals = repo.categorySpendForPeriod(
-        intent.period.start,
-        intent.period.end,
-        accountId: intent.accountId,
-      );
+      final totals = intent.recurringOnly
+          ? repo.recurringCategorySpendForPeriod(
+              intent.period.start,
+              intent.period.end,
+              accountId: intent.accountId,
+            )
+          : repo.categorySpendForPeriod(
+              intent.period.start,
+              intent.period.end,
+              accountId: intent.accountId,
+            );
       if (intent.categoryId != null) {
         final categories = repo.getCategories(onlyActive: false);
         final categoryIds = [
@@ -85,12 +97,17 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
           for (final c in categories)
             if (c.parentId == intent.categoryId) c.id,
         ];
-        final transactions = repo.transactionsForCategories(
+        var transactions = repo.transactionsForCategories(
           categoryIds,
           intent.period.start,
           intent.period.end,
           accountId: intent.accountId,
+          limit: intent.recurringOnly ? 50 : 5,
         );
+        if (intent.recurringOnly) {
+          final recurringIds = repo.recurringTransactionIds();
+          transactions = transactions.where((t) => recurringIds.contains(t.id)).take(5).toList();
+        }
         return QueryAnswer(
           total: rolledUpSpend(intent.categoryId!, totals, categories),
           transactions: transactions,
@@ -100,6 +117,15 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
       final sorted = totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
       final breakdown = {for (final e in sorted.take(3)) e.key: e.value};
       return QueryAnswer(total: total, categoryBreakdown: breakdown);
+
+    case QueryKind.expenseByMonth:
+      final monthly = repo.categorySpendByMonth(
+        intent.period.start,
+        intent.period.end,
+        categoryId: intent.categoryId,
+        accountId: intent.accountId,
+      );
+      return QueryAnswer(monthlyBreakdown: monthly);
 
     case QueryKind.incomeTotal:
       final income = repo.incomeForPeriod(

@@ -29,6 +29,18 @@ void main() {
     expect(range.label, 'Juillet 2026');
   });
 
+  test("depuis le debut de l'annee / depuis janvier -> Jan 1st through today, not the whole year",
+      () {
+    for (final phrase in ["mes depenses depuis le debut de l'annee", 'mes depenses depuis janvier']) {
+      final range = parsePeriod(phrase, now: now)!;
+      expect(range.start, DateTime(2026, 1, 1), reason: phrase);
+      // Stops the day after "today" (5 Aug), not 1 Jan 2027 - unlike "cette
+      // année", this phrasing shouldn't claim anything about months not
+      // reached yet.
+      expect(range.end, DateTime(2026, 8, 6), reason: phrase);
+    }
+  });
+
   test('named month without year, still ahead this year -> assumed last year', () {
     // "décembre" (month 12) hasn't happened yet relative to August 2026, so
     // this must mean December 2025, not a future December 2026.

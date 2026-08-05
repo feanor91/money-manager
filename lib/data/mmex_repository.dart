@@ -1116,6 +1116,74 @@ class MmexRepository {
     return totals;
   }
 
+  /// Same filters as [categorySpendForPeriod], restricted to transactions
+  /// actually linked to a recurring bill (see [recurringTransactionIds]/
+  /// APP_TRANSACTION_BILL_LINKS in [ensureAppSchema]) - the "dépenses
+  /// récurrentes" natural-language question (QueryKind.expenseTotal with
+  /// recurringOnly). Deliberately reads real recorded transactions rather
+  /// than projecting from the bill *definitions* like [recurringCategoryNet]
+  /// does: for a closed past period, what was actually recorded is the
+  /// honest answer, and can legitimately differ from the schedule (a bill
+  /// paused mid-period, a catch-up recorded off its original date, an
+  /// amount edited after the fact, ...).
+  Map<int, double> recurringCategorySpendForPeriod(DateTime start, DateTime end,
+      {int? accountId}) {
+    final where = <String>[
+      "c.TRANSDATE >= ?",
+      "c.TRANSDATE < ?",
+      "c.TRANSCODE = 'Withdrawal'",
+      "UPPER(TRIM(c.STATUS)) != 'V'",
+      "(c.DELETEDTIME IS NULL OR c.DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    if (accountId != null) {
+      where.add('c.ACCOUNTID = ?');
+      params.add(accountId);
+    }
+    final rows = db.query(
+      'SELECT c.CATEGID, c.TRANSAMOUNT FROM CHECKINGACCOUNT_V1 c '
+      'JOIN APP_TRANSACTION_BILL_LINKS l ON l.TRANSID = c.TRANSID '
+      'WHERE ${where.join(' AND ')}',
+      params,
+    );
+    final totals = <int, double>{};
+    for (final row in rows) {
+      final categId = row['CATEGID'] as int?;
+      if (categId == null) continue;
+      final amount = (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      totals[categId] = (totals[categId] ?? 0) + amount;
+    }
+    return totals;
+  }
+
+  /// One [categorySpendForPeriod] call per calendar month between [start]
+  /// and [end] (exclusive), summed across every category when [categoryId]
+  /// is null or rolled up into [categoryId] and its subcategories otherwise -
+  /// the "dépenses ... par mois" natural-language question, where a single
+  /// total would hide how spending moved from one month to the next. Keyed
+  /// by each month's 1st; a month with genuinely zero spend still gets an
+  /// entry (0.0) rather than being silently skipped, so a real gap shows as
+  /// one instead of looking like missing data.
+  Map<DateTime, double> categorySpendByMonth(
+    DateTime start,
+    DateTime end, {
+    int? categoryId,
+    int? accountId,
+  }) {
+    final categories = getCategories(onlyActive: false);
+    final result = <DateTime, double>{};
+    var cursor = DateTime(start.year, start.month, 1);
+    while (cursor.isBefore(end)) {
+      final monthEnd = DateTime(cursor.year, cursor.month + 1, 1);
+      final totals = categorySpendForPeriod(cursor, monthEnd, accountId: accountId);
+      result[cursor] = categoryId == null
+          ? totals.values.fold(0.0, (a, b) => a + b)
+          : rolledUpSpend(categoryId, totals, categories);
+      cursor = monthEnd;
+    }
+    return result;
+  }
+
   /// Same idea as [categorySpendForPeriod] but for a single payee instead
   /// of every category - "combien j'ai dépensé chez X" (natural-language
   /// query feature). Withdrawals only, same exclusions (voided, deleted).

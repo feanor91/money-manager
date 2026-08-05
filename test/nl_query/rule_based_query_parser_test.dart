@@ -79,6 +79,34 @@ void main() {
     expect(result.intent!.categoryId, alimentation.id);
   });
 
+  test('"transaction"/"operation"/"achat" are recognized as expense synonyms', () {
+    for (final phrase in [
+      'la somme des transactions le mois dernier',
+      'total de mes opérations ce mois-ci',
+      'mes achats du mois dernier',
+    ]) {
+      expect(parse(phrase).intent!.kind, QueryKind.expenseTotal, reason: phrase);
+    }
+  });
+
+  test('"dépenses récurrentes" sets recurringOnly', () {
+    final plain = parse('mes dépenses ce mois-ci');
+    expect(plain.intent!.recurringOnly, isFalse);
+    final recurring = parse('total de mes dépenses récurrentes ce mois-ci');
+    expect(recurring.intent!.kind, QueryKind.expenseTotal);
+    expect(recurring.intent!.recurringOnly, isTrue);
+  });
+
+  test('"par mois" -> expenseByMonth, with the named category if any', () {
+    final withCategory = parse("mes dépenses en alimentation par mois depuis le début de l'année");
+    expect(withCategory.intent!.kind, QueryKind.expenseByMonth);
+    expect(withCategory.intent!.categoryId, alimentation.id);
+
+    final withoutCategory = parse('mes dépenses par mois cette année');
+    expect(withoutCategory.intent!.kind, QueryKind.expenseByMonth);
+    expect(withoutCategory.intent!.categoryId, isNull);
+  });
+
   test('account name is resolved and attached regardless of query kind', () {
     final result = parse('mes dépenses sur mon Compte Courant ce mois-ci');
     expect(result.intent!.accountId, compteCourant.id);

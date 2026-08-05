@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../data/mmex_repository.dart';
+import '../models/account.dart';
 import '../models/budget_period.dart' show nextForecastDay;
 import '../services/nl_query/answer_formatter.dart';
 import '../services/nl_query/local_llm/local_llm_manager.dart';
@@ -17,7 +18,33 @@ const _examples = [
   'Mes plus grosses dépenses des 3 derniers mois',
   'Revenus et dépenses de cette année',
   'Pourquoi vais-je finir le mois en négatif ?',
+  "Mes dépenses en Alimentation par mois depuis le début de l'année",
 ];
+
+/// A flat "not understood" gives no clue how to rephrase - say what *was*
+/// recognized (account, an explicitly-named period) so the user knows the
+/// problem is specifically "which kind of question" (dépenses/revenus/
+/// solde/...) rather than starting over blind. Deliberately re-derives this
+/// from the rule-based parser's own recognizedPieces rather than the local
+/// LLM's attempt: this message is only ever shown once *both* have already
+/// failed, and the rule-based pieces are the ones a rephrase can actually
+/// act on (same fixed keyword set on every platform), unlike whatever the
+/// LLM did or didn't parse out of it.
+String _notUnderstoodMessage(String question, {required List<Account> accounts}) {
+  final pieces = recognizedPieces(question, accounts: accounts);
+  final recognized = <String>[
+    if (pieces.accountId != null)
+      'le compte "${accounts.firstWhere((a) => a.id == pieces.accountId).name}"',
+    if (pieces.periodLabel != null) 'la période "${pieces.periodLabel}"',
+  ];
+  if (recognized.isEmpty) {
+    return "Je n'ai pas compris cette question. Essaie une formulation "
+        'comme celles ci-dessous.';
+  }
+  return "J'ai reconnu ${recognized.join(' et ')}, mais pas ce que tu "
+      'cherches (dépenses, revenus, solde...) - essaie une formulation '
+      'comme celles ci-dessous.';
+}
 
 /// Opens the natural-language query tool as a dialog - same shape as
 /// [openCategorySpendAnalyzer] (a read-only research tool, not a record
@@ -169,8 +196,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
           _answer = freeform;
           _isAiFreeform = true;
         } else {
-          _error = "Je n'ai pas compris cette question. Essaie une "
-              'formulation comme celles ci-dessous.';
+          _error = _notUnderstoodMessage(question, accounts: accounts);
         }
       });
       return;

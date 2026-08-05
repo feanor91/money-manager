@@ -55,13 +55,21 @@ import 'query_intent.dart';
     intent = QueryIntent(kind: QueryKind.incomeVsExpense, period: period, accountId: accountId);
   } else if (_mentionsIncome(text)) {
     intent = QueryIntent(kind: QueryKind.incomeTotal, period: period, accountId: accountId);
+  } else if (_mentionsExpense(text) && _mentionsPerMonth(text)) {
+    final categoryId = bestNameMatch(text, categories.map((c) => MapEntry(c.id, c.name)));
+    intent = QueryIntent(
+        kind: QueryKind.expenseByMonth,
+        period: period,
+        accountId: accountId,
+        categoryId: categoryId);
   } else if (_mentionsExpense(text)) {
     final categoryId = bestNameMatch(text, categories.map((c) => MapEntry(c.id, c.name)));
     intent = QueryIntent(
         kind: QueryKind.expenseTotal,
         period: period,
         accountId: accountId,
-        categoryId: categoryId);
+        categoryId: categoryId,
+        recurringOnly: _mentionsRecurring(text));
   } else {
     return (intent: null, periodWasExplicit: periodWasExplicit);
   }
@@ -69,13 +77,42 @@ import 'query_intent.dart';
   return (intent: intent, periodWasExplicit: periodWasExplicit);
 }
 
+/// What could be made out of [question] even when it doesn't resolve to a
+/// full [QueryIntent] - only the account and an *explicitly* mentioned
+/// period (never the silent current-month default, which the user never
+/// actually said) - so the caller can tell them exactly what it understood
+/// ("le compte X, la période Y") and, by omission, what it didn't (which
+/// kind of question - dépenses/revenus/solde/...), instead of a flat "not
+/// understood" that gives no clue how to rephrase. See nl_query_dialog.dart.
+({int? accountId, String? periodLabel}) recognizedPieces(
+  String question, {
+  required List<Account> accounts,
+  DateTime? now,
+}) {
+  final text = foldDiacritics(question);
+  final accountId = bestNameMatch(text, accounts.map((a) => MapEntry(a.id, a.name)));
+  final periodLabel = parsePeriod(text, now: now)?.label;
+  return (accountId: accountId, periodLabel: periodLabel);
+}
+
 bool _mentionsExpense(String text) => RegExp(
-      r'depense|sortie|sorties|debit|debite',
+      r'depense|sortie|sorties|debit|debite|transaction|operation|achat',
     ).hasMatch(text);
 
 bool _mentionsIncome(String text) => RegExp(
       r'revenu|rentree|salaire|encaisse|recette|gagne|touche',
     ).hasMatch(text);
+
+/// "dépenses récurrentes", "opérations récurrentes" - narrows an expense
+/// total to ones actually linked to a recurring bill (see
+/// QueryIntent.recurringOnly). Folded diacritics turn "récurrent(e)(s)"
+/// into "recurrent(e)(s)", matched without the accent.
+bool _mentionsRecurring(String text) => RegExp(r'recurrente?s?\b').hasMatch(text);
+
+/// "par mois", "mois par mois", "chaque mois" - asks for a per-month
+/// breakdown instead of one lump total (see QueryKind.expenseByMonth).
+bool _mentionsPerMonth(String text) =>
+    RegExp(r'par mois|mois par mois|chaque mois').hasMatch(text);
 
 /// "Pourquoi vais-je finir le mois en négatif ?", "vais-je finir en
 /// négatif", "pourquoi je vais être dans le rouge", "vais-je être à

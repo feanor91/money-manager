@@ -91,6 +91,64 @@ void main() {
     expect(answer.transactions!.map((t) => t.amount), [25]);
   });
 
+  test('expenseTotal with recurringOnly only counts transactions linked to a recurring bill', () {
+    final billId = repo.insertBillDeposit(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 15,
+      nextOccurrence: DateTime(2026, 7, 20),
+      period: RecurrencePeriod.monthly,
+      autoExecute: RecurrenceAutoExecute.manual,
+      categoryId: alimentationId,
+    );
+    final bill = repo.getBillDeposits().firstWhere((b) => b.id == billId);
+    repo.recordBillOccurrence(bill, date: DateTime(2026, 7, 20));
+
+    // Recurring-only: just the bill-linked 15, not the two ad-hoc withdrawals
+    // (40 + 25) already seeded in setUp.
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.expenseTotal, period: july, recurringOnly: true),
+      repo,
+    );
+    expect(answer.total, 15);
+    expect(answer.categoryBreakdown, {alimentationId: 15});
+  });
+
+  test('expenseByMonth breaks down a category across months, zero-filling months with no spend', () {
+    // setUp only seeded July; August (same account, same category) gets one
+    // more so the breakdown has a real second, different month to check.
+    repo.insertTransaction(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 12,
+      date: DateTime(2026, 8, 3),
+      categoryId: alimentationId,
+    );
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.expenseByMonth,
+        period: DateRange(start: DateTime(2026, 6, 1), end: DateTime(2026, 9, 1), label: 'test'),
+        categoryId: alimentationId,
+      ),
+      repo,
+    );
+    expect(answer.monthlyBreakdown, {
+      DateTime(2026, 6): 0,
+      DateTime(2026, 7): 65, // Alimentation (40) + its subcategory Restaurant (25)
+      DateTime(2026, 8): 12,
+    });
+  });
+
+  test('expenseByMonth with no category sums every category per month', () {
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.expenseByMonth, period: july),
+      repo,
+    );
+    expect(answer.monthlyBreakdown, {DateTime(2026, 7): 65});
+  });
+
   test('incomeTotal sums deposits', () {
     final answer = runQuery(QueryIntent(kind: QueryKind.incomeTotal, period: july), repo);
     expect(answer.income, 1500);

@@ -24,6 +24,14 @@ enum QueryKind {
   /// "Combien j'ai dépensé chez Carrefour ?" - total spend at one payee.
   payeeSpend,
 
+  /// "Mes dépenses de nourriture par mois depuis janvier" - one total per
+  /// calendar month across [QueryIntent.period], optionally narrowed to one
+  /// category (every category combined otherwise) - see
+  /// MmexRepository.categorySpendByMonth. Distinct from [topExpenses]: this
+  /// tracks one thing (or everything) over time, not several things ranked
+  /// against each other at a single point in time.
+  expenseByMonth,
+
   /// "Pourquoi vais-je finir le mois en négatif ?" - projects the balance
   /// forward to the end of [QueryIntent.period], using the same known-
   /// recurring-bills projection the forecast chart uses, and - when that
@@ -71,6 +79,12 @@ class QueryIntent {
   /// end of [period]) when null, see query_executor.dart.
   final DateTime? asOf;
 
+  /// Only meaningful for [QueryKind.expenseTotal] - "dépenses récurrentes"
+  /// narrows the total (and its category breakdown/detail transactions) to
+  /// ones actually linked to a recurring bill, instead of every withdrawal
+  /// in the period. See MmexRepository.recurringCategorySpendForPeriod.
+  final bool recurringOnly;
+
   const QueryIntent({
     required this.kind,
     required this.period,
@@ -79,5 +93,6 @@ class QueryIntent {
     this.payeeId,
     this.topN = 5,
     this.asOf,
+    this.recurringOnly = false,
   });
 }

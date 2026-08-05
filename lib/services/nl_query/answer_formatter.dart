@@ -8,25 +8,31 @@ import '../../models/transaction.dart';
 import 'query_executor.dart';
 import 'query_intent.dart';
 
-/// "• 42,00 € - Carrefour (Alimentation:Courses) le 3 juil. 2026" per
+/// "• Alimentation (120,00 €)" per item, one per line, newline-joined - the
+/// leading bullet is what visually separates one item from the next in the
+/// dialog's plain Text widget (nl_query_dialog.dart), which otherwise has
+/// nothing but the newline itself to mark a new line. Shared by every list-
+/// shaped piece of an answer (category breakdowns, transaction detail) so
+/// they all read the same way instead of some being a comma-separated
+/// run-on and others a bulleted list.
+String _bulletLines(Iterable<String> items) => items.map((i) => '• $i').join('\n');
+
+/// "42,00 € - Carrefour (Alimentation:Courses) le 3 juil. 2026" per
 /// transaction, biggest first - the detail behind an otherwise-bare total
-/// (see [QueryAnswer.transactions]), one bullet line each, newline-joined -
-/// the leading bullet is what visually separates one transaction from the
-/// next in the dialog's plain Text widget (nl_query_dialog.dart), which
-/// otherwise has nothing but the newline itself to mark a new line.
+/// (see [QueryAnswer.transactions]).
 String _transactionLines(
   List<MoneyTransaction> transactions,
   Map<int, Category> categoriesById,
   Map<int, Payee> payeesById,
   String Function(double) money,
 ) {
-  return transactions.map((t) {
+  return _bulletLines(transactions.map((t) {
     final payeeName = payeesById[t.payeeId]?.name ?? 'inconnu';
     final categoryName = categoryFullPath(t.categoryId, categoriesById);
     final categoryPart = categoryName.isEmpty ? '' : ' ($categoryName)';
     final dateText = DateFormat('d MMM yyyy', 'fr_FR').format(t.date);
-    return '• ${money(t.amount)} - $payeeName$categoryPart le $dateText';
-  }).join('\n');
+    return '${money(t.amount)} - $payeeName$categoryPart le $dateText';
+  }));
 }
 
 /// Turns a [QueryAnswer] into a French sentence - always deterministic,
@@ -58,21 +64,38 @@ String formatAnswer(
   switch (intent.kind) {
     case QueryKind.expenseTotal:
       final total = answer.total ?? 0;
+      final expenseLabel = intent.recurringOnly ? 'Dépenses récurrentes' : 'Dépenses';
       if (intent.categoryId != null) {
         final name = categoryFullPath(intent.categoryId, categoriesById);
         final lines = _transactionLines(answer.transactions ?? const [], categoriesById, payeesById, money);
         final detail = lines.isEmpty ? '' : '\n$lines';
-        return 'Dépenses en ${name.isEmpty ? "cette catégorie" : name} pour '
+        return '$expenseLabel en ${name.isEmpty ? "cette catégorie" : name} pour '
             '${intent.period.label}$accountNote : ${money(total)}.$detail$periodNote';
       }
       final breakdown = answer.categoryBreakdown ?? const {};
-      final parts = breakdown.entries
+      final lines = _bulletLines(breakdown.entries
           .where((e) => e.value > 0)
-          .map((e) => '${categoryFullPath(e.key, categoriesById)} (${money(e.value)})')
-          .join(', ');
-      final detail = parts.isEmpty ? '' : ' - principalement : $parts';
-      return 'Dépenses totales pour ${intent.period.label}$accountNote : '
+          .map((e) => '${categoryFullPath(e.key, categoriesById)} (${money(e.value)})'));
+      final detail = lines.isEmpty ? '' : '\nPrincipalement :\n$lines';
+      final totalLabel = intent.recurringOnly ? 'Dépenses récurrentes totales' : 'Dépenses totales';
+      return '$totalLabel pour ${intent.period.label}$accountNote : '
           '${money(total)}.$detail$periodNote';
+
+    case QueryKind.expenseByMonth:
+      final monthly = answer.monthlyBreakdown ?? const {};
+      final months = monthly.keys.toList()..sort();
+      if (months.isEmpty) {
+        return 'Aucune dépense trouvée pour ${intent.period.label}$accountNote.$periodNote';
+      }
+      final monthFormat = DateFormat('MMMM yyyy', 'fr_FR');
+      final lines = _bulletLines(months.map((m) {
+        final label = monthFormat.format(m);
+        return '${label[0].toUpperCase()}${label.substring(1)} : ${money(monthly[m]!)}';
+      }));
+      final categoryName =
+          intent.categoryId != null ? categoryFullPath(intent.categoryId, categoriesById) : '';
+      final subject = categoryName.isEmpty ? 'Dépenses' : 'Dépenses en $categoryName';
+      return '$subject par mois$accountNote (${intent.period.label}) :\n$lines$periodNote';
 
     case QueryKind.incomeTotal:
       return 'Revenus pour ${intent.period.label}$accountNote : '
@@ -100,8 +123,8 @@ String formatAnswer(
       if (sorted.isEmpty) {
         return 'Aucune dépense trouvée pour ${intent.period.label}$accountNote.$periodNote';
       }
-      final lines =
-          sorted.map((e) => '${money(e.value)} - ${categoryFullPath(e.key, categoriesById)}').join('\n');
+      final lines = _bulletLines(
+          sorted.map((e) => '${money(e.value)} - ${categoryFullPath(e.key, categoriesById)}'));
       return 'Plus grosses dépenses (par catégorie) pour ${intent.period.label}$accountNote :\n'
           '$lines$periodNote';
 
@@ -118,19 +141,18 @@ String formatAnswer(
       final periodEndLabel = DateFormat('d MMMM yyyy', 'fr_FR')
           .format(intent.period.end.subtract(const Duration(days: 1)));
       final breakdown = answer.categoryBreakdown ?? const {};
-      final parts = breakdown.entries
-          .map((e) => '${categoryFullPath(e.key, categoriesById)} (${money(e.value)})')
-          .join(', ');
-      final explanation = parts.isEmpty
+      final breakdownLines = _bulletLines(
+          breakdown.entries.map((e) => '${categoryFullPath(e.key, categoriesById)} (${money(e.value)})'));
+      final explanation = breakdownLines.isEmpty
           ? "Aucune facture récurrente connue ne l'explique - regarde les opérations déjà "
               'enregistrées pour cette période dans le grand livre.'
-          : 'Principales dépenses récurrentes prévues d\'ici là : $parts.';
+          : 'Principales dépenses récurrentes prévues d\'ici là :\n$breakdownLines';
 
       if (current < 0) {
-        final detail = parts.isEmpty
+        final detail = breakdownLines.isEmpty
             ? ''
-            : ' Les prochaines grosses dépenses récurrentes prévues d\'ici le '
-                '$periodEndLabel : $parts.';
+            : '\nLes prochaines grosses dépenses récurrentes prévues d\'ici le '
+                '$periodEndLabel :\n$breakdownLines';
         return "Ton solde$accountNote est déjà négatif aujourd'hui : ${money(current)} "
             '(prévision au $periodEndLabel : ${money(forecast)}).$detail$periodNote';
       }

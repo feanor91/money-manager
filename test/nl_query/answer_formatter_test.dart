@@ -230,6 +230,28 @@ void main() {
     expect(bulletLines[1], '• 25,00 € - Carrefour (Alimentation:Restaurant) le 10 juil. 2026');
   });
 
+  test('expenseByMonth lists one bulleted line per month, oldest first', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.expenseByMonth,
+        period: DateRange(start: DateTime(2026, 6, 1), end: DateTime(2026, 8, 1), label: 'test'),
+        categoryId: alimentation.id,
+      ),
+      QueryAnswer(monthlyBreakdown: {DateTime(2026, 7): 65, DateTime(2026, 6): 0}),
+    );
+    final bulletLines = text.split('\n').where((l) => l.startsWith('• ')).toList();
+    expect(bulletLines, ['• Juin 2026 : 0,00 €', '• Juillet 2026 : 65,00 €']);
+    expect(text, contains('Alimentation'));
+  });
+
+  test('expenseByMonth with no results says so rather than an empty list', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.expenseByMonth, period: july),
+      const QueryAnswer(monthlyBreakdown: {}),
+    );
+    expect(text, contains('Aucune dépense trouvée'));
+  });
+
   test('topExpenses with no results says so rather than an empty list', () {
     final text = format(
       QueryIntent(kind: QueryKind.topExpenses, period: july),

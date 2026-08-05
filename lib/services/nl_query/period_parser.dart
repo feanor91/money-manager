@@ -105,6 +105,16 @@ DateRange? parsePeriod(String rawText, {DateTime? now}) {
     );
   }
 
+  // Open-ended, unlike "cette année" below: stops at today, not the end of
+  // December - "depuis janvier" asked in March shouldn't claim anything
+  // about April onward.
+  if (RegExp(r"depuis (?:le debut de l'?annee|janvier)").hasMatch(text)) {
+    return DateRange(
+      start: DateTime(today.year, 1, 1),
+      end: today.add(const Duration(days: 1)),
+      label: "depuis le début de l'année",
+    );
+  }
   if (RegExp(r'annee derniere|annee precedente|annee passee').hasMatch(text)) {
     return DateRange(
       start: DateTime(today.year - 1, 1, 1),
