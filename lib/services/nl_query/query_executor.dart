@@ -107,16 +107,22 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
           for (final c in categories)
             if (c.parentId == intent.categoryId) c.id,
         ];
+        // No cap the user can actually control exists for this detail list
+        // (unlike QueryKind.topExpenses' own explicit topN) - showing only
+        // the biggest 5 by default made the number above look backed by
+        // less than it really was. 500 is a safety ceiling against a truly
+        // extreme query, not a real-world limit: comfortably above what a
+        // single category+account+period realistically produces.
         var transactions = repo.transactionsForCategories(
           categoryIds,
           intent.period.start,
           intent.period.end,
           accountId: intent.accountId,
-          limit: intent.recurringOnly ? 50 : 5,
+          limit: 500,
         );
         if (intent.recurringOnly) {
           final recurringIds = repo.recurringTransactionIds();
-          transactions = transactions.where((t) => recurringIds.contains(t.id)).take(5).toList();
+          transactions = transactions.where((t) => recurringIds.contains(t.id)).toList();
         }
         return QueryAnswer(
           total: rolledUpSpend(intent.categoryId!, totals, categories),
@@ -212,6 +218,7 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
         intent.period.start,
         intent.period.end,
         accountId: intent.accountId,
+        limit: 500, // see the same note on the expenseTotal case above
       );
       return QueryAnswer(total: total, transactions: transactions);
 

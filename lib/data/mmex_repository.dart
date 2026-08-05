@@ -1224,7 +1224,7 @@ class MmexRepository {
     DateTime start,
     DateTime end, {
     int? accountId,
-    int limit = 5,
+    int limit = 500,
   }) {
     if (categoryIds.isEmpty) return const [];
     final where = <String>[
@@ -1256,7 +1256,7 @@ class MmexRepository {
     DateTime start,
     DateTime end, {
     int? accountId,
-    int limit = 5,
+    int limit = 500,
   }) {
     final where = <String>[
       "TRANSDATE >= ?",

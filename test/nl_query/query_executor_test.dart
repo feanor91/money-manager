@@ -91,6 +91,26 @@ void main() {
     expect(answer.transactions!.map((t) => t.amount), [25]);
   });
 
+  test('expenseTotal detail list is not capped at 5 transactions', () {
+    for (var i = 0; i < 10; i++) {
+      repo.insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 1,
+        date: DateTime(2026, 7, 15),
+        categoryId: alimentationId,
+      );
+    }
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.expenseTotal, period: july, categoryId: alimentationId),
+      repo,
+    );
+    // Seeded 40 (Alimentation) + 25 (Restaurant subcategory) + 10 new x1 = 12 transactions.
+    expect(answer.transactions!.length, 12);
+    expect(answer.total, 75);
+  });
+
   test('expenseTotal with recurringOnly only counts transactions linked to a recurring bill', () {
     final billId = repo.insertBillDeposit(
       accountId: accountId,
@@ -255,6 +275,25 @@ void main() {
       () => runQuery(QueryIntent(kind: QueryKind.payeeSpend, period: july), repo),
       throwsArgumentError,
     );
+  });
+
+  test('payeeSpend detail list is not capped at 5 transactions', () {
+    for (var i = 0; i < 10; i++) {
+      repo.insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 1,
+        date: DateTime(2026, 7, 15),
+      );
+    }
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.payeeSpend, period: july, payeeId: payeeId),
+      repo,
+    );
+    // Seeded 40 + 25 + 10 new x1 = 12 transactions.
+    expect(answer.transactions!.length, 12);
+    expect(answer.total, 75);
   });
 
   test('a period with no matching transactions returns zero, not an error', () {
