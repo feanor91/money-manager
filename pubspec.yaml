@@ -48,6 +48,10 @@ dependencies:
   http: ^1.6.0
   flutter_local_notifications: ^22.2.0
 
+  # Saisie vocale de transactions (Android uniquement) - reconnaissance via
+  # les APIs natives du telephone (SpeechRecognizer), pas d'appel API externe.
+  speech_to_text: ^7.4.0
+
   # IA locale (Windows uniquement, optionnelle) - voir
   # lib/services/nl_query/local_llm/. N'utilise plus llama_cpp_dart depuis
   # le 2026-08-03 (aucun binaire Windows pret a l'emploi, voir ROADMAP.md) -

@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +10,7 @@ import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
 import '../models/transaction.dart';
+import '../services/voice_entry/voice_transaction_parser.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
@@ -17,6 +19,7 @@ import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+import '../widgets/voice_transaction_sheet.dart';
 import 'recurring_screen.dart' show RecurringEditorSheet;
 
 /// True on every platform except web - i.e. desktop (Windows/Linux/macOS)
@@ -29,6 +32,12 @@ import 'recurring_screen.dart' show RecurringEditorSheet;
 /// [getTransactionsWithRunningBalance]'s doc comment for what this actually
 /// gates (skipping the month-bounded ledger query).
 bool get _showFullLedger => !kIsWeb;
+
+/// Android-specific, unlike [_showFullLedger] - gates the voice-entry option
+/// (speech_to_text via Android's own SpeechRecognizer), same convention as
+/// webdav_settings_card.dart's _isAndroidPlatform.
+bool get _isAndroidPlatform =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
@@ -323,7 +332,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _openEditor(BuildContext context,
-      {MoneyTransaction? existing, int? defaultAccountId}) async {
+      {MoneyTransaction? existing,
+      int? defaultAccountId,
+      VoiceTransactionDraft? voicePrefill}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
     final categoryChange = await showModalBottomSheet<CategoryChange?>(
@@ -333,6 +344,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         existing: existing,
         repo: repo,
         defaultAccountId: defaultAccountId,
+        voicePrefill: voicePrefill,
       ),
     );
     dbProvider.touch();
@@ -344,6 +356,24 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         change: categoryChange,
       );
     }
+  }
+
+  /// Opens the mic-capture sheet, then - if the user went through with it -
+  /// the same "Nouvelle transaction" sheet as manual entry, pre-filled with
+  /// whatever [parseVoiceTransaction] made of the transcript. Nothing is
+  /// ever saved directly from speech: the user always confirms in that sheet.
+  Future<void> _startVoiceEntry(BuildContext context, int? accountId) async {
+    final repo = context.read<DatabaseProvider>().repository!;
+    final draft = await showModalBottomSheet<VoiceTransactionDraft>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => VoiceTransactionSheet(
+        payees: repo.getPayees(onlyActive: false),
+        categories: repo.getCategories(),
+      ),
+    );
+    if (!context.mounted || draft == null) return;
+    await _openEditor(context, defaultAccountId: accountId, voicePrefill: draft);
   }
 
   /// Lets the FAB create either a one-off transaction or a recurring bill
@@ -366,6 +396,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               title: const Text('Nouvelle opération récurrente'),
               onTap: () => Navigator.of(context).pop('recurring'),
             ),
+            if (_isAndroidPlatform)
+              ListTile(
+                leading: const Icon(Icons.mic_outlined),
+                title: const Text('Par la voix'),
+                onTap: () => Navigator.of(context).pop('voice'),
+              ),
           ],
         ),
       ),
@@ -373,6 +409,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (!context.mounted || choice == null) return;
     if (choice == 'transaction') {
       await _openEditor(context, defaultAccountId: accountId);
+    } else if (choice == 'voice') {
+      await _startVoiceEntry(context, accountId);
     } else {
       await _openRecurringEditor(context, defaultAccountId: accountId);
     }
@@ -978,7 +1016,19 @@ class TransactionEditorSheet extends StatefulWidget {
   final MmexRepository repo;
   final int? defaultAccountId;
 
-  const TransactionEditorSheet({super.key, this.existing, required this.repo, this.defaultAccountId});
+  /// Seeds the same fields [existing] would, without being a real saved
+  /// transaction - Enregistrer still *creates* a new one, exactly like the
+  /// plain "Nouvelle transaction" flow. Ignored when [existing] is set (an
+  /// edit always wins over a stale draft). See voice_transaction_sheet.dart.
+  final VoiceTransactionDraft? voicePrefill;
+
+  const TransactionEditorSheet({
+    super.key,
+    this.existing,
+    required this.repo,
+    this.defaultAccountId,
+    this.voicePrefill,
+  });
 
   @override
   State<TransactionEditorSheet> createState() =>
@@ -1001,15 +1051,17 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   void initState() {
     super.initState();
     final tx = widget.existing;
+    final draft = tx == null ? widget.voicePrefill : null;
     _accountId = tx?.accountId ?? widget.defaultAccountId;
     _toAccountId = tx?.toAccountId;
-    _categoryId = tx?.categoryId;
-    _payeeId = tx?.payeeId;
-    _transCode = tx?.transCode ?? TransCode.withdrawal;
-    _date = tx?.date ?? DateTime.now();
+    _categoryId = tx?.categoryId ?? draft?.categoryId;
+    _payeeId = tx?.payeeId ?? draft?.payeeId;
+    _transCode = tx?.transCode ?? draft?.transCode ?? TransCode.withdrawal;
+    _date = tx?.date ?? draft?.date ?? DateTime.now();
     _reconciled = tx?.isReconciled ?? false;
-    _amountController.text = tx != null ? tx.amount.toStringAsFixed(2) : '';
-    _notesController.text = tx?.notes ?? '';
+    _amountController.text =
+        tx != null ? tx.amount.toStringAsFixed(2) : (draft?.amount?.toStringAsFixed(2) ?? '');
+    _notesController.text = tx?.notes ?? draft?.notes ?? '';
   }
 
   @override

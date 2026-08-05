@@ -25,6 +25,11 @@
          than up front at first launch. Silently ignored (auto-granted) on
          older Android versions. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Microphone access for voice-entry transactions (speech_to_text,
+         Android only - see lib/widgets/voice_transaction_sheet.dart).
+         speech_to_text also requests this at runtime before first use; it
+         must still be declared here or that runtime request itself fails. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
         android:label="money_manager"
         android:name="${applicationName}"

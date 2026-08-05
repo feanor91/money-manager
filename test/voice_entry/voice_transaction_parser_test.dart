@@ -1,0 +1,100 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:money_manager/models/category.dart';
+import 'package:money_manager/models/payee.dart';
+import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager/services/voice_entry/voice_transaction_parser.dart';
+
+void main() {
+  final now = DateTime(2026, 8, 5, 10);
+
+  const alimentation = Category(id: 1, name: 'Alimentation', active: true);
+  const essence = Category(id: 2, name: 'Essence', active: true);
+  const categories = [alimentation, essence];
+
+  // Carrefour defaults to Alimentation, so matching the payee alone should
+  // be enough to also fill in a sensible category.
+  const carrefour = Payee(id: 20, name: 'Carrefour', active: true, categoryId: 1);
+  const employeur = Payee(id: 21, name: 'Mon Employeur', active: true);
+  const payees = [carrefour, employeur];
+
+  VoiceTransactionDraft parse(String transcript) => parseVoiceTransaction(
+        transcript,
+        payees: payees,
+        categories: categories,
+        now: now,
+      );
+
+  test('extracts amount, date and payee from a typical expense sentence', () {
+    // Digits, not "trente-cinq" - this is the already speech-recognized
+    // transcript, and Android's on-device recognizer normally transcribes a
+    // dictated number as digits (see parseVoiceTransaction's doc comment).
+    final draft = parse('35 euros chez Carrefour hier');
+    expect(draft.amount, 35);
+    expect(draft.date, DateTime(2026, 8, 4));
+    expect(draft.payeeId, 20);
+    expect(draft.transCode, TransCode.withdrawal);
+  });
+
+  test('a matched payee fills in its own default category', () {
+    final draft = parse('12 euros chez Carrefour');
+    expect(draft.categoryId, 1);
+  });
+
+  test('an explicit category word wins over the payee default category', () {
+    final draft = parse('50 euros chez Carrefour pour essence');
+    expect(draft.categoryId, 2);
+  });
+
+  test('decimal amount with a comma is parsed correctly', () {
+    final draft = parse('35,50 euros chez Carrefour');
+    expect(draft.amount, 35.5);
+  });
+
+  test('a euro sign is recognized the same as the word "euros"', () {
+    final draft = parse('20€ chez Carrefour');
+    expect(draft.amount, 20);
+  });
+
+  test('the currency-tagged number wins over an unrelated number in the sentence', () {
+    final draft = parse('15 euros chez Carrefour le 3 aout');
+    expect(draft.amount, 15);
+  });
+
+  test('no amount found leaves it null and keeps the raw transcript as notes', () {
+    final draft = parse('chez Carrefour hier');
+    expect(draft.amount, isNull);
+    expect(draft.notes, 'chez Carrefour hier');
+  });
+
+  test('amount found means no notes fallback is needed', () {
+    final draft = parse('10 euros chez Carrefour');
+    expect(draft.notes, isNull);
+  });
+
+  test('"avant-hier" resolves to two days before now', () {
+    final draft = parse('8 euros avant-hier');
+    expect(draft.date, DateTime(2026, 8, 3));
+  });
+
+  test('no date word defaults to today', () {
+    final draft = parse('8 euros chez Carrefour');
+    expect(draft.date, DateTime(2026, 8, 5));
+  });
+
+  test('an income keyword is detected as a deposit', () {
+    final draft = parse('reçu 200 euros de Mon Employeur');
+    expect(draft.transCode, TransCode.deposit);
+    expect(draft.payeeId, 21);
+  });
+
+  test('no income keyword defaults to a withdrawal', () {
+    final draft = parse('200 euros chez Carrefour');
+    expect(draft.transCode, TransCode.withdrawal);
+  });
+
+  test('no payee or category recognized leaves both null, not a guess', () {
+    final draft = parse('40 euros chez un endroit inconnu');
+    expect(draft.payeeId, isNull);
+    expect(draft.categoryId, isNull);
+  });
+}
