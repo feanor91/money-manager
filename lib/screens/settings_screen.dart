@@ -11,6 +11,7 @@ import '../widgets/local_llm_settings_card.dart';
 import '../widgets/webdav_settings_card.dart';
 import 'categories_screen.dart';
 import 'database_diagnostics_screen.dart';
+import 'help_screen.dart';
 import 'pin_lock_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -217,6 +218,18 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
           ],
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.help_outline),
+              title: const Text("Guide d'utilisation"),
+              subtitle: const Text('Comment fonctionne l\'application, écran par écran'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HelpScreen()),
+              ),
+            ),
+          ),
           const SizedBox(height: 16),
           const Center(child: _VersionLabel()),
         ],
