@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.51] - 2026-08-05
+
+- fix(nl-query): show every matching transaction, not just the 5 biggest
+- feat(settings): embedded user guide (Guide d'utilisation)
+
 ## [1.0.50] - 2026-08-05
 
 - fix(test): skip openReadOnlyAdHocRepository tests on non-Windows CI
