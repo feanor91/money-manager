@@ -8,9 +8,12 @@ import '../../models/transaction.dart';
 import 'query_executor.dart';
 import 'query_intent.dart';
 
-/// "42,00 € - Carrefour (Alimentation:Courses) le 3 juil. 2026" per
+/// "• 42,00 € - Carrefour (Alimentation:Courses) le 3 juil. 2026" per
 /// transaction, biggest first - the detail behind an otherwise-bare total
-/// (see [QueryAnswer.transactions]), one line each, newline-joined.
+/// (see [QueryAnswer.transactions]), one bullet line each, newline-joined -
+/// the leading bullet is what visually separates one transaction from the
+/// next in the dialog's plain Text widget (nl_query_dialog.dart), which
+/// otherwise has nothing but the newline itself to mark a new line.
 String _transactionLines(
   List<MoneyTransaction> transactions,
   Map<int, Category> categoriesById,
@@ -22,7 +25,7 @@ String _transactionLines(
     final categoryName = categoryFullPath(t.categoryId, categoriesById);
     final categoryPart = categoryName.isEmpty ? '' : ' ($categoryName)';
     final dateText = DateFormat('d MMM yyyy', 'fr_FR').format(t.date);
-    return '${money(t.amount)} - $payeeName$categoryPart le $dateText';
+    return '• ${money(t.amount)} - $payeeName$categoryPart le $dateText';
   }).join('\n');
 }
 

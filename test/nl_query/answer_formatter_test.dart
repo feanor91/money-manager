@@ -196,6 +196,40 @@ void main() {
     expect(text, contains('Restaurant'));
   });
 
+  test('each transaction behind a total gets its own bulleted line', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.payeeSpend, period: july, payeeId: carrefour.id),
+      QueryAnswer(total: 65, transactions: [
+        MoneyTransaction(
+          id: 1,
+          accountId: compteCourant.id,
+          payeeId: carrefour.id,
+          transCode: TransCode.withdrawal,
+          amount: 40,
+          toAmount: 40,
+          status: '',
+          categoryId: alimentation.id,
+          date: DateTime(2026, 7, 5),
+        ),
+        MoneyTransaction(
+          id: 2,
+          accountId: compteCourant.id,
+          payeeId: carrefour.id,
+          transCode: TransCode.withdrawal,
+          amount: 25,
+          toAmount: 25,
+          status: '',
+          categoryId: restaurant.id,
+          date: DateTime(2026, 7, 10),
+        ),
+      ]),
+    );
+    final bulletLines = text.split('\n').where((l) => l.startsWith('• ')).toList();
+    expect(bulletLines, hasLength(2));
+    expect(bulletLines[0], '• 40,00 € - Carrefour (Alimentation) le 5 juil. 2026');
+    expect(bulletLines[1], '• 25,00 € - Carrefour (Alimentation:Restaurant) le 10 juil. 2026');
+  });
+
   test('topExpenses with no results says so rather than an empty list', () {
     final text = format(
       QueryIntent(kind: QueryKind.topExpenses, period: july),
