@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.47] - 2026-08-05
+
+- feat(android): voice entry for transactions
+- fix(android): version label at the bottom of Paramètres was hidden behind the system nav bar
+
 ## [1.0.46] - 2026-08-04
 
 - feat(webdav): bidirectional auto-sync on app resume/pause + version fallback
