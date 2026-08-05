@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.48] - 2026-08-05
+
+- feat(nl-query): bullet each transaction line in an answer's detail
+- feat(android): voice entry for transactions, also from the dashboard
+
 ## [1.0.47] - 2026-08-05
 
 - feat(android): voice entry for transactions
