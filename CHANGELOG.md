@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.50] - 2026-08-05
+
+- fix(test): skip openReadOnlyAdHocRepository tests on non-Windows CI
+- feat(local-ai): generic ad-hoc query replaces the 8 fixed question kinds
+
 ## [1.0.49] - 2026-08-05
 
 - feat(nl-query): recurring-only expenses, monthly breakdown, bulleted lists, diagnostic errors
