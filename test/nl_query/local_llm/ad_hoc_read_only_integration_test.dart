@@ -16,6 +16,12 @@ import 'package:money_manager/services/nl_query/query_intent.dart';
 /// session's test suite, `:memory:` is simpler and sufficient - this is the
 /// only layer where the read-only reopen mechanism itself is genuinely
 /// exercised end to end.
+///
+/// openReadOnlyAdHocRepository is Windows-only (see
+/// local_llm_manager_io_test.dart's own doc comment) - skipped on CI's Linux
+/// Test runner rather than failing on a platform this feature never targets.
+final _skipReason = Platform.isWindows ? null : 'IA locale : Windows uniquement.';
+
 void main() {
   late Directory tempDir;
 
@@ -79,5 +85,5 @@ void main() {
     } finally {
       readOnlyRepo!.db.dispose();
     }
-  });
+  }, skip: _skipReason);
 }
