@@ -68,13 +68,22 @@ ws ::= | " " | "\n" [ \t]{0,20}
 
 const _systemPrompt = '''
 Tu extrais une intention structurée d'une question posée en français sur une base de finances personnelles. Réponds UNIQUEMENT avec un objet JSON, sans aucun texte autour, au format suivant :
-{"kind": "...", "period": "...", "category": "...", "account": "...", "payee": "...", "topN": ...}
+{"kind": "...", "period": "...", "category": "...", "account": "...", "payee": "...", "topN": ..., "metric": "...", "transactionType": "...", "groupBy": "...", "recurringOnly": ...}
 
-- "kind" doit être exactement l'une de ces valeurs : expenseTotal, incomeTotal, incomeVsExpense, balance, topExpenses, payeeSpend, outlook.
-- "period" est la portion de la question qui décrit une période (ex: "juillet 2026", "le mois dernier", "cette année"), ou null si aucune n'est mentionnée.
+- "kind" doit être exactement l'une de ces valeurs : adHoc, balance, outlook, incomeVsExpense.
+  - "adHoc" pour TOUTE question qui revient à filtrer puis agréger des opérations : un total de dépenses ou de revenus, un classement ("mes plus grosses dépenses"), une dépense chez un tiers précis, une répartition par catégorie/mois/compte/tiers, des opérations récurrentes, un nombre d'opérations, une moyenne, etc. C'est le choix par défaut : en cas de doute, choisis "adHoc".
+  - "balance" seulement pour une question sur le solde d'un compte à un instant donné.
+  - "outlook" seulement pour une question du type "vais-je finir le mois en négatif / dans le rouge / à découvert".
+  - "incomeVsExpense" seulement pour une question qui compare explicitement revenus ET dépenses ensemble.
+- "period" est la portion de la question qui décrit une période (ex: "juillet 2026", "le mois dernier", "cette année", "depuis janvier"), ou null si aucune n'est mentionnée.
 - "category", "account", "payee" sont les noms mentionnés dans la question (ou null s'ils ne sont pas mentionnés) - recopie seulement ce que dit la question, n'en invente jamais.
-- "topN" est un nombre si la question en demande un (ex: "top 10"), sinon null.
-N'invente jamais de montant ni de date précise : ce sont d'autres calculs qui s'en chargent, pas toi.
+- "topN" est un nombre si la question en demande un explicitement (ex: "top 10", "mes 3 plus grosses..."), sinon null - laisse null si la question ne demande pas de classement limité, même pour "adHoc" avec un "groupBy".
+- Uniquement pour "kind": "adHoc", précise aussi (laisse ces 4 champs à null pour tout autre "kind") :
+  - "metric" : "sum" (un total), "count" (un nombre d'opérations), ou "average" (une moyenne).
+  - "transactionType" : "withdrawal" (dépenses), "deposit" (revenus), "transfer" (virements), ou "any" (tout, y compris les virements - se combine surtout avec "count").
+  - "groupBy" : "none" (un seul total), "category", "month", "payee", ou "account" - selon si la question demande une répartition et par quoi.
+  - "recurringOnly" : true seulement si la question mentionne explicitement des opérations "récurrentes", sinon false.
+N'invente jamais de montant, de date précise, ou de nom de catégorie/compte/tiers absent de la question : ce sont d'autres calculs qui s'en chargent, pas toi.
 ''';
 
 /// Qwen2.5's own chat format (ChatML) - both catalog models (see

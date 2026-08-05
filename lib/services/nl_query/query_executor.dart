@@ -1,6 +1,7 @@
 import '../../data/mmex_repository.dart';
 import '../../models/category.dart';
 import '../../models/transaction.dart';
+import 'ad_hoc_query.dart';
 import 'query_intent.dart';
 
 /// The raw numeric/list result of running a [QueryIntent] - deliberately
@@ -52,6 +53,14 @@ class QueryAnswer {
   /// [MmexRepository.categorySpendByMonth].
   final Map<DateTime, double>? monthlyBreakdown;
 
+  /// [QueryKind.adHoc] only - one entry per [QueryIntent.adHocGroupBy]
+  /// bucket, already display-label-resolved (category full path / payee
+  /// name / account name / month label) and already in final display order
+  /// (value-descending, or chronological for a month grouping) - a single
+  /// entry under the empty-string key when it's [AdHocGroupBy.none]. See
+  /// ad_hoc_query.dart.
+  final List<MapEntry<String, double>>? adHocResult;
+
   const QueryAnswer({
     this.total,
     this.income,
@@ -61,6 +70,7 @@ class QueryAnswer {
     this.forecastTotal,
     this.forecastCrossesNegativeOn,
     this.monthlyBreakdown,
+    this.adHocResult,
   });
 }
 
@@ -126,6 +136,20 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
         accountId: intent.accountId,
       );
       return QueryAnswer(monthlyBreakdown: monthly);
+
+    case QueryKind.adHoc:
+      final categories = repo.getCategories(onlyActive: false);
+      final built = buildAdHocSql(intent, categories: categories);
+      final rows = repo.db.query(built.sql, built.params);
+      return QueryAnswer(
+        adHocResult: mapAdHocRows(
+          rows,
+          intent,
+          categories: categories,
+          accounts: repo.getAccounts(),
+          payees: repo.getPayees(onlyActive: false),
+        ),
+      );
 
     case QueryKind.incomeTotal:
       final income = repo.incomeForPeriod(

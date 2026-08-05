@@ -97,6 +97,49 @@ String formatAnswer(
       final subject = categoryName.isEmpty ? 'Dépenses' : 'Dépenses en $categoryName';
       return '$subject par mois$accountNote (${intent.period.label}) :\n$lines$periodNote';
 
+    case QueryKind.adHoc:
+      final metric = intent.adHocMetric ?? AdHocMetric.sum;
+      final type = intent.adHocTransactionType ?? AdHocTransactionType.withdrawal;
+      final groupBy = intent.adHocGroupBy ?? AdHocGroupBy.none;
+      final results = answer.adHocResult ?? const [];
+
+      String valueText(double v) => metric == AdHocMetric.count ? v.round().toString() : money(v);
+      final metricWord = switch (metric) {
+        AdHocMetric.sum => 'Total',
+        AdHocMetric.count => 'Nombre',
+        AdHocMetric.average => 'Moyenne',
+      };
+      final typeLabel = switch (type) {
+        AdHocTransactionType.withdrawal => 'dépenses',
+        AdHocTransactionType.deposit => 'revenus',
+        AdHocTransactionType.transfer => 'virements',
+        AdHocTransactionType.any => 'opérations',
+      };
+      final categoryName = intent.categoryId != null ? categoryFullPath(intent.categoryId, categoriesById) : '';
+      final subject = '$typeLabel'
+          '${intent.recurringOnly ? " récurrentes" : ""}'
+          '${categoryName.isEmpty ? "" : " en $categoryName"}'
+          '${intent.payeeId != null ? " chez ${payeesById[intent.payeeId]?.name ?? "ce tiers"}" : ""}';
+
+      if (groupBy == AdHocGroupBy.none) {
+        final value = results.isNotEmpty ? results.first.value : 0.0;
+        return '$metricWord des $subject pour ${intent.period.label}$accountNote : '
+            '${valueText(value)}.$periodNote';
+      }
+      if (results.isEmpty) {
+        return 'Aucune donnée trouvée pour $subject sur ${intent.period.label}$accountNote.$periodNote';
+      }
+      final groupWord = switch (groupBy) {
+        AdHocGroupBy.category => 'par catégorie',
+        AdHocGroupBy.payee => 'par tiers',
+        AdHocGroupBy.account => 'par compte',
+        AdHocGroupBy.month => 'par mois',
+        AdHocGroupBy.none => '',
+      };
+      final adHocLines = _bulletLines(results.map((e) => '${e.key} (${valueText(e.value)})'));
+      return '$metricWord des $subject $groupWord pour ${intent.period.label}$accountNote :\n'
+          '$adHocLines$periodNote';
+
     case QueryKind.incomeTotal:
       return 'Revenus pour ${intent.period.label}$accountNote : '
           '${money(answer.income ?? 0)}.$periodNote';

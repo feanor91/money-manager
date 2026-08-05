@@ -1,3 +1,4 @@
+import '../../../data/mmex_repository.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
@@ -79,3 +80,12 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
 /// the same conditions as [extractIntentWithLocalLlm] (unsupported,
 /// disabled, not ready, or any failure). Never throws.
 Future<String?> askLocalLlmFreeform(String question) => impl.askLocalLlmFreeform(question);
+
+/// Opens a throwaway, OS/SQLite-enforced read-only connection to the .mmb
+/// file at [dbPath] for running a [QueryKind.adHoc] question - null on any
+/// platform other than Windows, or if [dbPath] can't be reopened this way.
+/// See local_llm_manager_io.dart's doc comment for the full safety
+/// rationale. The caller (nl_query_dialog.dart) owns disposing the
+/// returned repository's `.db` once done with it.
+Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) =>
+    impl.openReadOnlyAdHocRepository(dbPath);

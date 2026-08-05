@@ -1,3 +1,4 @@
+import '../../../data/mmex_repository.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
@@ -44,3 +45,5 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
     (intent: null, periodWasExplicit: false);
 
 Future<String?> askLocalLlmFreeform(String question) async => null;
+
+Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async => null;

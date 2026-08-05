@@ -45,7 +45,41 @@ enum QueryKind {
   /// one-off future transaction the user hasn't told the app about some
   /// other way; there's nothing to reason from for that.
   outlook,
+
+  /// A generic filter+aggregate question - the (desktop/Windows-only) local
+  /// LLM's ONLY vocabulary for anything shaped like "how much/how many did I
+  /// [QueryIntent.adHocMetric] on [QueryIntent.adHocTransactionType]
+  /// transactions matching these filters, optionally broken down by
+  /// [QueryIntent.adHocGroupBy]". Replaces expenseTotal/incomeTotal/
+  /// topExpenses/payeeSpend/expenseByMonth in the *model's* own vocabulary
+  /// specifically (decodeIntentJson never emits those kind strings to
+  /// describe a new intent any more) - they remain live QueryKind values
+  /// because the rule-based parser (identical on every platform, including
+  /// web/Android where this local LLM path doesn't exist at all) still
+  /// produces them unchanged. See ad_hoc_query.dart for how this executes -
+  /// the model never writes or sees SQL, only picks these enum values plus
+  /// the same resolved category/account/payee ids and period every other
+  /// kind already uses.
+  adHoc,
 }
+
+/// What to compute per [AdHocGroupBy] bucket (or overall, when it's
+/// [AdHocGroupBy.none]) - [QueryKind.adHoc] only.
+enum AdHocMetric { sum, count, average }
+
+/// Which CHECKINGACCOUNT_V1.TRANSCODE value(s) an ad hoc query counts -
+/// [QueryKind.adHoc] only. [any] adds no TRANSCODE filter at all (every
+/// transaction, transfers included); the other three each add their own
+/// exact-match filter.
+enum AdHocTransactionType { withdrawal, deposit, transfer, any }
+
+/// How to bucket an ad hoc query's rows - [QueryKind.adHoc] only.
+/// [category]/[payee]/[account] group by the literal CATEGID/PAYEEID/
+/// ACCOUNTID as stored (no parent/child roll-up merging - that stays the
+/// separate, orthogonal role of [QueryIntent.categoryId] as a *filter*).
+/// [month] zero-fills any month with no matching transaction, same
+/// convention as [QueryKind.expenseByMonth]/MmexRepository.categorySpendByMonth.
+enum AdHocGroupBy { none, category, month, payee, account }
 
 /// A half-open date window [start, end) plus a human-readable French label
 /// describing it, so the answer can say "en juillet 2026" or "sur les 3
@@ -79,11 +113,28 @@ class QueryIntent {
   /// end of [period]) when null, see query_executor.dart.
   final DateTime? asOf;
 
-  /// Only meaningful for [QueryKind.expenseTotal] - "dépenses récurrentes"
-  /// narrows the total (and its category breakdown/detail transactions) to
-  /// ones actually linked to a recurring bill, instead of every withdrawal
-  /// in the period. See MmexRepository.recurringCategorySpendForPeriod.
+  /// Only meaningful for [QueryKind.expenseTotal]/[QueryKind.adHoc] -
+  /// "dépenses récurrentes" narrows the total (and its category breakdown/
+  /// detail transactions) to ones actually linked to a recurring bill,
+  /// instead of every withdrawal in the period. See
+  /// MmexRepository.recurringCategorySpendForPeriod (expenseTotal) /
+  /// ad_hoc_query.dart (adHoc).
   final bool recurringOnly;
+
+  /// Only meaningful for [QueryKind.adHoc] - see ad_hoc_query.dart. Null for
+  /// every other kind.
+  final AdHocMetric? adHocMetric;
+  final AdHocTransactionType? adHocTransactionType;
+  final AdHocGroupBy? adHocGroupBy;
+
+  /// [QueryKind.adHoc] only - optional cap on the number of groups returned
+  /// (an explicit "top N" in the question), highest-value first. `null`
+  /// means no cap at all, every group shown - deliberately a *separate*
+  /// field from [topN] (always defaulted to 5, reserved for the older
+  /// [QueryKind.topExpenses]) specifically so adHoc never inherits that
+  /// implicit default: a plain "mes dépenses par catégorie" should show
+  /// every category, not silently just the biggest 5.
+  final int? adHocLimit;
 
   const QueryIntent({
     required this.kind,
@@ -94,5 +145,48 @@ class QueryIntent {
     this.topN = 5,
     this.asOf,
     this.recurringOnly = false,
+    this.adHocMetric,
+    this.adHocTransactionType,
+    this.adHocGroupBy,
+    this.adHocLimit,
   });
+
+  /// Copies every field except the ones explicitly overridden. Use this
+  /// instead of manually reconstructing a `QueryIntent(...)` (see
+  /// nl_query_dialog.dart's account-default/outlook-period rebuilds) - a
+  /// manual reconstruction silently drops any field it forgets to list
+  /// (confirmed: both existing call sites already dropped [recurringOnly]
+  /// this same way, silently discarding "dépenses récurrentes" the moment
+  /// the account got defaulted - the common case). Only ever needs to *set*
+  /// a field here, never null one back out, so the plain `?? this.x`
+  /// pattern is sufficient - no unset-sentinel needed.
+  QueryIntent copyWith({
+    QueryKind? kind,
+    DateRange? period,
+    int? categoryId,
+    int? accountId,
+    int? payeeId,
+    int? topN,
+    DateTime? asOf,
+    bool? recurringOnly,
+    AdHocMetric? adHocMetric,
+    AdHocTransactionType? adHocTransactionType,
+    AdHocGroupBy? adHocGroupBy,
+    int? adHocLimit,
+  }) {
+    return QueryIntent(
+      kind: kind ?? this.kind,
+      period: period ?? this.period,
+      categoryId: categoryId ?? this.categoryId,
+      accountId: accountId ?? this.accountId,
+      payeeId: payeeId ?? this.payeeId,
+      topN: topN ?? this.topN,
+      asOf: asOf ?? this.asOf,
+      recurringOnly: recurringOnly ?? this.recurringOnly,
+      adHocMetric: adHocMetric ?? this.adHocMetric,
+      adHocTransactionType: adHocTransactionType ?? this.adHocTransactionType,
+      adHocGroupBy: adHocGroupBy ?? this.adHocGroupBy,
+      adHocLimit: adHocLimit ?? this.adHocLimit,
+    );
+  }
 }

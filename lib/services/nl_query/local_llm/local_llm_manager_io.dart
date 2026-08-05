@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:sqlite3/sqlite3.dart';
+
+import '../../../data/mmex_database.dart';
+import '../../../data/mmex_repository.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
@@ -319,6 +323,77 @@ Future<String?> askLocalLlmFreeform(String question) async {
     final raw = await engine.askFreeform(question);
     final trimmed = raw.trim();
     return trimmed.isEmpty ? null : trimmed;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// A throwaway [MmexDatabase] wrapping a connection opened with
+/// `OpenMode.readOnly` - backs [openReadOnlyAdHocRepository]. Only [query]
+/// is ever meaningful; every mutating member throws as a second, Dart-level
+/// guard on top of SQLite's own OS-enforced refusal of any write against a
+/// connection opened this way - defense in depth for QueryKind.adHoc
+/// (ad_hoc_query.dart), whose whole point is running a question the local
+/// AI shaped, not one this app wrote itself.
+class _ReadOnlyAdHocDatabase implements MmexDatabase {
+  final Database _db;
+  final String _path;
+  _ReadOnlyAdHocDatabase(this._db, this._path);
+
+  @override
+  String get label => _path;
+
+  @override
+  bool get isDirectlyPersisted => false;
+
+  @override
+  List<Map<String, Object?>> query(String sql, [List<Object?> params = const []]) =>
+      _db.select(sql, params).map((row) => row).toList();
+
+  @override
+  int execute(String sql, [List<Object?> params = const []]) =>
+      throw UnsupportedError('Connexion IA locale en lecture seule - écriture refusée.');
+
+  @override
+  void transaction(void Function() action) =>
+      throw UnsupportedError('Connexion IA locale en lecture seule - écriture refusée.');
+
+  @override
+  List<int> exportBytes() =>
+      throw UnsupportedError('Connexion IA locale en lecture seule - export non applicable.');
+
+  @override
+  void dispose() => _db.dispose();
+}
+
+/// Opens a brand-new, throwaway, OS/SQLite-enforced READ-ONLY connection to
+/// the .mmb file at [dbPath] (callers pass `repo.db.label`, which - on
+/// desktop - *is* the real file path, see mmex_database_io.dart's
+/// `_IoMmexDatabase` constructor) and wraps it in its own [MmexRepository].
+/// This is the defense-in-depth guarantee for QueryKind.adHoc: even if
+/// ad_hoc_query.dart's SQL-building ever had a bug, a connection opened
+/// this way cannot write to the file no matter what SQL text reaches it.
+///
+/// A fresh connection per question - open, run one query, dispose
+/// immediately (the caller, nl_query_dialog.dart, is responsible for
+/// disposing) - rather than caching it the way the llama-server.exe
+/// process itself is cached, so every question always sees whatever the
+/// app's own read-write connection most recently committed.
+///
+/// Returns `null` (never throws) if [dbPath] can't be reopened this way -
+/// not a real filesystem path (e.g. a `:memory:` test database), the file
+/// vanished, or it's otherwise inaccessible - so the caller fails this one
+/// question gracefully exactly like any other local-AI failure.
+Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
+  if (!Platform.isWindows) return null;
+  try {
+    final db = sqlite3.open(dbPath, mode: OpenMode.readOnly);
+    // Tolerates a brief writer lock (this app's own db.transaction(), a
+    // second instance, or real MMEX desktop open concurrently - the last of
+    // which CLAUDE.md already documents as unsupported/risky) instead of
+    // failing this one question outright the instant it's hit.
+    db.execute('PRAGMA busy_timeout = 2000');
+    return MmexRepository(_ReadOnlyAdHocDatabase(db, dbPath));
   } catch (_) {
     return null;
   }

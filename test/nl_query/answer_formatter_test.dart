@@ -319,4 +319,84 @@ void main() {
     expect(text, contains('-50,00 €'));
     expect(text, contains('-80,00 €'));
   });
+
+  test('adHoc with groupBy none states a single total', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.none,
+      ),
+      const QueryAnswer(adHocResult: [MapEntry('', 65)]),
+    );
+    expect(text, contains('65,00 €'));
+    expect(text, contains('dépenses'));
+  });
+
+  test('adHoc with metric: count is not formatted as currency', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.count,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.none,
+      ),
+      const QueryAnswer(adHocResult: [MapEntry('', 3)]),
+    );
+    expect(text, contains('Nombre'));
+    expect(text, contains(': 3.'));
+    expect(text, isNot(contains('3,00 €')));
+  });
+
+  test('adHoc with a grouping lists a bulleted line per group', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.category,
+      ),
+      const QueryAnswer(adHocResult: [MapEntry('Alimentation', 40), MapEntry('Restaurant', 25)]),
+    );
+    final bulletLines = text.split('\n').where((l) => l.startsWith('• ')).toList();
+    expect(bulletLines, ['• Alimentation (40,00 €)', '• Restaurant (25,00 €)']);
+    expect(text, contains('par catégorie'));
+  });
+
+  test('adHoc mentions "récurrentes" and the named payee/category when set', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        categoryId: alimentation.id,
+        payeeId: carrefour.id,
+        recurringOnly: true,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.none,
+      ),
+      const QueryAnswer(adHocResult: [MapEntry('', 12)]),
+    );
+    expect(text, contains('récurrentes'));
+    expect(text, contains('Alimentation'));
+    expect(text, contains('Carrefour'));
+  });
+
+  test('adHoc with a grouping and no results says so explicitly', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.category,
+      ),
+      const QueryAnswer(adHocResult: []),
+    );
+    expect(text, contains('Aucune donnée trouvée'));
+  });
 }

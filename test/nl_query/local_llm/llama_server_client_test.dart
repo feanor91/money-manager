@@ -184,6 +184,21 @@ void main() {
     expect(prompt, endsWith('<|im_start|>assistant\n'));
   });
 
+  test('chatMlPrompt teaches the new adHoc schema, not the retired fixed kinds', () {
+    final prompt = chatMlPrompt('bonjour');
+    expect(prompt, contains('adHoc'));
+    expect(prompt, contains('"metric"'));
+    expect(prompt, contains('"groupBy"'));
+    expect(prompt, contains('"transactionType"'));
+    expect(prompt, contains('"recurringOnly"'));
+    // Retired from the model's own vocabulary - decodeIntentJson no longer
+    // accepts these as a "kind" value even if the model still produced one.
+    expect(prompt, isNot(contains('expenseTotal')));
+    expect(prompt, isNot(contains('topExpenses')));
+    expect(prompt, isNot(contains('payeeSpend')));
+    expect(prompt, isNot(contains('expenseByMonth')));
+  });
+
   test('freeformChatMlPrompt wraps the question in ChatML turns with a plain '
       'conversational system prompt', () {
     final prompt = freeformChatMlPrompt('bonjour');

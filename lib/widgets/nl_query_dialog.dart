@@ -207,7 +207,15 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // currently selected account, or - if there's exactly one account -
     // that one unambiguously. Never guessed when genuinely ambiguous: the
     // user is asked to name one instead.
-    if (intent.accountId == null) {
+    //
+    // One deliberate exception: a QueryKind.adHoc question grouped by
+    // account ("mes dépenses par compte") is specifically about comparing
+    // every account - forcing it down to one first would make that grouping
+    // pointless. Confirmed explicitly as the one case allowed to break the
+    // "never silently combine accounts" rule below.
+    final wantsEveryAccount =
+        intent.kind == QueryKind.adHoc && intent.adHocGroupBy == AdHocGroupBy.account;
+    if (intent.accountId == null && !wantsEveryAccount) {
       final fallbackAccountId =
           widget.defaultAccountId ?? (accounts.length == 1 ? accounts.single.id : null);
       if (fallbackAccountId == null) {
@@ -218,15 +226,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         });
         return;
       }
-      intent = QueryIntent(
-        kind: intent.kind,
-        period: intent.period,
-        categoryId: intent.categoryId,
-        accountId: fallbackAccountId,
-        payeeId: intent.payeeId,
-        topN: intent.topN,
-        asOf: intent.asOf,
-      );
+      intent = intent.copyWith(accountId: fallbackAccountId);
     }
 
     // An unqualified "outlook" question ("pourquoi vais-je finir le mois en
@@ -237,23 +237,39 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     if (intent.kind == QueryKind.outlook && !parsed.periodWasExplicit) {
       final today = DateTime.now();
       final forecastDate = nextForecastDay(today, widget.forecastDay);
-      intent = QueryIntent(
-        kind: intent.kind,
+      intent = intent.copyWith(
         period: DateRange(
           start: DateTime(today.year, today.month, today.day),
           end: forecastDate.add(const Duration(days: 1)),
           label: 'd\'ici le ${DateFormat('d MMMM yyyy', 'fr_FR').format(forecastDate)}',
         ),
-        categoryId: intent.categoryId,
-        accountId: intent.accountId,
-        payeeId: intent.payeeId,
-        topN: intent.topN,
-        asOf: intent.asOf,
       );
     }
 
     try {
-      final answer = runQuery(intent, repo);
+      // QueryKind.adHoc runs against a dedicated, throwaway, OS/SQLite-
+      // enforced READ-ONLY connection (never the app's own read-write repo)
+      // - defense in depth for a question shaped by the local model, on top
+      // of ad_hoc_query.dart only ever building a SELECT. Every other kind
+      // keeps using the ordinary repo, unchanged.
+      final QueryAnswer answer;
+      if (intent.kind == QueryKind.adHoc) {
+        final readOnlyRepo = await openReadOnlyAdHocRepository(repo.db.label);
+        if (readOnlyRepo == null) {
+          setState(() {
+            _loading = false;
+            _error = "Erreur : impossible d'accéder à la base en lecture seule pour cette question.";
+          });
+          return;
+        }
+        try {
+          answer = runQuery(intent, readOnlyRepo);
+        } finally {
+          readOnlyRepo.db.dispose();
+        }
+      } else {
+        answer = runQuery(intent, repo);
+      }
       final text = formatAnswer(
         intent,
         answer,

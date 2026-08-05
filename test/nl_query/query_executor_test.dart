@@ -149,6 +149,33 @@ void main() {
     expect(answer.monthlyBreakdown, {DateTime(2026, 7): 65});
   });
 
+  test('adHoc runs end-to-end through runQuery against the ordinary repo', () {
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.category,
+      ),
+      repo,
+    );
+    final byLabel = {for (final e in answer.adHocResult!) e.key: e.value};
+    expect(byLabel['Alimentation Test'], 40);
+    expect(byLabel['Alimentation Test:Restaurant Test'], 25);
+    // Every other field stays null - this kind only ever populates adHocResult.
+    expect(answer.total, isNull);
+    expect(answer.categoryBreakdown, isNull);
+    expect(answer.monthlyBreakdown, isNull);
+  });
+
+  test('adHoc throws if adHocMetric/adHocTransactionType/adHocGroupBy is missing', () {
+    expect(
+      () => runQuery(QueryIntent(kind: QueryKind.adHoc, period: july), repo),
+      throwsArgumentError,
+    );
+  });
+
   test('incomeTotal sums deposits', () {
     final answer = runQuery(QueryIntent(kind: QueryKind.incomeTotal, period: july), repo);
     expect(answer.income, 1500);

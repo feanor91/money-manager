@@ -16,11 +16,13 @@ import '../query_intent.dart';
 /// against the *real* database rows via [bestNameMatch] (never trusted as
 /// an id the model invented), and a period phrase is resolved via
 /// [parsePeriod] (never trusted as dates the model computed itself). If the
-/// model's response isn't valid JSON, names an unrecognized "kind", or asks
-/// for [QueryKind.payeeSpend] without a payee name that actually resolves,
-/// this returns a null intent so the caller falls back to the rule-based
-/// parser (or an "I didn't understand" message) rather than acting on a
-/// half-broken guess.
+/// model's response isn't valid JSON, names an unrecognized "kind" (see
+/// [_kindFromString] - this notably includes every *retired* kind string
+/// like "expenseTotal", which the model is no longer taught to produce but
+/// could still drift back to out of habit), or asks for [QueryKind.adHoc]
+/// without a fully-resolved metric/transactionType/groupBy, this returns a
+/// null intent so the caller falls back to the rule-based parser (or an "I
+/// didn't understand" message) rather than acting on a half-broken guess.
 ({QueryIntent? intent, bool periodWasExplicit}) decodeIntentJson(
   String rawResponse, {
   required List<Category> categories,
@@ -57,13 +59,6 @@ import '../query_intent.dart';
   final accountId = resolveName(json['account'] as String?, accounts.map((a) => MapEntry(a.id, a.name)));
   final payeeId = resolveName(json['payee'] as String?, payees.map((p) => MapEntry(p.id, p.name)));
 
-  if (kind == QueryKind.payeeSpend && payeeId == null) {
-    // The model asked for a payee breakdown but named nobody we recognize -
-    // safer to say "not understood" than silently answer for the wrong
-    // (or no) payee.
-    return (intent: null, periodWasExplicit: periodWasExplicit);
-  }
-
   final rawTopN = json['topN'];
   final topN = switch (rawTopN) {
     int n => n,
@@ -73,6 +68,50 @@ import '../query_intent.dart';
 
   final asOf =
       (kind == QueryKind.balance && periodWasExplicit) ? period.end.subtract(const Duration(days: 1)) : null;
+
+  if (kind == QueryKind.adHoc) {
+    final metric = _adHocMetricFromString(json['metric'] as String?);
+    final transactionType = _adHocTransactionTypeFromString(json['transactionType'] as String?);
+    final groupBy = _adHocGroupByFromString(json['groupBy'] as String?);
+    // Required - a missing/garbage value means the model didn't follow the
+    // schema, don't guess (same fail-closed principle the old payeeSpend
+    // check used to apply). recurringOnly stays optional: a boolean
+    // defaulting safely to false is much lower-risk than guessing the
+    // wrong metric/type/grouping would be.
+    if (metric == null || transactionType == null || groupBy == null) {
+      return (intent: null, periodWasExplicit: periodWasExplicit);
+    }
+    // A category/account/payee the model *did* name, but that resolved to
+    // nobody real, must fail closed too - generalizes the old payeeSpend-
+    // only guard to all three filters, now that adHoc treats them on equal
+    // footing. Silently dropping the filter instead (as an unresolved
+    // *category* used to do for expenseTotal) would answer a broader
+    // question than the one actually asked ("dépenses chez Auchan" -> a
+    // total across every payee) while looking exactly like a real answer -
+    // exactly the kind of confidently-wrong result this app never allows.
+    bool namedButUnresolved(String? raw, int? resolved) =>
+        raw != null && raw.trim().isNotEmpty && resolved == null;
+    if (namedButUnresolved(json['category'] as String?, categoryId) ||
+        namedButUnresolved(json['account'] as String?, accountId) ||
+        namedButUnresolved(json['payee'] as String?, payeeId)) {
+      return (intent: null, periodWasExplicit: periodWasExplicit);
+    }
+    return (
+      intent: QueryIntent(
+        kind: kind,
+        period: period,
+        categoryId: categoryId,
+        accountId: accountId,
+        payeeId: payeeId,
+        recurringOnly: json['recurringOnly'] == true,
+        adHocMetric: metric,
+        adHocTransactionType: transactionType,
+        adHocGroupBy: groupBy,
+        adHocLimit: _adHocLimitFromJson(rawTopN),
+      ),
+      periodWasExplicit: periodWasExplicit,
+    );
+  }
 
   final intent = QueryIntent(
     kind: kind,
@@ -88,24 +127,56 @@ import '../query_intent.dart';
 
 QueryKind? _kindFromString(String? s) {
   switch (s) {
-    case 'expenseTotal':
-      return QueryKind.expenseTotal;
-    case 'incomeTotal':
-      return QueryKind.incomeTotal;
-    case 'incomeVsExpense':
-      return QueryKind.incomeVsExpense;
+    case 'adHoc':
+      return QueryKind.adHoc;
     case 'balance':
       return QueryKind.balance;
-    case 'topExpenses':
-      return QueryKind.topExpenses;
-    case 'payeeSpend':
-      return QueryKind.payeeSpend;
     case 'outlook':
       return QueryKind.outlook;
+    case 'incomeVsExpense':
+      return QueryKind.incomeVsExpense;
     default:
+      // Includes every retired kind string ("expenseTotal", "topExpenses",
+      // "payeeSpend", "incomeTotal", "expenseByMonth") on purpose - those
+      // QueryKind values still exist (the rule-based parser still produces
+      // them), but the model is no longer taught them and must not be able
+      // to trigger them just by drifting back to an old habit.
       return null;
   }
 }
+
+AdHocMetric? _adHocMetricFromString(String? s) => switch (s) {
+      'sum' => AdHocMetric.sum,
+      'count' => AdHocMetric.count,
+      'average' => AdHocMetric.average,
+      _ => null,
+    };
+
+AdHocTransactionType? _adHocTransactionTypeFromString(String? s) => switch (s) {
+      'withdrawal' => AdHocTransactionType.withdrawal,
+      'deposit' => AdHocTransactionType.deposit,
+      'transfer' => AdHocTransactionType.transfer,
+      'any' => AdHocTransactionType.any,
+      _ => null,
+    };
+
+AdHocGroupBy? _adHocGroupByFromString(String? s) => switch (s) {
+      'none' => AdHocGroupBy.none,
+      'category' => AdHocGroupBy.category,
+      'month' => AdHocGroupBy.month,
+      'payee' => AdHocGroupBy.payee,
+      'account' => AdHocGroupBy.account,
+      _ => null,
+    };
+
+/// Unlike the shared `topN` parsing above (which defaults to 5 for the
+/// older fixed kinds), this deliberately has NO default - `null` means "no
+/// cap requested", not "cap at 5". See QueryIntent.adHocLimit.
+int? _adHocLimitFromJson(Object? raw) => switch (raw) {
+      int n => n,
+      String s => int.tryParse(s),
+      _ => null,
+    };
 
 /// The grammar (see local_llm_engine.dart) only guarantees *some* valid
 /// JSON value, and a model can still preface it with stray text despite
