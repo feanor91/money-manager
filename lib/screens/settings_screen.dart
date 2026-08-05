@@ -24,7 +24,14 @@ class SettingsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Paramètres')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        // Plain EdgeInsets.all(16) left the last item (the version label)
+        // rendered underneath Android's own 3-button system nav bar on a
+        // real device - confirmed 2026-08-05 via screenshot, MediaQuery's
+        // bottom padding (the system bar's height) added on top so the
+        // scrollable content clears it, same fix already applied to
+        // TransactionEditorSheet's own bottom padding for the same reason.
+        padding: EdgeInsets.fromLTRB(
+            16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
         children: [
           Card(
             child: dbProvider.companionSettings == null
