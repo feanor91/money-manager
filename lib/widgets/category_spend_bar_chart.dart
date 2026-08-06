@@ -175,11 +175,11 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
             ],
           ),
           const SizedBox(height: 4),
-          Row(
+          const Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               _LegendDot(color: AppTheme.negative, label: 'Dépensé'),
-              const SizedBox(width: 16),
+              SizedBox(width: 16),
               _LegendDot(color: forecastColor, label: 'Prévu'),
             ],
           ),
