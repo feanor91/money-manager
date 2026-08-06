@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.53] - 2026-08-06
+
+- feat(ledger): pause a transaction, sync amount edits to linked bill
+
 ## [1.0.52] - 2026-08-06
 
 - feat(forecast): scrollable balance chart with real history, Tiers rename
