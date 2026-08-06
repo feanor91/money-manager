@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
+import '../data/mmex_repository.dart';
 import '../models/budget_period.dart' show nextForecastDay;
 import '../models/currency.dart';
 import '../services/voice_entry/voice_transaction_parser.dart' show VoiceTransactionDraft;
@@ -14,6 +15,7 @@ import '../widgets/bento_card.dart';
 import '../widgets/budget_preview_card.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/category_spend_analyzer.dart';
+import '../widgets/category_spend_bar_chart.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/nl_query_dialog.dart';
 import '../widgets/responsive_body.dart';
@@ -245,22 +247,12 @@ class DashboardScreen extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: AppTheme.gridGap),
-                    LayoutBuilder(builder: (context, constraints) {
-                      // Narrow widths need extra room: the duration dropdown
-                      // and axis labels can wrap onto more lines than they
-                      // do on a wide desktop layout.
-                      final forecastHeight =
-                          constraints.maxWidth < 480 ? 460.0 : 400.0;
-                      return SizedBox(
-                        height: forecastHeight,
-                        child: ForecastChart(
-                          repository: repo,
-                          startingBalance: scopedBalance,
-                          currency: currency,
-                          accountId: selectedAccountId,
-                        ),
-                      );
-                    }),
+                    _DashboardChartSection(
+                      repository: repo,
+                      scopedBalance: scopedBalance,
+                      currency: currency,
+                      selectedAccountId: selectedAccountId,
+                    ),
                     const SizedBox(height: AppTheme.gridGap),
                     LayoutBuilder(builder: (context, constraints) {
                       final wide = constraints.maxWidth > 800;
@@ -514,6 +506,73 @@ Future<void> _showAddChoice(BuildContext context, int? accountId) async {
     await _startVoiceEntry(context, accountId);
   } else {
     await _openTransactionEditor(context, defaultAccountId: accountId);
+  }
+}
+
+/// Toggles the dashboard's headline chart between the balance forecast
+/// ([ForecastChart]) and a per-category spent-vs-planned bar chart
+/// ([CategorySpendBarChart]) - one or the other, never both at once, same
+/// "show one or the other" convention as ForecastChart's own chart/table
+/// toggle (`_showAsTable`) just one level up, since these are two whole
+/// different widgets rather than two views of the same data.
+class _DashboardChartSection extends StatefulWidget {
+  final MmexRepository repository;
+  final double scopedBalance;
+  final CurrencyFormat? currency;
+  final int selectedAccountId;
+
+  const _DashboardChartSection({
+    required this.repository,
+    required this.scopedBalance,
+    required this.currency,
+    required this.selectedAccountId,
+  });
+
+  @override
+  State<_DashboardChartSection> createState() => _DashboardChartSectionState();
+}
+
+class _DashboardChartSectionState extends State<_DashboardChartSection> {
+  bool _showSpendChart = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      // Narrow widths need extra room: the duration dropdown and axis
+      // labels can wrap onto more lines than they do on a wide desktop
+      // layout.
+      final chartHeight = constraints.maxWidth < 480 ? 460.0 : 400.0;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              tooltip: _showSpendChart
+                  ? 'Afficher la prévision de solde'
+                  : 'Afficher les dépenses par catégorie',
+              onPressed: () => setState(() => _showSpendChart = !_showSpendChart),
+              icon: Icon(_showSpendChart ? Icons.show_chart : Icons.bar_chart),
+            ),
+          ),
+          SizedBox(
+            height: chartHeight,
+            child: _showSpendChart
+                ? CategorySpendBarChart(
+                    repository: widget.repository,
+                    currency: widget.currency,
+                    accountId: widget.selectedAccountId,
+                  )
+                : ForecastChart(
+                    repository: widget.repository,
+                    startingBalance: widget.scopedBalance,
+                    currency: widget.currency,
+                    accountId: widget.selectedAccountId,
+                  ),
+          ),
+        ],
+      );
+    });
   }
 }
 
