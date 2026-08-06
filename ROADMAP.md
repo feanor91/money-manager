@@ -37,6 +37,34 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Pause d'une opération du grand livre + synchro montant vers l'opération
+  récurrente liée~~ - **fait (2026-08-06)**. Deux demandes distinctes :
+  1. Case "En pause" dans la fiche d'une transaction existante - contrairement
+     à la pause d'une opération récurrente (qui n'affecte que l'ajout auto/le
+     prévisionnel), ici la transaction est réellement exclue du solde et des
+     rapports. Réutilise le statut natif "Void" ('V') de MMEX plutôt qu'un
+     nouveau filtre applicatif : déjà exclu de *toutes* les requêtes de solde
+     de `mmex_repository.dart` (`accountBalance`, `dailyNetTotals`, etc.) sans
+     rien y toucher, et compris nativement par le vrai MMEX desktop si le
+     fichier y est un jour rouvert. Void partage son unique champ STATUS avec
+     "Pointée" (Reconciled) - `APP_PAUSED_TRANSACTIONS` retient si elle était
+     pointée juste avant la pause, pour le restaurer correctement à la
+     dépause plutôt que de le perdre silencieusement. Ligne grisée (opacité
+     55%, même valeur que la pause des opérations récurrentes) + badge dans
+     le grand livre (tableau et cartes) ; colonne Statut affiche "V".
+  2. Modifier le montant d'une opération provenant d'une récurrente
+     (`APP_TRANSACTION_BILL_LINKS`, déjà utilisé pour le badge "généré par
+     une récurrente") propose maintenant - **toujours avec confirmation,
+     jamais silencieux** - de répercuter le nouveau montant sur le modèle
+     récurrent pour les prochaines échéances (`lib/widgets/bill_amount_sync.dart`,
+     même schéma que la proposition existante de réaffectation en masse
+     d'une catégorie).
+
+  5 nouveaux tests (`test/transaction_pause_test.dart`) : exclusion/retour
+  au solde, "Pointée" qui survit à un aller-retour pause/dépause, nettoyage
+  du marqueur de pause à la suppression, résolution du lien vers la
+  récurrente. `flutter analyze`/`flutter test` (280) propres.
+
 - ~~Champ "Payé" renommé en "Tiers" + saisie vocale dédiée~~ - **fait
   (2026-08-06)**. Ce que le signalement initial ("le 'Payé' n'est pas
   bien pris en compte" en saisie vocale) désignait en fait : le champ

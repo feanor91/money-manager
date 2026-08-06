@@ -66,6 +66,23 @@ class MmexRepository {
     // there, since _tryAddColumn swallows the "duplicate column" error.
     _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_INDEX', 'INTEGER');
     _tryAddColumn('APP_TRANSACTION_BILL_LINKS', 'OCCURRENCE_TOTAL', 'INTEGER');
+    // "Pause" a real ledger transaction (2026-08-06, requested alongside
+    // recurring bills' own pause) - excludes it from every balance/report
+    // query via MMEX's own Void status ('V', see accountBalance and every
+    // other query in this file filtering `STATUS != 'V'`), rather than a
+    // new app-owned exclusion filter that would need threading through
+    // every one of those queries and wouldn't mean anything to the real
+    // MMEX desktop app opening the same file. Void is a single field MMEX
+    // also uses for "Pointée" (Reconciled, 'R') - this table remembers
+    // whether a transaction was reconciled right before being paused, so
+    // un-pausing can restore that instead of losing it the moment STATUS
+    // gets overwritten with 'V'. See TransactionEditorSheet._save.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_PAUSED_TRANSACTIONS (
+        TRANSID INTEGER PRIMARY KEY,
+        WAS_RECONCILED INTEGER NOT NULL
+      )
+    ''');
     // Optional custom label for an envelope, distinct from its category's
     // own name - null means "use the category name" (the default when an
     // envelope is created, manually or via suggestions).
@@ -580,7 +597,8 @@ class MmexRepository {
   void updateTransaction(MoneyTransaction tx) {
     db.execute(
       'UPDATE CHECKINGACCOUNT_V1 SET ACCOUNTID = ?, TOACCOUNTID = ?, PAYEEID = ?, TRANSCODE = ?, '
-      'TRANSAMOUNT = ?, TOTRANSAMOUNT = ?, CATEGID = ?, TRANSDATE = ?, NOTES = ? WHERE TRANSID = ?',
+      'TRANSAMOUNT = ?, TOTRANSAMOUNT = ?, STATUS = ?, CATEGID = ?, TRANSDATE = ?, NOTES = ? '
+      'WHERE TRANSID = ?',
       [
         tx.accountId,
         tx.toAccountId,
@@ -588,6 +606,7 @@ class MmexRepository {
         transCodeToString(tx.transCode),
         tx.amount,
         tx.toAmount,
+        tx.status,
         tx.categoryId,
         _isoDate(tx.date),
         tx.notes ?? '',
@@ -599,6 +618,45 @@ class MmexRepository {
   void deleteTransaction(int transId) {
     db.execute('DELETE FROM CHECKINGACCOUNT_V1 WHERE TRANSID = ?', [transId]);
     db.execute('DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+    db.execute('DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
+  }
+
+  /// Whether [transId] was reconciled right before being paused - only
+  /// meaningful while it's currently paused (`tx.isVoid`). Used to seed
+  /// [TransactionEditorSheet]'s "Pointée" checkbox correctly when opening
+  /// an already-paused transaction, since its *live* status is 'V' (not
+  /// 'R') while paused - see [APP_PAUSED_TRANSACTIONS] in [ensureAppSchema].
+  bool wasReconciledBeforePause(int transId) {
+    final rows = db.query(
+      'SELECT WAS_RECONCILED FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?',
+      [transId],
+    );
+    return rows.isNotEmpty && (rows.first['WAS_RECONCILED'] as int) != 0;
+  }
+
+  /// Keeps [APP_PAUSED_TRANSACTIONS] in sync with what
+  /// [TransactionEditorSheet._save] just wrote to STATUS itself (that save
+  /// already computes and writes the real 'V'/'R'/'' value in one go, so
+  /// this is bookkeeping only, never a second STATUS write).
+  void syncPausedTracking(int transId, {required bool paused, required bool reconciled}) {
+    if (paused) {
+      db.execute(
+        'INSERT OR REPLACE INTO APP_PAUSED_TRANSACTIONS (TRANSID, WAS_RECONCILED) VALUES (?, ?)',
+        [transId, reconciled ? 1 : 0],
+      );
+    } else {
+      db.execute('DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
+    }
+  }
+
+  /// The recurring template [transId] was originally recorded from, if
+  /// any - see [APP_TRANSACTION_BILL_LINKS] in [ensureAppSchema]. Used to
+  /// offer syncing an amount edit back to the template (see
+  /// bill_amount_sync.dart).
+  int? billIdForTransaction(int transId) {
+    final rows =
+        db.query('SELECT BILLID FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+    return rows.isEmpty ? null : rows.first['BILLID'] as int;
   }
 
   /// How many real ledger transactions share [payeeId] and [categoryId] -

@@ -15,6 +15,7 @@ import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
+import '../widgets/bill_amount_sync.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
@@ -295,10 +296,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     repo.updateTransaction(tx.copyWith(date: date));
                     dbProvider.touch();
                   },
-                  onEditAmount: (tx, amount) {
-                    repo.updateTransaction(tx.copyWith(amount: amount));
-                    dbProvider.touch();
-                  },
+                  onEditAmount: (tx, amount) =>
+                      _saveQuickAmountEdit(context, repo, dbProvider, tx, amount),
                 );
               }
               return ResponsiveBody(
@@ -321,10 +320,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     repo.updateTransaction(tx.copyWith(date: date));
                     dbProvider.touch();
                   },
-                  onEditAmount: (tx, amount) {
-                    repo.updateTransaction(tx.copyWith(amount: amount));
-                    dbProvider.touch();
-                  },
+                  onEditAmount: (tx, amount) =>
+                      _saveQuickAmountEdit(context, repo, dbProvider, tx, amount),
                 ),
               );
             }),
@@ -337,7 +334,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       VoiceTransactionDraft? voicePrefill}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
-    final categoryChange = await showModalBottomSheet<CategoryChange?>(
+    final result = await showModalBottomSheet<TransactionEditorResult>(
       context: context,
       isScrollControlled: true,
       builder: (_) => TransactionEditorSheet(
@@ -348,14 +345,48 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       ),
     );
     dbProvider.touch();
-    if (categoryChange != null && context.mounted) {
+    if (result?.categoryChange != null && context.mounted) {
       await offerBulkCategoryReassign(
         context: context,
         repo: repo,
         dbProvider: dbProvider,
-        change: categoryChange,
+        change: result!.categoryChange!,
       );
     }
+    if (result?.billAmountChange != null && context.mounted) {
+      await offerBillAmountSync(
+        context: context,
+        repo: repo,
+        dbProvider: dbProvider,
+        change: result!.billAmountChange!,
+      );
+    }
+  }
+
+  /// The ledger table/cards' own quick amount edit (tap the Débit/Crédit
+  /// cell directly, see _LedgerTable/_LedgerCards' onEditAmount) is a
+  /// completely separate save path from TransactionEditorSheet - found
+  /// 2026-08-06 live-testing that editing a recurring-linked transaction's
+  /// amount this way never offered to sync the bill, because that logic
+  /// only lived in the full sheet's _save(). Mirrors it here instead of
+  /// duplicating it inline at both call sites.
+  Future<void> _saveQuickAmountEdit(
+    BuildContext context,
+    MmexRepository repo,
+    DatabaseProvider dbProvider,
+    MoneyTransaction tx,
+    double amount,
+  ) async {
+    repo.updateTransaction(tx.copyWith(amount: amount));
+    dbProvider.touch();
+    final billId = repo.billIdForTransaction(tx.id);
+    if (billId == null || !context.mounted) return;
+    await offerBillAmountSync(
+      context: context,
+      repo: repo,
+      dbProvider: dbProvider,
+      change: (billId: billId, newAmount: amount),
+    );
   }
 
   /// Opens the mic-capture sheet, then - if the user went through with it -
@@ -599,6 +630,11 @@ class _LedgerTable extends StatelessWidget {
     final tx = row.transaction;
     final isTransfer = tx.transCode == TransCode.transfer;
     final reconciled = tx.isReconciled;
+    // MMEX's own Void status, repurposed as "paused" (2026-08-06) - see
+    // MmexRepository.syncPausedTracking's doc comment for why this reuses
+    // Void rather than a new app-owned exclusion filter: already excluded
+    // from every balance/report query in mmex_repository.dart for free.
+    final paused = tx.isVoid;
     final signed = tx.signedAmountFor(accountId);
     final debit = signed < 0 ? -signed : null;
     final credit = signed >= 0 ? signed : null;
@@ -640,7 +676,9 @@ class _LedgerTable extends StatelessWidget {
     }
 
     final scheme = Theme.of(context).colorScheme;
-    return Material(
+    return Opacity(
+      opacity: paused ? 0.55 : 1,
+      child: Material(
       color: index.isEven ? scheme.surfaceContainerLowest : scheme.surfaceContainerHigh,
       child: InkWell(
         onTap: () => onTapRow(tx),
@@ -678,6 +716,13 @@ class _LedgerTable extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (paused) ...[
+                      Tooltip(
+                        message: 'En pause - exclue du solde et des rapports',
+                        child: Icon(Icons.pause_circle_outline, size: 13, color: scheme.error),
+                      ),
+                      const SizedBox(width: 3),
+                    ],
                     if (recurringTxIds.contains(tx.id)) ...[
                       Tooltip(
                         message: recurringOccurrences[tx.id] != null
@@ -716,7 +761,7 @@ class _LedgerTable extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: _colGap),
-              cell(_colStatut, reconciled ? 'R' : '', align: TextAlign.center),
+              cell(_colStatut, paused ? 'V' : (reconciled ? 'R' : ''), align: TextAlign.center),
               const SizedBox(width: _colGap),
               cell(_colCategorie, categorie),
               const SizedBox(width: _colGap),
@@ -758,6 +803,7 @@ class _LedgerTable extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -850,6 +896,9 @@ class _LedgerCards extends StatelessWidget {
     final tx = row.transaction;
     final isTransfer = tx.transCode == TransCode.transfer;
     final reconciled = tx.isReconciled;
+    // See _LedgerTable._row's identical field for why this reuses MMEX's
+    // own Void status as "paused".
+    final paused = tx.isVoid;
     final signed = tx.signedAmountFor(accountId);
     final debit = signed < 0 ? -signed : null;
     final credit = signed >= 0 ? signed : null;
@@ -870,7 +919,9 @@ class _LedgerCards extends StatelessWidget {
         ? (transferCategoryLabel.isEmpty ? 'Virement' : transferCategoryLabel)
         : categoryFullPath(tx.categoryId, categoriesById);
 
-    return Material(
+    return Opacity(
+      opacity: paused ? 0.55 : 1,
+      child: Material(
       color: Theme.of(context).cardColor,
       borderRadius: BorderRadius.circular(AppTheme.cardRadius),
       child: InkWell(
@@ -929,6 +980,14 @@ class _LedgerCards extends StatelessWidget {
               const SizedBox(height: 4),
               Row(
                 children: [
+                  if (paused) ...[
+                    Tooltip(
+                      message: 'En pause - exclue du solde et des rapports',
+                      child: Icon(Icons.pause_circle_outline,
+                          size: 13, color: Theme.of(context).colorScheme.error),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
                   if (recurringTxIds.contains(tx.id)) ...[
                     Tooltip(
                       message: recurringOccurrences[tx.id] != null
@@ -1003,9 +1062,19 @@ class _LedgerCards extends StatelessWidget {
           ),
         ),
       ),
+      ),
     );
   }
 }
+
+/// [TransactionEditorSheet]'s popped result - either/both may be null; see
+/// [offerBulkCategoryReassign]/[offerBillAmountSync], both deferred to
+/// after this sheet actually closes (same convention as CategoryChange
+/// alone used before this - see bulk_category_reassign.dart).
+typedef TransactionEditorResult = ({
+  CategoryChange? categoryChange,
+  BillAmountChange? billAmountChange,
+});
 
 /// The full transaction edit form, as a modal bottom sheet - shared between
 /// the ledger (tapping a row) and anywhere else that needs to edit a real
@@ -1044,6 +1113,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   late TransCode _transCode;
   late DateTime _date;
   late bool _reconciled;
+  late bool _paused;
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
 
@@ -1058,7 +1128,13 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     _payeeId = tx?.payeeId ?? draft?.payeeId;
     _transCode = tx?.transCode ?? draft?.transCode ?? TransCode.withdrawal;
     _date = tx?.date ?? draft?.date ?? DateTime.now();
-    _reconciled = tx?.isReconciled ?? false;
+    _paused = tx?.isVoid ?? false;
+    // A paused transaction's *live* status is 'V', not 'R' - tx.isReconciled
+    // would read false even if it really was reconciled right before being
+    // paused, so ask the remembered marker instead in that case (see
+    // MmexRepository.wasReconciledBeforePause).
+    _reconciled =
+        tx == null ? false : (_paused ? widget.repo.wasReconciledBeforePause(tx.id) : tx.isReconciled);
     _amountController.text =
         tx != null ? tx.amount.toStringAsFixed(2) : (draft?.amount?.toStringAsFixed(2) ?? '');
     _notesController.text = tx?.notes ?? draft?.notes ?? '';
@@ -1227,6 +1303,18 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 value: _reconciled,
                 onChanged: (v) => setState(() => _reconciled = v ?? false),
               ),
+              // Existing-only, like Supprimer below: pausing only makes
+              // sense for something already affecting the balance.
+              if (widget.existing != null)
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('En pause'),
+                  subtitle: const Text(
+                      'Exclue du solde et des rapports, sans être supprimée'),
+                  value: _paused,
+                  onChanged: (v) => setState(() => _paused = v ?? false),
+                ),
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -1265,6 +1353,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     final isTransfer = _transCode == TransCode.transfer;
     final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
     CategoryChange? categoryChange;
+    BillAmountChange? billAmountChange;
     if (widget.existing == null) {
       widget.repo.insertTransaction(
         accountId: _accountId!,
@@ -1279,6 +1368,11 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         reconciled: _reconciled,
       );
     } else {
+      // Single field shared with "Pointée" (MMEX has no separate flag for
+      // this) - _paused always wins, see MmexRepository.syncPausedTracking
+      // for how "Pointée" is preserved underneath without being live while
+      // paused.
+      final status = _paused ? 'V' : (_reconciled ? 'R' : '');
       widget.repo.updateTransaction(MoneyTransaction(
         id: widget.existing!.id,
         accountId: _accountId!,
@@ -1287,11 +1381,13 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         transCode: _transCode,
         amount: amount,
         toAmount: amount,
-        status: _reconciled ? 'R' : '',
+        status: status,
         date: _date,
         categoryId: _categoryId,
         notes: _notesController.text,
       ));
+      widget.repo.syncPausedTracking(widget.existing!.id, paused: _paused, reconciled: _reconciled);
+
       // Only a real edit (not a brand new transaction) can have "other
       // identical" occurrences to offer fixing too - see
       // offerBulkCategoryReassign in _openEditor, which runs once this
@@ -1316,8 +1412,18 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
           );
         }
       }
+
+      // Same deferred-to-after-close convention as categoryChange above -
+      // see offerBillAmountSync in _openEditor.
+      if (widget.existing!.amount != amount) {
+        final billId = widget.repo.billIdForTransaction(widget.existing!.id);
+        if (billId != null) {
+          billAmountChange = (billId: billId, newAmount: amount);
+        }
+      }
     }
     context.read<DatabaseProvider>().touch();
-    Navigator.of(context).pop(categoryChange);
+    Navigator.of(context)
+        .pop((categoryChange: categoryChange, billAmountChange: billAmountChange));
   }
 }

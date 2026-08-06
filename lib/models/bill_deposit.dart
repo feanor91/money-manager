@@ -43,6 +43,28 @@ class BillDeposit {
     this.paused = false,
   });
 
+  /// Mirrors [MoneyTransaction.copyWith]: a non-transfer bill always has
+  /// toAmount == amount too, so [amount] alone is enough - no separate
+  /// toAmount param to keep them in sync by construction.
+  BillDeposit copyWith({double? amount}) {
+    return BillDeposit(
+      id: id,
+      accountId: accountId,
+      toAccountId: toAccountId,
+      payeeId: payeeId,
+      transCode: transCode,
+      amount: amount ?? this.amount,
+      toAmount: amount ?? toAmount,
+      categoryId: categoryId,
+      nextOccurrence: nextOccurrence,
+      period: period,
+      autoExecute: autoExecute,
+      numOccurrences: numOccurrences,
+      notes: notes,
+      paused: paused,
+    );
+  }
+
   factory BillDeposit.fromRow(Map<String, Object?> row, {bool paused = false}) {
     final decoded = decodeRepeats((row['REPEATS'] as num?)?.toInt() ?? 3);
     return BillDeposit(
