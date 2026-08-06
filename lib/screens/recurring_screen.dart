@@ -666,13 +666,23 @@ class _RecordOccurrenceDialog extends StatefulWidget {
 }
 
 class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
+  final _formKey = GlobalKey<FormState>();
   late DateTime _date;
   bool _reconciled = false;
+  late final TextEditingController _amountController;
 
   @override
   void initState() {
     super.initState();
     _date = widget.bill.nextOccurrence;
+    _amountController =
+        TextEditingController(text: widget.bill.amount.toStringAsFixed(2));
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
   }
 
   @override
@@ -681,40 +691,50 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
     final accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
     return AlertDialog(
       title: const Text('Enregistrer l\'opération'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isTransfer)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                '${accounts[widget.bill.accountId]?.name ?? '?'} → '
-                '${accounts[widget.bill.toAccountId]?.name ?? '?'}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isTransfer)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '${accounts[widget.bill.accountId]?.name ?? '?'} → '
+                  '${accounts[widget.bill.toAccountId]?.name ?? '?'}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
               ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Date : ${_date.day}/${_date.month}/${_date.year}'),
+              trailing: const Icon(Icons.calendar_today, size: 18),
+              onTap: () async {
+                final picked = await pickDate(
+                  context: context,
+                  initialDate: _date,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(2100),
+                );
+                if (picked != null) setState(() => _date = picked);
+              },
             ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: Text('Date : ${_date.day}/${_date.month}/${_date.year}'),
-            trailing: const Icon(Icons.calendar_today, size: 18),
-            onTap: () async {
-              final picked = await pickDate(
-                context: context,
-                initialDate: _date,
-                firstDate: DateTime(2000),
-                lastDate: DateTime(2100),
-              );
-              if (picked != null) setState(() => _date = picked);
-            },
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Pointée'),
-            value: _reconciled,
-            onChanged: (v) => setState(() => _reconciled = v),
-          ),
-        ],
+            TextFormField(
+              controller: _amountController,
+              decoration: const InputDecoration(labelText: 'Montant'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (v) =>
+                  (double.tryParse(v ?? '') == null) ? 'Montant invalide' : null,
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Pointée'),
+              value: _reconciled,
+              onChanged: (v) => setState(() => _reconciled = v),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -722,7 +742,10 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
             child: const Text('Annuler')),
         FilledButton(
           onPressed: () {
-            widget.repo.recordBillOccurrence(widget.bill,
+            if (!_formKey.currentState!.validate()) return;
+            final amount = double.parse(_amountController.text);
+            widget.repo.recordBillOccurrence(
+                widget.bill.copyWith(amount: amount),
                 date: _date, reconciled: _reconciled);
             Navigator.of(context).pop();
           },
