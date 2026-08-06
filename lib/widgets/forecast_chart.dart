@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../data/mmex_repository.dart';
 import '../models/category.dart';
 import '../models/currency.dart';
+import '../models/transaction.dart';
 import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
@@ -73,11 +74,23 @@ class _Point {
   _Point(this.day, this.net, this.cumulative, this.projected);
 }
 
-/// Bento card showing the balance forecast from today forward, over a
-/// selectable duration (1/2/3/6/12 months), with an optional "what-if"
-/// simulated purchase (one-off or spread over up to 12 monthly
-/// installments) overlaid as a second line - never written to the
-/// database, purely a client-side projection.
+/// Bento card showing the balance forecast, scrollable in either direction
+/// by [_ForecastChartState._offsetSteps] windows of the selected duration
+/// (1/2/3/6/12 months, the "Durée affichée" dropdown) - the visible window
+/// is always real (not projected) balance for any day up to and including
+/// today, then the usual mechanical recurring-transaction projection after
+/// it. Restored 2026-08-06 after being reported as a regression (the
+/// original version of this chart could pan into the past; the
+/// "future-only" redesign that added the purchase simulation below dropped
+/// that entirely and never brought it back) - first as a fixed
+/// today-centered window, then reworked the same day into real left/right
+/// paging with an "Aujourd'hui" reset after that first attempt was judged
+/// not intuitive enough. History renders as a solid line, projection as
+/// dashed (see [_Point.projected] / [_buildSegments]) so the two are never
+/// visually ambiguous. Optional "what-if" simulated purchase (one-off or
+/// spread over up to 12 monthly installments starting today, regardless of
+/// which window is currently in view) overlaid as a second line - never
+/// written to the database, purely a client-side projection.
 class ForecastChart extends StatefulWidget {
   final MmexRepository repository;
   final CurrencyFormat? currency;
@@ -103,12 +116,22 @@ class _ForecastChartState extends State<ForecastChart> {
   /// data - the duration/simulation controls stay the same either way.
   bool _showAsTable = false;
 
+  /// How many [_duration]-wide windows the visible range is shifted from
+  /// today - 0 means "today at the start of the graph" (see [_ForwardNavRow]),
+  /// negative scrolls into real history, positive scrolls further into the
+  /// projection. A step count, not a date, so changing [_duration] mid-scroll
+  /// can't silently jump to a nonsensical date - see the dropdown's
+  /// onChanged below, which resets this back to 0 whenever that happens.
+  int _offsetSteps = 0;
+
   @override
   Widget build(BuildContext context) {
     final sim = context.watch<PurchaseSimulationProvider>();
     final now = DateTime.now();
-    final points = _buildPoints(now);
-    final simulatedPoints = _buildSimulatedPoints(points, sim.amount, sim.installments);
+    final today = DateTime(now.year, now.month, now.day);
+    final windowStart = _addMonths(today, _offsetSteps * _duration.months);
+    final points = _buildPoints(today, windowStart);
+    final simulatedPoints = _buildSimulatedPoints(points, today, sim.amount, sim.installments);
     final currency = widget.currency;
 
     String? simCategoryLabel;
@@ -142,7 +165,14 @@ class _ForecastChartState extends State<ForecastChart> {
                   ],
                   onChanged: (d) {
                     if (d == null) return;
-                    setState(() => _duration = d);
+                    // Reset the scroll position too - "+2 windows of 3 mois"
+                    // would silently become "+2 windows of 1 an" otherwise,
+                    // jumping to a date that has nothing to do with what was
+                    // on screen a moment ago.
+                    setState(() {
+                      _duration = d;
+                      _offsetSteps = 0;
+                    });
                   },
                 ),
               ),
@@ -159,6 +189,30 @@ class _ForecastChartState extends State<ForecastChart> {
                   Icons.add_shopping_cart,
                   color: sim.isActive ? AppTheme.accent : null,
                 ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                tooltip: 'Période précédente',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() => _offsetSteps -= 1),
+                icon: const Icon(Icons.chevron_left),
+              ),
+              TextButton.icon(
+                onPressed:
+                    _offsetSteps == 0 ? null : () => setState(() => _offsetSteps = 0),
+                icon: const Icon(Icons.today, size: 16),
+                label: const Text('Aujourd\'hui'),
+              ),
+              IconButton(
+                tooltip: 'Période suivante',
+                visualDensity: VisualDensity.compact,
+                onPressed: () => setState(() => _offsetSteps += 1),
+                icon: const Icon(Icons.chevron_right),
               ),
             ],
           ),
@@ -193,7 +247,7 @@ class _ForecastChartState extends State<ForecastChart> {
           const SizedBox(height: 8),
           Expanded(
             child: _showAsTable
-                ? _buildOperationsList(points, currency, sim.amount, sim.installments)
+                ? _buildOperationsList(points, today, currency, sim.amount, sim.installments)
                 : _buildChart(points, simulatedPoints, currency),
           ),
         ],
@@ -217,14 +271,50 @@ class _ForecastChartState extends State<ForecastChart> {
     return grouped;
   }
 
-  /// Tabular alternative to the chart ("Vue tableau", see ROADMAP.md):
-  /// every recurring occurrence in the selected window (plus the simulated
-  /// purchase's installments, if any), one row each, styled like
-  /// [TransactionTile] - each row also shows that day's running projected
-  /// balance (shared across every operation on the same day, since the
-  /// underlying data is bucketed by day, not by individual transaction).
+  /// Real transactions actually recorded in [start]..[end] (inclusive) -
+  /// the past-days counterpart of [_groupedOccurrences], which only ever
+  /// covers *scheduled* (future) recurring occurrences. Without this,
+  /// scrolling "Vue tableau" into a past window (see the nav row in
+  /// [build]) showed nothing there even though the chart itself already
+  /// plots real balance for those same days (see [_buildPoints]).
+  /// Labelled exactly like [TransactionTile].
+  List<_ForecastRow> _realOperationRows(DateTime start, DateTime end) {
+    final id = widget.accountId;
+    // The "all accounts" case never actually happens at this widget's one
+    // real call site (dashboard_screen.dart always passes a concrete
+    // account) - left as a graceful no-op rather than building untested
+    // multi-account transfer-dedup logic for a path nothing exercises.
+    if (id == null) return const [];
+
+    final payeesById = {for (final p in widget.repository.getPayees(onlyActive: false)) p.id: p};
+    final accountsById = {for (final a in widget.repository.getAccounts()) a.id: a};
+
+    return [
+      for (final t
+          in widget.repository.getTransactionsWithRunningBalance(id, from: start, to: end))
+        _ForecastRow(
+          date: DateTime(
+              t.transaction.date.year, t.transaction.date.month, t.transaction.date.day),
+          label: t.transaction.transCode == TransCode.transfer
+              ? '${accountsById[t.transaction.accountId]?.name ?? '?'} → '
+                  '${accountsById[t.transaction.toAccountId]?.name ?? '?'}'
+              : (payeesById[t.transaction.payeeId]?.name ?? 'Tiers inconnu'),
+          amount: t.transaction.signedAmountFor(id),
+          simulated: false,
+        ),
+    ];
+  }
+
+  /// Tabular alternative to the chart ("Vue tableau", see ROADMAP.md): real
+  /// transactions for the window's real (past-through-today) days plus
+  /// every recurring occurrence for its projected (future) days - plus the
+  /// simulated purchase's installments, if any - one row each, styled like
+  /// [TransactionTile]. Each row also shows that day's running balance
+  /// (shared across every operation on the same day, since the underlying
+  /// data is bucketed by day, not by individual transaction).
   Widget _buildOperationsList(
     List<_Point> points,
+    DateTime today,
     CurrencyFormat? currency,
     double? simAmount,
     int simInstallments,
@@ -235,6 +325,11 @@ class _ForecastChartState extends State<ForecastChart> {
     final dayIndex = {for (var i = 0; i < points.length; i++) points[i].day: i};
 
     final rows = <_ForecastRow>[
+      if (!points.first.day.isAfter(today))
+        ..._realOperationRows(
+          points.first.day,
+          points.last.day.isBefore(today) ? points.last.day : today,
+        ),
       for (final occurrences in grouped.values)
         for (final o in occurrences)
           _ForecastRow(date: o.date, label: o.label, amount: o.signedAmount, simulated: false),
@@ -243,7 +338,11 @@ class _ForecastChartState extends State<ForecastChart> {
       final perInstallment = simAmount / simInstallments;
       for (var i = 0; i < simInstallments; i++) {
         rows.add(_ForecastRow(
-          date: _addMonths(points.first.day, i),
+          // Always anchored on today, never points.first.day - the latter
+          // is now the *history* window's start once that's non-empty (see
+          // _buildPoints), which would silently backdate every simulated
+          // installment into the past.
+          date: _addMonths(today, i),
           label: 'Achat simulé',
           amount: -perInstallment,
           simulated: true,
@@ -253,7 +352,7 @@ class _ForecastChartState extends State<ForecastChart> {
     rows.sort((a, b) => a.date.compareTo(b.date));
 
     if (rows.isEmpty) {
-      return const Center(child: Text('Aucune opération prévue sur cette période.'));
+      return const Center(child: Text('Aucune opération sur cette période.'));
     }
 
     final dateFormat = DateFormat('EEEE d MMMM yyyy', 'fr_FR');
@@ -401,55 +500,121 @@ class _ForecastChartState extends State<ForecastChart> {
     if (result != true) return;
   }
 
-  /// Every day from today (inclusive) forward through the selected
-  /// duration: today starts from [ForecastChart.startingBalance] (the same
-  /// all-transactions total "Solde actuel" shows - deliberately including
-  /// any transaction already entered with a future date, e.g. a bill
-  /// recorded ahead of schedule), every later day layers on the mechanical
-  /// recurring-transaction projection only. Never double-counts a postdated
-  /// entry against that projection: recording a recurring bill's occurrence
-  /// (on time, late, or ahead of schedule - see
-  /// MmexRepository.recordBillOccurrence/catchUpBillDeposit) always
-  /// advances that bill's own next-occurrence date past it, so the
+  /// Builds the [_duration]-wide window starting at [windowStart] (may be
+  /// entirely in the past, straddle [today], or be entirely in the future -
+  /// see the scroll navigation row in [build]): real (never projected)
+  /// balance for every day up to and including today when the window
+  /// reaches that far back, then the mechanical recurring-transaction
+  /// projection for every day after it.
+  ///
+  /// Today itself always starts from [ForecastChart.startingBalance] (the
+  /// same all-transactions total "Solde actuel" shows - deliberately
+  /// including any transaction already entered with a future date, e.g. a
+  /// bill recorded ahead of schedule) rather than the day-bucketed queries
+  /// used for its neighbours - but only actually appears as a point when
+  /// it's inside [windowStart]..windowEnd; it's always still used to seed
+  /// the projection math below even when scrolled out of view, so a
+  /// window entirely in the future doesn't silently start from zero.
+  /// Never double-counts a postdated entry against that projection:
+  /// recording a recurring bill's occurrence (on time, late, or ahead of
+  /// schedule - see MmexRepository.recordBillOccurrence/catchUpBillDeposit)
+  /// always advances that bill's own next-occurrence date past it, so the
   /// projection can never re-project something already recorded as a real
   /// transaction.
-  List<_Point> _buildPoints(DateTime now) {
-    final today = DateTime(now.year, now.month, now.day);
-    final endDate = _addMonths(today, _duration.months);
-    final totalDays = _daysBetween(today, endDate);
+  List<_Point> _buildPoints(DateTime today, DateTime windowStart) {
+    final windowEnd = _addMonths(windowStart, _duration.months);
+    final points = <_Point>[];
 
-    final recurring = widget.repository.recurringDailyNet(
-      anchor: endDate,
-      days: totalDays + 1,
-      accountId: widget.accountId,
-    );
-
-    final balanceNow = widget.startingBalance;
-    final points = <_Point>[_Point(today, 0, balanceNow, false)];
-    var cumulative = balanceNow;
-    var cursor = _addDays(today, 1);
-    while (!cursor.isAfter(endDate)) {
-      final net = recurring[cursor] ?? 0.0;
-      cumulative += net;
-      points.add(_Point(cursor, net, cumulative, true));
-      cursor = _addDays(cursor, 1);
+    if (windowStart.isBefore(today)) {
+      final realEnd = windowEnd.isBefore(today) ? windowEnd : _addDays(today, -1);
+      final realDays = _daysBetween(windowStart, realEnd) + 1;
+      // anchor=realEnd (not realEnd+1 or today): MmexRepository.dailyNetTotals
+      // buckets exactly [anchor-(days-1), anchor], so anchor must be the
+      // *last* day actually consumed below, not one past it - getting this
+      // wrong silently drops the oldest day's real transactions from the
+      // total instead of erroring (found + fixed 2026-08-06 rewriting this
+      // for scrolling; the previous today-anchored version had exactly
+      // this off-by-one).
+      final netTotals = widget.repository.dailyNetTotals(
+        anchor: realEnd,
+        days: realDays,
+        accountId: widget.accountId,
+      );
+      var cumulative = _realBalanceAsOf(_addDays(windowStart, -1));
+      var cursor = windowStart;
+      for (var i = 0; i < realDays; i++) {
+        final net = netTotals[cursor] ?? 0.0;
+        cumulative += net;
+        points.add(_Point(cursor, net, cumulative, false));
+        cursor = _addDays(cursor, 1);
+      }
     }
+
+    if (!today.isBefore(windowStart) && !today.isAfter(windowEnd)) {
+      points.add(_Point(today, 0, widget.startingBalance, false));
+    }
+
+    if (windowEnd.isAfter(today)) {
+      final projStart = _addDays(today, 1);
+      final projDays = _daysBetween(projStart, windowEnd) + 1;
+      final recurring = widget.repository.recurringDailyNet(
+        anchor: windowEnd,
+        days: projDays,
+        accountId: widget.accountId,
+      );
+      var cumulative = widget.startingBalance;
+      var cursor = projStart;
+      for (var i = 0; i < projDays; i++) {
+        final net = recurring[cursor] ?? 0.0;
+        cumulative += net;
+        // Still walked even before windowStart (when the whole window is
+        // scrolled into the future) to keep `cumulative` correct - only
+        // actually emitted once the cursor reaches the visible window.
+        if (!cursor.isBefore(windowStart)) {
+          points.add(_Point(cursor, net, cumulative, true));
+        }
+        cursor = _addDays(cursor, 1);
+      }
+    }
+
     return points;
+  }
+
+  /// [MmexRepository.accountBalance]'s `asOf` only takes one concrete
+  /// account - sums across every account when [ForecastChart.accountId] is
+  /// null (the "all accounts" case [recurringDailyNet]/[dailyNetTotals]
+  /// already handle internally via their own nullable `accountId`).
+  double _realBalanceAsOf(DateTime day) {
+    final id = widget.accountId;
+    if (id != null) return widget.repository.accountBalance(id, asOf: day);
+    return widget.repository
+        .getAccounts()
+        .fold(0.0, (sum, a) => sum + widget.repository.accountBalance(a.id, asOf: day));
   }
 
   /// Overlays a simulated purchase on top of [basePoints]: a one-off hits
   /// today in full, an installment plan spreads it evenly across up to 12
   /// consecutive monthly instalments starting today. Purely a display
   /// overlay - never persisted.
-  List<_Point>? _buildSimulatedPoints(List<_Point> basePoints, double? amount, int installments) {
+  List<_Point>? _buildSimulatedPoints(
+      List<_Point> basePoints, DateTime today, double? amount, int installments) {
     if (amount == null || basePoints.isEmpty) return null;
 
     final perInstallment = amount / installments;
+    // Anchored on today, never basePoints.first.day - the latter is now the
+    // *history* window's start once that's non-empty (see _buildPoints),
+    // which would silently backdate every installment into the past.
     final impactDays = <DateTime>{
-      for (var i = 0; i < installments; i++) _addMonths(basePoints.first.day, i),
+      for (var i = 0; i < installments; i++) _addMonths(today, i),
     };
 
-    var extra = 0.0;
+    // Seed with every installment that landed *before* the visible window
+    // even starts - relevant now the window can scroll away from today
+    // (see the nav row in build()): without this, simulating a purchase
+    // while scrolled past its own installment dates would make its effect
+    // silently vanish from view instead of still discounting the balance.
+    var extra = -perInstallment *
+        impactDays.where((d) => d.isBefore(basePoints.first.day)).length;
     return [
       for (final p in basePoints) ...[
         () {

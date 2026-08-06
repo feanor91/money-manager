@@ -1,4 +1,15 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+
+/// Same convention as transactions_screen.dart's _isAndroidPlatform/
+/// voice_transaction_sheet.dart - gates [SearchableSelectField.enableVoiceInput]'s
+/// mic button so it never renders (and speech_to_text's web/desktop
+/// backends are never exercised) off Android.
+bool get _isAndroidPlatform =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 /// A text field that filters [options] as the user types (instead of a
 /// plain dropdown you have to scroll through), built on Flutter's
@@ -12,6 +23,17 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
   final ValueChanged<T?> onSelected;
   final Future<T?> Function(String text)? onCreate;
 
+  /// Adds a microphone button (Android only - see [_isAndroidPlatform])
+  /// that dictates into the search text, reusing the exact same
+  /// type-to-filter path as typing does - the user still taps their
+  /// intended match from the filtered list rather than a guess being
+  /// auto-selected, same "a wrong guess costs a tap to fix" principle as
+  /// [VoiceTransactionSheet]. Added 2026-08-06 for the Tiers field
+  /// specifically (transactions_screen.dart/recurring_screen.dart) but
+  /// left generic - opt-in per field via this flag rather than always-on,
+  /// since not every use of this widget (e.g. Catégorie) was asked for.
+  final bool enableVoiceInput;
+
   const SearchableSelectField({
     super.key,
     required this.label,
@@ -20,6 +42,7 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
     required this.onSelected,
     this.initialValue,
     this.onCreate,
+    this.enableVoiceInput = false,
   });
 
   @override
@@ -28,11 +51,62 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
 
 class _SearchableSelectFieldState<T extends Object> extends State<SearchableSelectField<T>> {
   late final TextEditingController _pendingTextHolder;
+  stt.SpeechToText? _speech;
+  bool _listening = false;
+
+  bool get _voiceAvailable => widget.enableVoiceInput && _isAndroidPlatform;
 
   @override
   void initState() {
     super.initState();
     _pendingTextHolder = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    // Belt-and-braces, same reasoning as VoiceTransactionSheet.dispose：
+    // don't leave the recognizer running past the widget that owns its
+    // callbacks if this field is torn down mid-listen.
+    if (_listening) _speech?.cancel();
+    super.dispose();
+  }
+
+  /// Dictates a short phrase directly into [controller] - Autocomplete
+  /// already listens to that same controller for its type-to-filter
+  /// behaviour, so setting its text here re-triggers the normal filtered
+  /// dropdown exactly as if it had been typed. Deliberately
+  /// [stt.ListenMode.search] and short pause/listen windows, not
+  /// [VoiceTransactionSheet]'s dictation-length settings - a name is a
+  /// couple of words, not a sentence.
+  Future<void> _toggleListening(TextEditingController controller) async {
+    if (_listening) {
+      await _speech?.stop();
+      return;
+    }
+    final speech = _speech ??= stt.SpeechToText();
+    final available = await speech.initialize(
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'notListening' || status == 'done') {
+          setState(() => _listening = false);
+        }
+      },
+    );
+    if (!available || !mounted) return;
+    setState(() => _listening = true);
+    unawaited(speech.listen(
+      onResult: (result) {
+        controller.text = result.recognizedWords;
+        controller.selection = TextSelection.collapsed(offset: controller.text.length);
+      },
+      listenOptions: stt.SpeechListenOptions(
+        localeId: 'fr_FR',
+        listenMode: stt.ListenMode.search,
+        partialResults: true,
+        pauseFor: const Duration(seconds: 2),
+        listenFor: const Duration(seconds: 10),
+      ),
+    ));
   }
 
   @override
@@ -59,15 +133,33 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
                 focusNode: focusNode,
                 decoration: InputDecoration(
                   labelText: widget.label,
-                  suffixIcon: controller.text.isEmpty
-                      ? const Icon(Icons.search, size: 18)
-                      : IconButton(
-                          icon: const Icon(Icons.clear, size: 18),
-                          onPressed: () {
-                            controller.clear();
-                            widget.onSelected(null);
-                          },
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_voiceAvailable)
+                        IconButton(
+                          tooltip: _listening ? 'Arrêter' : 'Dicter',
+                          icon: Icon(
+                            _listening ? Icons.mic : Icons.mic_none,
+                            size: 18,
+                            color: _listening ? Theme.of(context).colorScheme.error : null,
+                          ),
+                          onPressed: () => _toggleListening(controller),
                         ),
+                      controller.text.isEmpty
+                          ? const Padding(
+                              padding: EdgeInsets.only(right: 12),
+                              child: Icon(Icons.search, size: 18),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.clear, size: 18),
+                              onPressed: () {
+                                controller.clear();
+                                widget.onSelected(null);
+                              },
+                            ),
+                    ],
+                  ),
                 ),
                 onFieldSubmitted: (_) => onSubmitted(),
               );

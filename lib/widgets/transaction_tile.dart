@@ -48,7 +48,7 @@ class TransactionTile extends StatelessWidget {
 
     final title = _isTransfer
         ? '${fromAccount?.name ?? 'Compte inconnu'} → ${toAccount?.name ?? 'Compte inconnu'}'
-        : (payee?.name ?? 'Payé inconnu');
+        : (payee?.name ?? 'Tiers inconnu');
 
     final subtitleParts = <String>[
       if (_isTransfer) 'Virement' else (category?.name ?? 'Non catégorisé'),

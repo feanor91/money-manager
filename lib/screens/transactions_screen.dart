@@ -613,7 +613,7 @@ class _LedgerTable extends StatelessWidget {
 
     final tiers = isTransfer
         ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
-        : (payeesById[tx.payeeId]?.name ?? 'Payé inconnu');
+        : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
     final categoryLabel = categoryFullPath(tx.categoryId, categoriesById);
     final categorie = isTransfer && categoryLabel.isEmpty ? 'Virement' : categoryLabel;
 
@@ -864,7 +864,7 @@ class _LedgerCards extends StatelessWidget {
 
     final tiers = isTransfer
         ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
-        : (payeesById[tx.payeeId]?.name ?? 'Payé inconnu');
+        : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
     final transferCategoryLabel = categoryFullPath(tx.categoryId, categoriesById);
     final categorie = isTransfer
         ? (transferCategoryLabel.isEmpty ? 'Virement' : transferCategoryLabel)
@@ -1186,11 +1186,12 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
               if (!isTransfer) ...[
                 const SizedBox(height: 12),
                 SearchableSelectField<Payee>(
-                  label: 'Payé',
+                  label: 'Tiers',
                   options: payees,
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
+                  enableVoiceInput: true,
                   onCreate: (text) async {
                     final id = widget.repo
                         .insertPayee(name: text, categoryId: _categoryId);

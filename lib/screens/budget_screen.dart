@@ -815,7 +815,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
       if (txns.isEmpty) return null;
       return txns.map((t) {
         final line = '${dateFormat.format(t.date)} - '
-            '${payees[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmt(t.signedAmountFor(accountId))}';
+            '${payees[t.payeeId]?.name ?? 'Tiers inconnu'} : ${fmt(t.signedAmountFor(accountId))}';
         return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
       }).join('\n');
     }
@@ -2294,7 +2294,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
       if (txns == null || txns.isEmpty) return row;
       final message = txns.map((t) {
         final line =
-            '${dateFormat.format(t.date)} - ${payees[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmt(t.amount)}';
+            '${dateFormat.format(t.date)} - ${payees[t.payeeId]?.name ?? 'Tiers inconnu'} : ${fmt(t.amount)}';
         return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
       }).join('\n');
       return HoverTooltip(message: message, child: row);
@@ -2429,7 +2429,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
                       ),
                       Expanded(
                         child: Text(
-                          payees[t.payeeId]?.name ?? 'Payé inconnu',
+                          payees[t.payeeId]?.name ?? 'Tiers inconnu',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),

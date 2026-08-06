@@ -296,7 +296,7 @@ class _TxRow extends StatelessWidget {
           tx.toAccountId == null ? 'compte introuvable' : (accountsById[tx.toAccountId]?.name ?? 'compte introuvable');
       detail = '$accountName → $toName';
     } else {
-      final payeeName = payeesById[tx.payeeId]?.name ?? 'Payé inconnu';
+      final payeeName = payeesById[tx.payeeId]?.name ?? 'Tiers inconnu';
       final categoryPath = categoryFullPath(tx.categoryId, categoriesById);
       detail = [accountName, payeeName, if (categoryPath.isNotEmpty) categoryPath].join(' · ');
     }

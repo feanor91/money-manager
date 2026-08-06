@@ -129,7 +129,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
                             DateTime(today.year, today.month, today.day));
                         final title = isTransfer
                             ? '${accounts[bill.accountId]?.name ?? '?'} → ${accounts[bill.toAccountId]?.name ?? '?'}'
-                            : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
+                            : (payees[bill.payeeId]?.name ?? 'Tiers inconnu');
                         final categoryLabel = categoryFullPath(bill.categoryId, categories);
                         final occurrenceTotal = occurrenceTotals[bill.id];
                         final remainingLabel = (!periodUsesXParam(bill.period) &&
@@ -425,11 +425,12 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
               if (!isTransfer) ...[
                 const SizedBox(height: 12),
                 SearchableSelectField<Payee>(
-                  label: 'Payé',
+                  label: 'Tiers',
                   options: payees,
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
+                  enableVoiceInput: true,
                   onCreate: (text) async {
                     final id = widget.repo
                         .insertPayee(name: text, categoryId: _categoryId);

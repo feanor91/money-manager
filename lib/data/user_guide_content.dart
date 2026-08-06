@@ -47,7 +47,11 @@ Le grand livre de vos opérations. Sur ordinateur et Android, tout l'historique 
 
 Touchez une ligne pour l'ouvrir et la modifier. Dans le tableau (ordinateur/tablette), touchez directement la date ou le montant pour le corriger sans ouvrir toute la fiche.
 
-Le bouton "+" propose : une nouvelle transaction, une nouvelle opération récurrente, et - sur Android - "Par la voix" : dites une phrase comme "35 euros chez Carrefour hier", l'application comprend le montant, le tiers, la catégorie (si elle correspond à une catégorie ou un tiers déjà connu) et la date, puis ouvre la fiche habituelle pré-remplie pour que vous vérifiiez avant d'enregistrer - rien n'est jamais enregistré directement depuis la voix.
+Le bouton "+" propose : une nouvelle transaction, une nouvelle opération récurrente, et - sur Android - "Par la voix" : dites une phrase, l'application comprend le montant, le tiers, la catégorie (si elle correspond à une catégorie ou un tiers déjà connu) et la date, puis ouvre la fiche habituelle pré-remplie pour que vous vérifiiez avant d'enregistrer - rien n'est jamais enregistré directement depuis la voix. Exemples : "35 euros chez Carrefour hier", "1500 euros de salaire", "20 euros avant-hier".
+
+Par défaut, une phrase dictée est comprise comme une dépense. Pour qu'elle soit comprise comme un revenu, elle doit contenir l'un de ces mots : reçu, salaire, remboursement, encaissé, prime ou revenu. Dates reconnues : "aujourd'hui" (ou rien du tout), "hier", "avant-hier" - toute autre formulation retombe sur aujourd'hui. Le tiers et la catégorie ne sont reconnus que s'ils existent déjà dans vos données (dites leur nom tel quel) ; les virements entre vos propres comptes ne sont pas pris en charge par la voix.
+
+Le champ "Tiers", dans la fiche transaction ou opération récurrente, a aussi son propre bouton micro (Android) : il dicte directement dans la recherche de ce champ, sans passer par toute la phrase - pratique pour ne corriger que ce champ-là.
 
 Un champ de recherche filtre par tiers, catégorie ou montant. Les opérations récurrentes en retard sont proposées automatiquement à l'ouverture de l'application (voir la section Récurrentes).''',
   ),
@@ -97,6 +101,16 @@ Renommer ou déplacer une catégorie ne touche jamais aux transactions déjà en
 Un dialogue pour interroger vos propres finances en français plutôt que de chercher dans les écrans. Fonctionne entièrement hors ligne, sans IA : "Quelles ont été mes dépenses ce mois-ci ?", "Combien j'ai dépensé en Alimentation le mois dernier ?", "Quel est le solde de mon compte ?", "Mes plus grosses dépenses des 3 derniers mois", "Mes dépenses récurrentes le mois dernier", "Mes dépenses en Alimentation par mois depuis le début de l'année", "Pourquoi vais-je finir le mois en négatif ?"
 
 Une question qui ne précise pas de compte porte sur le compte actuellement sélectionné (jamais tous les comptes mélangés en silence). Si la question n'est pas comprise, l'application dit ce qu'elle a quand même reconnu (le compte, la période) pour indiquer que le problème vient précisément du type de question, pas du reste.
+
+Sans IA (donc sur toutes les plateformes), la reconnaissance se fait par mots clés :
+• "plus grosses dépenses" ou "top N dépenses" → le classement des plus grosses dépenses
+• "pourquoi... négatif/découvert/rouge" ou "vais-je finir... négatif/rouge/découvert" → l'explication d'un solde prévu négatif
+• "chez [nom]" → les dépenses chez ce tiers précis
+• "solde" ou "balance" → le solde du compte
+• dépense, sortie, débit, transaction, opération, achat → une question sur les dépenses ("par mois"/"chaque mois" pour une répartition mois par mois ; "récurrentes" pour ne compter que les opérations liées à une facture récurrente)
+• revenu, rentrée, salaire, encaissé, recette, gagné, touché → une question sur les revenus (les deux à la fois comparent revenus et dépenses)
+
+Périodes reconnues : aujourd'hui, hier, cette semaine, la semaine dernière, ce mois, le mois dernier, cette année, l'année dernière, "les 3 derniers mois", "les 15 derniers jours", un nom de mois (avec ou sans année), une année seule (ex. 2025), ou une plage explicite ("du 01/06/2026 au 30/06/2026") - sans précision, c'est le mois en cours. Un compte ou un tiers cité par son nom (ex. "chez Carrefour") filtre la question dessus.
 
 Sur Windows uniquement, une IA locale optionnelle (Paramètres > IA locale) peut comprendre des formulations beaucoup plus libres - elle tourne entièrement sur votre ordinateur, sans connexion internet, et ne calcule jamais elle-même un chiffre : elle choisit seulement ce qu'il faut calculer, le calcul réel est toujours fait par l'application à partir de vos vraies données.''',
   ),

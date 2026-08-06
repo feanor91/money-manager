@@ -37,6 +37,59 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Champ "Payé" renommé en "Tiers" + saisie vocale dédiée~~ - **fait
+  (2026-08-06)**. Ce que le signalement initial ("le 'Payé' n'est pas
+  bien pris en compte" en saisie vocale) désignait en fait : le champ
+  payee de la fiche transaction/opération récurrente s'appelait "Payé"
+  au lieu du terme MoneyManager Ex standard "Tiers" - déjà utilisé
+  ailleurs dans le code (`database_diagnostics.dart`). Renommé partout
+  (libellé du champ dans `transactions_screen.dart`/`recurring_screen.dart`,
+  et le texte de repli "Payé inconnu" -> "Tiers inconnu" dans les 9
+  fichiers qui l'affichent). `SearchableSelectField` (le widget partagé
+  derrière Tiers *et* Catégorie) gagne un bouton micro optionnel
+  (`enableVoiceInput`, Android uniquement) qui dicte directement dans le
+  texte de recherche - réutilise le chemin de filtrage existant (donc
+  toujours un choix dans la liste filtrée à confirmer, jamais une
+  sélection automatique sur la seule foi de la reconnaissance vocale),
+  activé pour l'instant seulement sur Tiers dans les deux formulaires
+  (pas Catégorie, pas demandé). `flutter analyze`/`flutter test` (275)/
+  `flutter build web --release`/`flutter build apk --release` tous
+  vérifiés propres.
+
+- ~~Graphique de prévision de solde : le passé n'était plus visible~~ -
+  **fait (2026-08-06)**. Régression réelle, confirmée par l'historique
+  Git : la toute première version de ce graphique (`c2f44ca`, avant
+  l'ajout de la simulation d'achat) était pannable dans le passé (échelle
+  jour/semaine/mois, `historyPadding`) ; remplacée depuis par un
+  graphique "futur uniquement" qui n'a jamais retrouvé cette capacité.
+  `ForecastChart._buildPoints` construit maintenant aussi un segment
+  d'historique **réel** (jamais projeté) avant aujourd'hui, sur la même
+  durée que celle déjà sélectionnée dans "Durée affichée" (symétrique :
+  "1 mois" = 1 mois avant + 1 mois après) - `MmexRepository.dailyNetTotals`
+  (l'équivalent réel de `recurringDailyNet`, déjà utilisé pour le futur)
+  bucketé par jour en une seule requête, plus `accountBalance(asOf:)` pour
+  amorcer le cumul, jamais une requête par jour. L'historique s'affiche en
+  trait plein, la projection reste en pointillés (la distinction existait
+  déjà via `_Point.projected`, aucun nouveau code de rendu nécessaire).
+  Piège évité au passage : la date de départ des mensualités de l'achat
+  simulé était calculée à partir de `points.first.day`, qui devient
+  maintenant le début de l'historique au lieu d'aujourd'hui - désormais
+  ancrée explicitement sur `today`. `flutter analyze`/`flutter test`
+  (275) propres.
+
+- ~~État des lieux : mots clé de la saisie vocale (revenu, "Payé")~~ -
+  **fait (2026-08-06)**. Liste de mots clé déclenchant un revenu
+  (`_incomeKeywords`, `voice_transaction_parser.dart`) : seulement
+  "reçu", "salaire", "remboursement", "encaissé", "prime" - "revenu"
+  lui-même en était absent, correspondance exacte avec le signalement
+  utilisateur. Ajouté (sans ambiguïté possible). "Payé" volontairement
+  **pas** ajouté : plus courant au quotidien pour désigner une *dépense*
+  ("payé mon loyer", "payé les courses") que pour "j'ai été payé" -
+  l'ajouter sans discernement aurait échangé le défaut actuel (mot non
+  reconnu, une correction d'un tap) contre un risque pire (dépense
+  classée revenu par erreur, silencieusement) ; question renvoyée à
+  l'utilisateur plutôt que tranchée à sa place.
+
 - ~~Synchronisation WebDAV intégrée (Android)~~ - **fait, vérifié en
   conditions réelles par l'utilisateur (2026-08-04)** - a trouvé deux
   vrais manques, corrigés le jour même, voir l'entrée "Suite de la

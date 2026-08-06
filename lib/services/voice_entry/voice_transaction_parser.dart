@@ -37,8 +37,14 @@ class VoiceTransactionDraft {
 // account to resolve, out of scope for voice entry - see
 // voice_transaction_sheet.dart's doc comment), not income from outside, and
 // misreading one as a plain deposit would be a real error, not just a
-// cosmetic default.
-const _incomeKeywords = ['recu', 'salaire', 'remboursement', 'encaisse', 'prime'];
+// cosmetic default. "paye"/"payer" (in any conjugated form containing that
+// root) are left out for the same reason, even though it's the intuitive
+// word for "I got paid" - added 2026-08-06: everyday French uses "payé"
+// at least as often, likely more, for an *expense* ("j'ai payé mon loyer",
+// "payé les courses") - matching it unconditionally to income would trade
+// today's under-recognition (a tap to fix) for silently mis-flagging
+// expenses as income instead, a worse failure in the other direction.
+const _incomeKeywords = ['recu', 'salaire', 'remboursement', 'encaisse', 'prime', 'revenu'];
 
 /// Parses an already speech-recognized French transcript (not raw audio)
 /// into a [VoiceTransactionDraft]. [payees]/[categories] should be the same

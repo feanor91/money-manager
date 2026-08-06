@@ -372,7 +372,7 @@ class _RecurringCatchUpDialogState extends State<_RecurringCatchUpDialog> {
             final signed = bill.transCode == TransCode.deposit ? bill.amount : -bill.amount;
             final title = isTransfer
                 ? '${accounts[bill.accountId]?.name ?? '?'} → ${accounts[bill.toAccountId]?.name ?? '?'}'
-                : (payees[bill.payeeId]?.name ?? 'Payé inconnu');
+                : (payees[bill.payeeId]?.name ?? 'Tiers inconnu');
             return CheckboxListTile(
               value: _selected.contains(bill.id),
               onChanged: (v) => setState(() {

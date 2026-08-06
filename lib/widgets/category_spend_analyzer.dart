@@ -247,7 +247,7 @@ class _CategorySpendAnalyzerState extends State<CategorySpendAnalyzer> {
       // currency transfers) - this is always the right magnitude to show.
       final amount = t.signedAmountFor(widget.accountId).abs();
       final line =
-          '${dateFormat.format(t.date)} - ${payeesById[t.payeeId]?.name ?? 'Payé inconnu'} : ${fmt(amount)}';
+          '${dateFormat.format(t.date)} - ${payeesById[t.payeeId]?.name ?? 'Tiers inconnu'} : ${fmt(amount)}';
       return (t.notes?.isNotEmpty ?? false) ? '$line — ${t.notes}' : line;
     }).join('\n');
   }
