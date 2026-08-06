@@ -157,7 +157,8 @@ Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
               child: const Text('Annuler')),
           FilledButton(
             onPressed: () {
-              final balance = double.tryParse(balanceController.text) ?? 0;
+              final balance =
+                  double.tryParse(balanceController.text.replaceAll(',', '.')) ?? 0;
               if (existing == null) {
                 repo.insertAccount(
                   name: nameController.text,

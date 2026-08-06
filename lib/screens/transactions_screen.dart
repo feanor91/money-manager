@@ -1241,7 +1241,8 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 decoration: const InputDecoration(labelText: 'Montant'),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                validator: (v) => (double.tryParse(v ?? '') == null)
+                validator: (v) =>
+                    (double.tryParse((v ?? '').replaceAll(',', '.')) == null)
                     ? 'Montant invalide'
                     : null,
               ),
@@ -1349,7 +1350,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-    final amount = double.parse(_amountController.text);
+    final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
     final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
     CategoryChange? categoryChange;

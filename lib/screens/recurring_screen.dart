@@ -405,9 +405,10 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                 decoration: const InputDecoration(labelText: 'Montant'),
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                validator: (v) => (double.tryParse(v ?? '') == null)
-                    ? 'Montant invalide'
-                    : null,
+                validator: (v) =>
+                    (double.tryParse((v ?? '').replaceAll(',', '.')) == null)
+                        ? 'Montant invalide'
+                        : null,
               ),
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
@@ -577,7 +578,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
 
   void _save() {
     if (!_formKey.currentState!.validate()) return;
-    final amount = double.parse(_amountController.text);
+    final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
     final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
     final numOccurrences = periodUsesXParam(_period)
@@ -725,7 +726,9 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
               decoration: const InputDecoration(labelText: 'Montant'),
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               validator: (v) =>
-                  (double.tryParse(v ?? '') == null) ? 'Montant invalide' : null,
+                  (double.tryParse((v ?? '').replaceAll(',', '.')) == null)
+                      ? 'Montant invalide'
+                      : null,
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
@@ -743,7 +746,7 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
         FilledButton(
           onPressed: () {
             if (!_formKey.currentState!.validate()) return;
-            final amount = double.parse(_amountController.text);
+            final amount = double.parse(_amountController.text.replaceAll(',', '.'));
             widget.repo.recordBillOccurrence(
                 widget.bill.copyWith(amount: amount),
                 date: _date, reconciled: _reconciled);
