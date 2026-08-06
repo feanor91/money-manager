@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.52] - 2026-08-06
+
+- feat(forecast): scrollable balance chart with real history, Tiers rename
+
 ## [1.0.51] - 2026-08-05
 
 - fix(nl-query): show every matching transaction, not just the 5 biggest
