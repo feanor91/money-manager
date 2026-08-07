@@ -14,13 +14,13 @@ import 'state/pin_lock_provider.dart';
 import 'theme/app_theme.dart';
 import 'widgets/update_prompt.dart';
 
-/// MaterialApp's own internal Navigator, exposed so the update check (see
-/// _PinGateState.initState) can show its dialog regardless of which gate
-/// screen happens to be on top when the (real, network-bound) check
-/// resolves - a context captured from any one specific gate screen would
-/// die the moment that screen gets replaced by the next one (db picker ->
-/// PIN -> the real app), silently losing the prompt if the check hadn't
-/// resolved yet by then. This one lives for the whole app session.
+/// MaterialApp's own internal Navigator - only actually mounted once the
+/// PIN gate reaches `none`/`unlocked` (see _PinGateState.build), so the
+/// update check only falls back to this key in that specific branch. While
+/// the database-picker/PIN screen is still showing, the check instead uses
+/// a context from within _gated's own route builder - see
+/// _PinGateState._maybeCheckForUpdates's doc comment for why relying on
+/// this key alone silently broke the check entirely for a day.
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 class MoneyManagerApp extends StatelessWidget {
@@ -90,17 +90,50 @@ class _PinGate extends StatefulWidget {
 }
 
 class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
+  bool _updateCheckStarted = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Starts as soon as the database-picker/PIN screen shows, not after a
-    // full unlock (2026-08-07, user request: check before being asked for
-    // the PIN) - deferred one frame so rootNavigatorKey's Navigator has
-    // actually mounted by the time this reads its context. Runs at most
-    // once: initState only ever fires once for _PinGate's whole lifetime,
-    // which spans the entire app session (MaterialApp.builder wraps every
-    // route in the same single _PinGate instance, never recreates it).
+  }
+
+  /// Starts the update check as soon as *any* screen with a real
+  /// Navigator/Overlay ancestor is showing - the database-picker/PIN
+  /// screen, not just after a full unlock (2026-08-07, user request: check
+  /// before being asked for the PIN). Guarded to run at most once per app
+  /// session regardless of which caller gets there first.
+  ///
+  /// **Not `rootNavigatorKey.currentContext` alone, found 2026-08-07
+  /// breaking this the same day it shipped**: that key is attached to
+  /// `widget.child` (MaterialApp's own routed Navigator, built from
+  /// `home:`), which [build] only ever returns once
+  /// `PinGateStatus.none`/`unlocked` - i.e. exactly *after* the PIN gate
+  /// this feature is supposed to run *before*. While the db-picker/PIN
+  /// screen is showing, `build` returns `_gated(...)`'s own separate
+  /// Navigator instead, so `rootNavigatorKey.currentContext` was still
+  /// `null` the one time this used to be tried (from `initState`, which
+  /// never runs again) - the check silently never fired at all, for either
+  /// platform. Fixed by calling this from within `_gated`'s own route
+  /// builder too (see below), which always has Navigator/Overlay ancestry
+  /// no matter which gate screen is on top.
+  void _maybeCheckForUpdates(BuildContext context) {
+    if (_updateCheckStarted) return;
+    _updateCheckStarted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) checkForUpdatesAndPrompt(context);
+    });
+  }
+
+  /// Same as [_maybeCheckForUpdates], but for the `widget.child` branch of
+  /// [build]: that widget (MaterialApp's own routed Navigator, keyed by
+  /// [rootNavigatorKey]) hasn't actually mounted as an Element yet at the
+  /// point [build] returns it, so there's no usable context to capture
+  /// synchronously the way [_gated]'s route builder provides one - resolve
+  /// [rootNavigatorKey]'s context lazily, after the frame that mounts it.
+  void _maybeCheckForUpdatesViaRootNavigator() {
+    if (_updateCheckStarted) return;
+    _updateCheckStarted = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final navContext = rootNavigatorKey.currentContext;
       if (navContext != null) checkForUpdatesAndPrompt(navContext);
@@ -178,6 +211,12 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
         return _gated(const PinUnlockScreen());
       case PinGateStatus.none:
       case PinGateStatus.unlocked:
+        // Covers the (rarer) case where this is reached directly - no
+        // database-picker/PIN screen ever showed via _gated below, e.g. a
+        // database was already open and no PIN is configured - so the
+        // check still fires exactly once even though _gated's own trigger
+        // never got a chance to run first.
+        _maybeCheckForUpdatesViaRootNavigator();
         return widget.child!;
     }
   }
@@ -232,7 +271,10 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
   Widget _gated(Widget child) {
     return Navigator(
       key: ValueKey(child.runtimeType),
-      onGenerateRoute: (_) => MaterialPageRoute(builder: (_) => child),
+      onGenerateRoute: (_) => MaterialPageRoute(builder: (routeContext) {
+        _maybeCheckForUpdates(routeContext);
+        return child;
+      }),
     );
   }
 }
