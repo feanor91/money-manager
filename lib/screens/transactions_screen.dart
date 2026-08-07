@@ -20,7 +20,7 @@ import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
-import '../widgets/voice_transaction_sheet.dart';
+import '../widgets/transaction_entry_flow.dart';
 import 'recurring_screen.dart' show RecurringEditorSheet;
 
 /// True on every platform except web - i.e. desktop (Windows/Linux/macOS)
@@ -287,7 +287,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   currency: currency,
                   recurringTxIds: recurringTxIds,
                   recurringOccurrences: recurringOccurrences,
-                  onTapRow: (tx) => _openEditor(context, existing: tx),
+                  onTapRow: (tx) => openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
                     dbProvider.touch();
@@ -311,7 +311,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   currency: currency,
                   recurringTxIds: recurringTxIds,
                   recurringOccurrences: recurringOccurrences,
-                  onTapRow: (tx) => _openEditor(context, existing: tx),
+                  onTapRow: (tx) => openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
                     dbProvider.touch();
@@ -326,41 +326,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               );
             }),
     );
-  }
-
-  Future<void> _openEditor(BuildContext context,
-      {MoneyTransaction? existing,
-      int? defaultAccountId,
-      VoiceTransactionDraft? voicePrefill}) async {
-    final dbProvider = context.read<DatabaseProvider>();
-    final repo = dbProvider.repository!;
-    final result = await showModalBottomSheet<TransactionEditorResult>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => TransactionEditorSheet(
-        existing: existing,
-        repo: repo,
-        defaultAccountId: defaultAccountId,
-        voicePrefill: voicePrefill,
-      ),
-    );
-    dbProvider.touch();
-    if (result?.categoryChange != null && context.mounted) {
-      await offerBulkCategoryReassign(
-        context: context,
-        repo: repo,
-        dbProvider: dbProvider,
-        change: result!.categoryChange!,
-      );
-    }
-    if (result?.billAmountChange != null && context.mounted) {
-      await offerBillAmountSync(
-        context: context,
-        repo: repo,
-        dbProvider: dbProvider,
-        change: result!.billAmountChange!,
-      );
-    }
   }
 
   /// The ledger table/cards' own quick amount edit (tap the Débit/Crédit
@@ -387,25 +352,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       dbProvider: dbProvider,
       change: (billId: billId, newAmount: amount),
     );
-  }
-
-  /// Opens the mic-capture sheet, then - if the user went through with it -
-  /// the same "Nouvelle transaction" sheet as manual entry, pre-filled with
-  /// whatever [parseVoiceTransaction] made of the transcript. Nothing is
-  /// ever saved directly from speech: the user always confirms in that sheet.
-  Future<void> _startVoiceEntry(BuildContext context, int? accountId) async {
-    final repo = context.read<DatabaseProvider>().repository!;
-    final draft = await showModalBottomSheet<VoiceTransactionDraft>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => VoiceTransactionSheet(
-        payees: repo.getPayees(onlyActive: false),
-        categories: repo.getCategories(),
-        accounts: repo.getAccounts(),
-      ),
-    );
-    if (!context.mounted || draft == null) return;
-    await _openEditor(context, defaultAccountId: accountId, voicePrefill: draft);
   }
 
   /// Lets the FAB create either a one-off transaction or a recurring bill
@@ -440,9 +386,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
     if (!context.mounted || choice == null) return;
     if (choice == 'transaction') {
-      await _openEditor(context, defaultAccountId: accountId);
+      await openTransactionEditor(context, defaultAccountId: accountId);
     } else if (choice == 'voice') {
-      await _startVoiceEntry(context, accountId);
+      await startVoiceEntry(context, accountId);
     } else {
       await _openRecurringEditor(context, defaultAccountId: accountId);
     }

@@ -37,6 +37,31 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Reconnaissance du compte vocal : cause enfin trouvée~~ - **fait
+  (2026-08-07)**. L'aperçu en direct ajouté dans l'entrée précédente a
+  immédiatement montré "Compte : inchangé" malgré "compte" bien présent
+  dans la phrase - donc pas un souci de reconnaissance vocale, un souci
+  d'égalité dans le score mot par mot. Cause réelle : l'utilisateur a un
+  compte masqué "Boursorama Perso Livret" qui partage le mot "Boursorama"
+  avec le compte actif "Boursorama Perso" - les deux comptes ex-aequo, et
+  l'algorithme refuse (à raison) de deviner en cas d'égalité. Les comptes
+  masqués sont maintenant explicitement exclus de la liste passée à la
+  saisie vocale (`repo.getAccounts().where((a) => !dbProvider.isAccountHidden(a.id))`),
+  seuls les comptes réellement sélectionnables entrent en concurrence.
+
+  Au passage (remarque pertinente de l'utilisateur, qui a fait le lien
+  avec le bug de sauvegarde silencieuse de la veille) : le tableau de bord
+  et l'onglet Transactions avaient chacun leur **propre copie complète**
+  du code d'ouverture de fiche/saisie vocale - exactement la duplication
+  qui avait déjà causé ce bug de sauvegarde silencieuse (une copie mise à
+  jour, l'autre oubliée). Les deux copies sont maintenant fusionnées dans
+  `lib/widgets/transaction_entry_flow.dart` (`openTransactionEditor`/
+  `startVoiceEntry`), utilisé par les deux écrans - plus aucun risque que
+  l'un dérive de l'autre à l'avenir.
+
+  `flutter analyze`/`flutter test` (287)/`flutter build apk --release`/
+  `flutter build web --release` tous vérifiés propres.
+
 - ~~Reconnaissance du compte vocal : toujours en échec malgré deux
   correctifs~~ - **en cours de diagnostic (2026-08-07)**. Le mot par mot
   (voir entrée précédente) a été vérifié correct par deux tests distincts

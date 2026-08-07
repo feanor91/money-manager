@@ -7,24 +7,20 @@ import 'package:provider/provider.dart';
 import '../data/mmex_repository.dart';
 import '../models/budget_period.dart' show nextForecastDay;
 import '../models/currency.dart';
-import '../services/voice_entry/voice_transaction_parser.dart' show VoiceTransactionDraft;
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/bento_card.dart';
-import '../widgets/bill_amount_sync.dart';
 import '../widgets/budget_preview_card.dart';
-import '../widgets/bulk_category_reassign.dart';
 import '../widgets/category_spend_analyzer.dart';
 import '../widgets/category_spend_bar_chart.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/nl_query_dialog.dart';
 import '../widgets/responsive_body.dart';
+import '../widgets/transaction_entry_flow.dart';
 import '../widgets/transaction_tile.dart';
-import '../widgets/voice_transaction_sheet.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart' show openAccountEditor;
-import 'transactions_screen.dart' show TransactionEditorSheet, TransactionEditorResult;
 
 /// Same convention as transactions_screen.dart / webdav_settings_card.dart -
 /// re-declared locally rather than shared, per this codebase's existing
@@ -131,7 +127,7 @@ class DashboardScreen extends StatelessWidget {
         // to choose from there.
         onPressed: () => _isAndroidPlatform
             ? _showAddChoice(context, selectedAccountId)
-            : _openTransactionEditor(context,
+            : openTransactionEditor(context,
                 defaultAccountId: selectedAccountId),
         child: const Icon(Icons.add),
       ),
@@ -431,73 +427,6 @@ class DashboardScreen extends StatelessWidget {
   }
 }
 
-/// Same interaction as TransactionsScreen's own FAB (see
-/// TransactionsScreen._openEditor) - the dashboard only ever creates a
-/// brand-new transaction (never edits one in place), so there's no
-/// existing category for offerBulkCategoryReassign to ever actually fire
-/// on, but it's kept for consistency in case that ever changes.
-Future<void> _openTransactionEditor(BuildContext context,
-    {int? defaultAccountId, VoiceTransactionDraft? voicePrefill}) async {
-  final dbProvider = context.read<DatabaseProvider>();
-  final repo = dbProvider.repository!;
-  // Was showModalBottomSheet<CategoryChange?> - a silent type mismatch,
-  // never a compile error (Navigator.pop's result is only checked against
-  // this generic at runtime): TransactionEditorSheet._save has popped a
-  // TransactionEditorResult record ever since bill_amount_sync.dart was
-  // added, so this await threw a cast exception on every close and neither
-  // dbProvider.touch() nor offerBulkCategoryReassign below ever ran for
-  // this entry point (the dashboard's own "+" button) - found 2026-08-06
-  // live-testing on Android. The sheet's own repo.insertTransaction/
-  // updateTransaction call already happened by then (synchronous, before
-  // the pop), so data wasn't lost, but the touch() that flushes it to the
-  // real file never fired.
-  final result = await showModalBottomSheet<TransactionEditorResult>(
-    context: context,
-    isScrollControlled: true,
-    builder: (_) => TransactionEditorSheet(
-      repo: repo,
-      defaultAccountId: defaultAccountId,
-      voicePrefill: voicePrefill,
-    ),
-  );
-  dbProvider.touch();
-  if (result?.categoryChange != null && context.mounted) {
-    await offerBulkCategoryReassign(
-      context: context,
-      repo: repo,
-      dbProvider: dbProvider,
-      change: result!.categoryChange!,
-    );
-  }
-  if (result?.billAmountChange != null && context.mounted) {
-    await offerBillAmountSync(
-      context: context,
-      repo: repo,
-      dbProvider: dbProvider,
-      change: result!.billAmountChange!,
-    );
-  }
-}
-
-/// Same two-step flow as TransactionsScreen._startVoiceEntry: capture +
-/// parse first, then hand off to the normal "Nouvelle transaction" sheet for
-/// confirmation - nothing is ever saved straight from speech.
-Future<void> _startVoiceEntry(BuildContext context, int? accountId) async {
-  final repo = context.read<DatabaseProvider>().repository!;
-  final draft = await showModalBottomSheet<VoiceTransactionDraft>(
-    context: context,
-    isScrollControlled: true,
-    builder: (_) => VoiceTransactionSheet(
-      payees: repo.getPayees(onlyActive: false),
-      categories: repo.getCategories(),
-      accounts: repo.getAccounts(),
-    ),
-  );
-  if (!context.mounted || draft == null) return;
-  await _openTransactionEditor(context,
-      defaultAccountId: accountId, voicePrefill: draft);
-}
-
 /// Same choice-sheet mechanic as TransactionsScreen's own FAB, minus the
 /// "opération récurrente" option that only makes sense from that screen -
 /// only shown at all when [_isAndroidPlatform], see the FAB above.
@@ -524,9 +453,9 @@ Future<void> _showAddChoice(BuildContext context, int? accountId) async {
   );
   if (!context.mounted || choice == null) return;
   if (choice == 'voice') {
-    await _startVoiceEntry(context, accountId);
+    await startVoiceEntry(context, accountId);
   } else {
-    await _openTransactionEditor(context, defaultAccountId: accountId);
+    await openTransactionEditor(context, defaultAccountId: accountId);
   }
 }
 
