@@ -16,7 +16,11 @@ void main() {
   // be enough to also fill in a sensible category.
   const carrefour = Payee(id: 20, name: 'Carrefour', active: true, categoryId: 1);
   const employeur = Payee(id: 21, name: 'Mon Employeur', active: true);
-  const payees = [carrefour, employeur];
+  // Deliberately shares a name with the "Boursorama Perso" account below -
+  // this exact ambiguity (a bank both as a payee, for its own fees, and as
+  // an account) is what exposed the bug this covers.
+  const boursoramaPayee = Payee(id: 22, name: 'Boursorama', active: true);
+  const payees = [carrefour, employeur, boursoramaPayee];
 
   // Deliberately multi-word, matching how real accounts actually get named
   // in this app (confirmed 2026-08-07 by the user's own real account
@@ -185,6 +189,14 @@ void main() {
         'leaves accountId null rather than guessing which one', () {
       final draft = parse('30 euros sur le compte crédit agricole');
       expect(draft.accountId, isNull);
+    });
+
+    test('a word already claimed by the account match cannot also win the '
+        'payee match - reproduces the 2026-08-07 report exactly (a bank '
+        'named both a payee, for its own fees, and an account)', () {
+      final draft = parse('35 euros chez Carrefour alimentation sur le compte Boursorama');
+      expect(draft.accountId, 30); // Boursorama Perso
+      expect(draft.payeeId, 20); // Carrefour, not the Boursorama payee
     });
   });
 }

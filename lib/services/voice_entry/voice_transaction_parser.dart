@@ -80,14 +80,6 @@ VoiceTransactionDraft parseVoiceTransaction(
   final date = _extractDate(text, today);
   final transCode = _extractTransCode(text);
 
-  final payeeId = bestNameMatch(text, payees.map((p) => MapEntry(p.id, p.name)));
-  final categoryFromText =
-      bestNameMatch(text, categories.map((c) => MapEntry(c.id, c.name)));
-  final matchedPayee = findById(payees, payeeId, (p) => p.id);
-  // An explicit category word in the transcript wins over the payee's own
-  // default - the spoken word is more specific to *this* transaction than
-  // whatever category that payee usually falls under.
-  final categoryId = categoryFromText ?? matchedPayee?.categoryId;
   // Only attempted when "compte" is actually said - found 2026-08-06:
   // matching account names unconditionally against the whole transcript is
   // too easy to confuse with a similarly-named payee ("sur le compte
@@ -100,6 +92,26 @@ VoiceTransactionDraft parseVoiceTransaction(
   final accountId = RegExp(r'\bcompte\b').hasMatch(text)
       ? _bestAccountWordMatch(text, accounts)
       : null;
+  // Computed *before* payee/category matching, and its own words scrubbed
+  // out of the text those use - found 2026-08-07: with the account fix
+  // above now correctly recognizing "compte Boursorama", the *payee* match
+  // then separately picked "Boursorama" over the actually-said "chez
+  // Carrefour" anyway (bestNameMatch prefers the longer of several
+  // candidates that all appear somewhere in the text, with no idea the
+  // account match had already claimed that word for a different purpose).
+  final matchedAccount = findById(accounts, accountId, (a) => a.id);
+  final textForOtherFields =
+      matchedAccount == null ? text : _stripWords(text, _significantWords(matchedAccount.name));
+
+  final payeeId =
+      bestNameMatch(textForOtherFields, payees.map((p) => MapEntry(p.id, p.name)));
+  final categoryFromText =
+      bestNameMatch(textForOtherFields, categories.map((c) => MapEntry(c.id, c.name)));
+  final matchedPayee = findById(payees, payeeId, (p) => p.id);
+  // An explicit category word in the transcript wins over the payee's own
+  // default - the spoken word is more specific to *this* transaction than
+  // whatever category that payee usually falls under.
+  final categoryId = categoryFromText ?? matchedPayee?.categoryId;
 
   return VoiceTransactionDraft(
     amount: amount,
@@ -119,8 +131,28 @@ VoiceTransactionDraft parseVoiceTransaction(
 // French articles/possessives too generic to mean anything on their own.
 const _accountStopWords = {'compte', 'de', 'du', 'des', 'la', 'le', 'les', 'mon', 'ma', 'mes'};
 
+/// [name]'s own words worth matching on - folded, split on anything that
+/// isn't a letter/digit, short filler words and [_accountStopWords]
+/// dropped. Shared by [_bestAccountWordMatch]'s scoring and
+/// [parseVoiceTransaction]'s scrubbing of an already-matched account's name
+/// out of the text before payee/category matching runs.
+Iterable<String> _significantWords(String name) => foldDiacritics(name)
+    .split(RegExp(r'[^a-z0-9]+'))
+    .where((w) => w.length >= 3 && !_accountStopWords.contains(w));
+
+/// Replaces every whole-word occurrence of any of [words] in [text] with a
+/// space, so a word already claimed by one field's match (e.g. an account
+/// name) can't also satisfy a different field's match afterwards.
+String _stripWords(String text, Iterable<String> words) {
+  var result = text;
+  for (final word in words) {
+    result = result.replaceAll(RegExp('\\b$word\\b'), ' ');
+  }
+  return result;
+}
+
 /// Which account best matches [text], by how many of *that account's own*
-/// significant words (see [_accountStopWords]) show up as whole words in
+/// significant words (see [_significantWords]) show up as whole words in
 /// [text] - not [bestNameMatch]'s exact whole-name match, which real
 /// multi-word account names ("Boursorama perso") essentially never satisfy
 /// from natural speech. Returns null - never a guess - when the best score
@@ -132,11 +164,8 @@ int? _bestAccountWordMatch(String text, List<Account> accounts) {
   int? bestId;
   var tie = false;
   for (final account in accounts) {
-    final words = foldDiacritics(account.name)
-        .split(RegExp(r'[^a-z0-9]+'))
-        .where((w) => w.length >= 3 && !_accountStopWords.contains(w));
     var score = 0;
-    for (final word in words) {
+    for (final word in _significantWords(account.name)) {
       if (RegExp('\\b$word\\b').hasMatch(text)) score++;
     }
     if (score == 0) continue;

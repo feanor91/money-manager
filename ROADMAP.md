@@ -37,6 +37,21 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Saisie vocale : "Boursorama" gagnait le tiers alors que "Carrefour"
+  était dit explicitement~~ - **fait (2026-08-07)**. Une fois le compte
+  correctement reconnu (voir les deux entrées précédentes), un dernier
+  souci restait : dire "chez Carrefour ... sur le compte Boursorama" -
+  avec une banque nommée à la fois tiers (pour ses propres frais) et
+  compte - laissait "Boursorama" (le nom le plus long) l'emporter aussi
+  sur le tiers, `bestNameMatch` n'ayant aucune idée que ce mot venait déjà
+  de servir à identifier le compte. Les mots du compte reconnu sont
+  maintenant retirés du texte avant la recherche de tiers/catégorie, pour
+  qu'un même mot ne puisse jamais gagner deux champs différents. Nouveau
+  test reproduisant exactement le cas signalé.
+
+  `flutter analyze`/`flutter test` (288)/`flutter build apk --release`
+  tous vérifiés propres.
+
 - ~~Reconnaissance du compte vocal : cause enfin trouvée~~ - **fait
   (2026-08-07)**. L'aperçu en direct ajouté dans l'entrée précédente a
   immédiatement montré "Compte : inchangé" malgré "compte" bien présent
