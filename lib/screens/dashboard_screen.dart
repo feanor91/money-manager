@@ -247,6 +247,7 @@ class DashboardScreen extends StatelessWidget {
                     _DashboardChartSection(
                       repository: repo,
                       scopedBalance: scopedBalance,
+                      forecastDay: dbProvider.forecastDay,
                       currency: currency,
                       selectedAccountId: selectedAccountId,
                     ),
@@ -470,12 +471,14 @@ class _DashboardChartSection extends StatefulWidget {
   final double scopedBalance;
   final CurrencyFormat? currency;
   final int selectedAccountId;
+  final int forecastDay;
 
   const _DashboardChartSection({
     required this.repository,
     required this.scopedBalance,
     required this.currency,
     required this.selectedAccountId,
+    required this.forecastDay,
   });
 
   @override
@@ -512,6 +515,7 @@ class _DashboardChartSectionState extends State<_DashboardChartSection> {
                     repository: widget.repository,
                     currency: widget.currency,
                     accountId: widget.selectedAccountId,
+                    forecastDay: widget.forecastDay,
                   )
                 : ForecastChart(
                     repository: widget.repository,

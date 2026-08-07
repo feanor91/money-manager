@@ -77,11 +77,26 @@ the user what's conflicting rather than resolving it blindly - these bot
 commits only ever touch `CHANGELOG.md`/`pubspec.yaml`, so a conflict there
 usually means something unexpected happened upstream.
 
-Once this push lands, the release pipeline runs on its own in the background:
-build, test, version bump, changelog, GitHub release with web+APK artifacts.
-This skill does not need to wait for it or duplicate any of it - the NAS
-deploy below is a separate, local-only distribution channel for the web
-build, on top of (not instead of) that automated release.
+Once this push lands, the release pipeline runs in the background: build,
+test, version bump, changelog, GitHub release with web+APK artifacts.
+
+**Wait for it to finish before building the web release below** (found
+2026-08-07: building immediately after push uses the pre-bump
+`pubspec.yaml` version, so the NAS-deployed web app's Paramètres > À
+propos shows a version one behind the release the pipeline just tagged).
+Poll it with `gh`:
+
+```bash
+gh run list --repo feanor91/money-manager --branch main --limit 1
+```
+
+Once that run shows `completed success` (skip-ci commits from the bot
+itself don't trigger a new run, so this is always the run from this
+skill's own push), pull the version-bump commit before building:
+
+```bash
+git pull --ff-only origin main
+```
 
 ## 4. Build the web release
 

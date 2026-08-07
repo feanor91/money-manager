@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../data/mmex_repository.dart';
+import '../models/budget_period.dart';
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/recurrence.dart';
@@ -12,20 +13,18 @@ import 'bento_card.dart';
 import 'envelope_gauge.dart' show forecastColor;
 import 'transaction_tile.dart';
 
-/// Adds [months] calendar months to [date], clamping the day of month to
-/// the destination month's actual last day when it doesn't have one - same
-/// helper as ForecastChart's (kept separate rather than shared/exported,
-/// per this file's own self-contained date window rather than reusing
-/// ForecastChart's forward-looking one).
-DateTime _addMonths(DateTime date, int months) {
-  final total = date.year * 12 + (date.month - 1) + months;
-  final year = total ~/ 12;
-  final month = total % 12 + 1;
-  final lastDayOfMonth = DateTime(year, month + 1, 0).day;
-  return DateTime(year, month, date.day > lastDayOfMonth ? lastDayOfMonth : date.day);
-}
-
 DateTime _addDays(DateTime date, int days) => DateTime(date.year, date.month, date.day + days);
+
+/// [count] budget windows before [window] (see budget_period.dart) -
+/// chained one month at a time so each step gets the same day-of-month
+/// clamping as a single [previousBudgetWindow] call.
+BudgetWindow _stepBackBudgetWindows(BudgetWindow window, int count, int anchorDay) {
+  var w = window;
+  for (var i = 0; i < count; i++) {
+    w = previousBudgetWindow(w, anchorDay);
+  }
+  return w;
+}
 
 /// Width of the trailing window shown, always ending on "today" (or on a
 /// past window when scrolled back - see [_CategorySpendBarChartState]).
@@ -81,20 +80,25 @@ class _BarItem {
 ///
 /// Navigation mirrors [ForecastChart]'s duration dropdown + left/right
 /// paging, but this chart never projects into the future the way that one
-/// does: the window always ends on "today" (or on a past window once
-/// scrolled back via the left arrow) and only ever shows real, already-
+/// does: the window always ends on the current "Jour de prévision du
+/// solde" (Settings) - not literally today - or on a past window once
+/// scrolled back via the left arrow, and only ever shows real, already-
 /// recorded spend - "prévu" here means the recurring schedule's monthly
-/// rate scaled to the window's length, not a day-by-day projection.
+/// rate scaled to the window's length, not a day-by-day projection. See
+/// [_stepBackBudgetWindows] for why windows are anchored on that day
+/// instead of calendar months.
 class CategorySpendBarChart extends StatefulWidget {
   final MmexRepository repository;
   final CurrencyFormat? currency;
   final int? accountId;
+  final int forecastDay;
 
   const CategorySpendBarChart({
     super.key,
     required this.repository,
     this.currency,
     this.accountId,
+    required this.forecastDay,
   });
 
   @override
@@ -115,15 +119,24 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
     final repo = widget.repository;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    // Half-open [windowStart, windowEndExclusive) window - windowEndExclusive
-    // of window N is exactly windowStart of window N+1, so adjacent windows
-    // tile without overlap. Getting this wrong (both ends inclusive, as an
-    // earlier version of this widget did) double-counts any operation dated
-    // exactly on the shared boundary day into *both* windows - easy to miss
-    // in general, but glaring for a monthly-recurring category (e.g. "Crédits")
-    // whose payment date reliably lands on that exact boundary every month.
-    final windowEndExclusive = _addMonths(_addDays(today, 1), _offsetSteps * _duration.months);
-    final windowStart = _addMonths(windowEndExclusive, -_duration.months);
+    // Windows are "full months" anchored on the day *after* the "Jour de
+    // prévision du solde" (Settings) through that same day next month -
+    // e.g. forecastDay=24 gives 25 June to 24 July - rather than calendar
+    // months, so they line up with the user's own pay cycle the same way
+    // BudgetWindow (budget_period.dart) does. Built by shifting a chain of
+    // BudgetWindows forward by one day: BudgetWindow itself is defined as
+    // [forecastDay, nextForecastDay) (start inclusive on the day itself,
+    // end exclusive) - shifting both ends by +1 day turns that into
+    // (forecastDay, nextForecastDay] as a half-open [start, end) pair,
+    // i.e. exactly "day-after through day-inclusive", while preserving the
+    // half-open tiling (window N's end is window N+1's start) that avoids
+    // double-counting a transaction dated exactly on the boundary.
+    final currentBudgetWindow = budgetWindowContaining(today, widget.forecastDay);
+    final endBudgetWindow =
+        _stepBackBudgetWindows(currentBudgetWindow, -_offsetSteps * _duration.months, widget.forecastDay);
+    final startBudgetWindow = _stepBackBudgetWindows(endBudgetWindow, _duration.months - 1, widget.forecastDay);
+    final windowStart = _addDays(startBudgetWindow.start, 1);
+    final windowEndExclusive = _addDays(endBudgetWindow.end, 1);
     final windowEndInclusive = _addDays(windowEndExclusive, -1);
 
     final categories = repo.getCategories(onlyActive: false);
