@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.58] - 2026-08-07
+
+- debug(voice): show a live parsed preview in the dictation sheet
+
 ## [1.0.57] - 2026-08-07
 
 - fix(voice): word-overlap account match; add conflict-check spinner
