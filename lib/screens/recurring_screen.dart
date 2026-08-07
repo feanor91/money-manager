@@ -115,7 +115,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
             // account mixed together isn't a meaningful number (different
             // currencies/purposes), and the user explicitly asked for this
             // to stay off the "tous les comptes" view (2026-08-07).
-            if (_accountFilter != null) _RecurringTotalsBar(bills: bills, currency: currency),
+            if (_accountFilter != null)
+              _RecurringTotalsBar(bills: bills, currency: currency, accountId: _accountFilter!),
             Expanded(
               child: bills.isEmpty
                   ? const Center(child: Text('Aucune opération récurrente'))
@@ -257,8 +258,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
 /// search filtered) recurring operations - only shown when scoped to a
 /// single account (see [_RecurringScreenState.build]).
 ///
-/// Two corrections made 2026-08-07 after the first version looked wrong to
-/// the user testing it:
+/// Corrections made 2026-08-07 after the first version looked wrong to the
+/// user testing it:
 /// - Each bill's raw [BillDeposit.amount] is converted to its
 ///   monthly-equivalent cost via [recurrencePeriodToMonthlyFactor] (same
 ///   conversion [MmexRepository.categoryMonthlyRecurringTotals] already
@@ -267,15 +268,20 @@ class _RecurringScreenState extends State<RecurringScreen> {
 ///   and made the total swing depending on which bills happen to be due
 ///   soonest rather than reflecting a stable "what this costs me per
 ///   month" figure.
-/// - A transfer (virement) is excluded from both totals entirely, not
-///   folded into "Revenus" - confirmed explicitly: an incoming transfer
-///   (e.g. 700€ from a joint account) isn't new income, just money moving
-///   between the user's own accounts. Deliberately simpler than
-///   [MmexRepository.monthlyRecurringIncome]'s nuanced "incoming transfer
-///   counts as income unless it's a savings category" rule, which the
-///   budget screen's envelope logic still uses unchanged - this bar isn't
-///   that calculation and the user rejected transfers-as-income for it
-///   specifically.
+/// - A transfer (virement) counts as Revenus or Dépenses for [accountId]
+///   depending on which side of it this account is on - money arriving via
+///   a transfer from another account (e.g. Crédit Agricole -> Boursorama)
+///   is real incoming cash flow for *this* account, same as
+///   [MmexRepository.monthlyRecurringIncome]'s own "incoming transfer
+///   counts as income" rule, just without that method's Épargne-category
+///   exception (not relevant to a single-account cash-flow summary the way
+///   it is to a whole-budget income figure). An outgoing transfer (this
+///   account is the source) counts as Dépenses the same way, for the
+///   symmetric reason. **Confirmed explicitly 2026-08-07 after an earlier
+///   version excluded transfers from both totals entirely** - the exact
+///   opposite of what was actually wanted: excluding them made a real
+///   700€/month incoming transfer invisible from "Revenus" instead of
+///   counted, which is what triggered this whole correction.
 ///
 /// Paused operations are excluded, same as everywhere else a total/
 /// forecast is derived from this schedule (paused explicitly means
@@ -283,8 +289,9 @@ class _RecurringScreenState extends State<RecurringScreen> {
 class _RecurringTotalsBar extends StatelessWidget {
   final List<BillDeposit> bills;
   final CurrencyFormat? currency;
+  final int accountId;
 
-  const _RecurringTotalsBar({required this.bills, required this.currency});
+  const _RecurringTotalsBar({required this.bills, required this.currency, required this.accountId});
 
   @override
   Widget build(BuildContext context) {
@@ -292,14 +299,19 @@ class _RecurringTotalsBar extends StatelessWidget {
     var income = 0.0;
     for (final bill in bills) {
       if (bill.paused) continue;
-      if (bill.transCode == TransCode.transfer) continue;
       final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
       if (factor <= 0) continue;
-      final monthly = bill.amount * factor;
-      if (bill.transCode == TransCode.deposit) {
-        income += monthly;
-      } else {
-        expense += monthly;
+      switch (bill.transCode) {
+        case TransCode.withdrawal:
+          expense += bill.amount * factor;
+        case TransCode.deposit:
+          income += bill.amount * factor;
+        case TransCode.transfer:
+          if (bill.toAccountId == accountId) {
+            income += bill.toAmount * factor;
+          } else if (bill.accountId == accountId) {
+            expense += bill.amount * factor;
+          }
       }
     }
     final diff = income - expense;
