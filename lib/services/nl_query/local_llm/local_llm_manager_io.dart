@@ -14,6 +14,7 @@ import 'intent_json_codec.dart';
 import 'llama_server_client.dart';
 import 'model_catalog.dart';
 import 'model_downloader.dart' as downloader;
+import 'sql_query_engine.dart' as sql_engine;
 
 /// Android also compiles this file (dart.library.io covers both, same
 /// reason as update_prompt_io.dart) but every function gates on
@@ -25,6 +26,7 @@ const _prefsKeyServerHost = 'mmex_local_llm_server_host';
 const _prefsKeyServerPort = 'mmex_local_llm_server_port';
 const _prefsKeyContextSize = 'mmex_local_llm_context_size';
 const _prefsKeyGpuLayers = 'mmex_local_llm_gpu_layers';
+const _prefsKeySqlSystemPrompt = 'mmex_local_llm_sql_system_prompt';
 
 /// Loopback-only by default (nothing outside this PC can reach it unless
 /// the user deliberately opens it up via Settings) - distinct from this
@@ -102,6 +104,28 @@ Future<void> setLocalLlmGpuLayers(int value) async {
   final prefs = await AppPreferences.getInstance();
   await prefs.setInt(_prefsKeyGpuLayers, value);
   await _disposeEngine(); // GPU offload is only applied at model load time
+}
+
+/// The editable system prompt behind the full-database-access SQL query
+/// mode (see sql_query_engine.dart) - device-local like every other local-AI
+/// setting here, not the database companion file: it's about tuning this
+/// specific installed model's behavior on this machine, not a preference
+/// that should follow the database around.
+Future<String> localLlmSqlSystemPrompt() async {
+  if (!Platform.isWindows) return sql_engine.defaultSqlSystemPrompt;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeySqlSystemPrompt) ?? sql_engine.defaultSqlSystemPrompt;
+}
+
+Future<void> setLocalLlmSqlSystemPrompt(String value) async {
+  if (!Platform.isWindows) return;
+  final prefs = await AppPreferences.getInstance();
+  final trimmed = value.trim();
+  if (trimmed.isEmpty || trimmed == sql_engine.defaultSqlSystemPrompt) {
+    await prefs.remove(_prefsKeySqlSystemPrompt);
+  } else {
+    await prefs.setString(_prefsKeySqlSystemPrompt, trimmed);
+  }
 }
 
 Future<bool> isLocalLlmEnabled() async {
@@ -397,5 +421,34 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
     return MmexRepository(_ReadOnlyAdHocDatabase(db, dbPath));
   } catch (_) {
     return null;
+  }
+}
+
+/// Full-database-access alternative to [extractIntentWithLocalLlm]'s closed
+/// kind/metric/groupBy vocabulary (see sql_query_engine.dart) - opens its
+/// own throwaway read-only connection to [dbPath] (same guarantee as
+/// [openReadOnlyAdHocRepository], disposed here rather than left to the
+/// caller since this function owns its whole lifetime), loads the
+/// user-editable system prompt from Settings, and runs the two-call
+/// SQL-generate-then-answer flow. Null (never throws) under the same
+/// conditions as every other local-AI entry point here - unsupported,
+/// disabled, not ready, or any failure at any step.
+Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) async {
+  if (!Platform.isWindows) return null;
+  if (!await isLocalLlmEnabled()) return null;
+  final engine = await _ensureEngine();
+  if (engine == null) return null;
+  final readOnlyRepo = await openReadOnlyAdHocRepository(dbPath);
+  if (readOnlyRepo == null) return null;
+  try {
+    final systemPrompt = await localLlmSqlSystemPrompt();
+    return await sql_engine.answerViaFullSqlAccess(
+      question: question,
+      readOnlyRepo: readOnlyRepo,
+      systemPrompt: systemPrompt,
+      engine: engine,
+    );
+  } finally {
+    readOnlyRepo.db.dispose();
   }
 }

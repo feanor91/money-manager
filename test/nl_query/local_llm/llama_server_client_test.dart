@@ -177,6 +177,63 @@ void main() {
     });
   });
 
+  group('askWithSystemPrompt', () {
+    test('uses the caller-supplied system prompt instead of the fixed one, with grammar', () async {
+      Map<String, dynamic>? capturedBody;
+      final port = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'content': '{"sql":"SELECT 1"}'}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      final result = await client.askWithSystemPrompt('Un prompt sur mesure.', 'combien ?');
+      expect(result, '{"sql":"SELECT 1"}');
+      expect(capturedBody!['grammar'], isNotEmpty);
+      expect(capturedBody!['prompt'], contains('Un prompt sur mesure.'));
+      expect(capturedBody!['prompt'], contains('combien ?'));
+      client.close();
+    });
+
+    test('throws on a non-200 response', () async {
+      final port = await startFakeServer((request) async {
+        request.response.statusCode = 500;
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      await expectLater(client.askWithSystemPrompt('x', 'y'), throwsStateError);
+      client.close();
+    });
+  });
+
+  group('askFreeformWithSystemPrompt', () {
+    test('uses the caller-supplied system prompt, with no grammar', () async {
+      Map<String, dynamic>? capturedBody;
+      final port = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'content': 'Tu as dépensé 42 €.'}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      final result = await client.askFreeformWithSystemPrompt('Formule la réponse.', 'résultat: 42');
+      expect(result, 'Tu as dépensé 42 €.');
+      expect(capturedBody!.containsKey('grammar'), isFalse);
+      expect(capturedBody!['prompt'], contains('Formule la réponse.'));
+      expect(capturedBody!['prompt'], contains('résultat: 42'));
+      client.close();
+    });
+  });
+
+  test('chatMlPromptWithSystem wraps the question in ChatML turns with the given system prompt', () {
+    final prompt = chatMlPromptWithSystem('Mon prompt.', 'bonjour');
+    expect(prompt, startsWith('<|im_start|>system\nMon prompt.<|im_end|>\n'));
+    expect(prompt, contains('<|im_start|>user\nbonjour<|im_end|>'));
+    expect(prompt, endsWith('<|im_start|>assistant\n'));
+  });
+
   test('chatMlPrompt wraps the question in ChatML turns', () {
     final prompt = chatMlPrompt('bonjour');
     expect(prompt, startsWith('<|im_start|>system\n'));

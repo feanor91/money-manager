@@ -4,6 +4,7 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
+import 'sql_query_engine.dart' show defaultSqlSystemPrompt;
 
 Future<bool> isLocalLlmEnabled() async => false;
 Future<void> setLocalLlmEnabled(bool value) async {}
@@ -47,3 +48,9 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
 Future<String?> askLocalLlmFreeform(String question) async => null;
 
 Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async => null;
+
+Future<String> localLlmSqlSystemPrompt() async => defaultSqlSystemPrompt;
+Future<void> setLocalLlmSqlSystemPrompt(String value) async {}
+
+Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) async =>
+    null;

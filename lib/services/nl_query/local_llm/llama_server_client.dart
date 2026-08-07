@@ -111,6 +111,16 @@ String freeformChatMlPrompt(String question) =>
     '<|im_start|>user\n$question<|im_end|>\n'
     '<|im_start|>assistant\n';
 
+/// Same ChatML framing as [chatMlPrompt]/[freeformChatMlPrompt], but with a
+/// caller-supplied system prompt instead of either hardcoded one - backs
+/// [LlamaServerClient.askWithSystemPrompt]/[askFreeformWithSystemPrompt],
+/// used by the full-database-access SQL query mode (sql_query_engine.dart),
+/// whose system prompt is itself a user-editable Settings value.
+String chatMlPromptWithSystem(String systemPrompt, String question) =>
+    '<|im_start|>system\n$systemPrompt<|im_end|>\n'
+    '<|im_start|>user\n$question<|im_end|>\n'
+    '<|im_start|>assistant\n';
+
 /// Talks HTTP to whatever's already listening on [host]:[port] - entirely
 /// unaware of whether that's a real `llama-server.exe` process or (in
 /// tests) a fake stand-in; spawning/killing the real process, and deciding
@@ -194,6 +204,61 @@ class LlamaServerClient {
         'prompt': freeformChatMlPrompt(question),
         'temperature': 0.7,
         'n_predict': 512,
+        'stop': ['<|im_end|>'],
+        'stream': false,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('llama-server a répondu ${response.statusCode}.');
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return decoded['content'] as String? ?? '';
+  }
+
+  /// Same shape as [ask] (JSON-grammar-constrained, low temperature - a
+  /// structured, deterministic response is the goal), but with a
+  /// caller-supplied [systemPrompt] instead of the fixed intent-extraction
+  /// one - backs the full-database-access SQL query mode
+  /// (sql_query_engine.dart's `answerViaFullSqlAccess`), whose system
+  /// prompt is a user-editable Settings value, not a constant this class
+  /// can hardcode. Higher [n_predict] than [ask]: a SQL query with several
+  /// JOINs/CASE expressions genuinely needs more tokens than a short
+  /// intent JSON object does.
+  Future<String> askWithSystemPrompt(String systemPrompt, String question) async {
+    final response = await _client.post(
+      Uri.parse('http://$host:$port/completion'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'prompt': chatMlPromptWithSystem(systemPrompt, question),
+        'grammar': jsonGrammar,
+        'temperature': 0.1,
+        'n_predict': 768,
+        'stop': ['<|im_end|>'],
+        'stream': false,
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('llama-server a répondu ${response.statusCode}.');
+    }
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    return decoded['content'] as String? ?? '';
+  }
+
+  /// Same shape as [askFreeform] (no grammar, prose out), but with a
+  /// caller-supplied [systemPrompt] - the second step of the
+  /// full-database-access SQL query mode, grounding the final French
+  /// answer in the query's real result rows (see
+  /// sql_query_engine.dart's `answerViaFullSqlAccess`). Lower temperature
+  /// than [askFreeform] on purpose: this is meant to faithfully paraphrase
+  /// real data, not converse freely.
+  Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+    final response = await _client.post(
+      Uri.parse('http://$host:$port/completion'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'prompt': chatMlPromptWithSystem(systemPrompt, question),
+        'temperature': 0.2,
+        'n_predict': 400,
         'stop': ['<|im_end|>'],
         'stream': false,
       }),

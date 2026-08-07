@@ -255,13 +255,31 @@ class _RecurringScreenState extends State<RecurringScreen> {
 
 /// Dépenses / Revenus / Différence for the currently visible (account +
 /// search filtered) recurring operations - only shown when scoped to a
-/// single account (see [_RecurringScreenState.build]). Paused operations
-/// are excluded, same as everywhere else a total/forecast is derived from
-/// this schedule (paused explicitly means "excluded from ... the
-/// prévisionnel" per its own checkbox tooltip). A transfer is treated the
-/// same simplified way the list's own per-row amount already is (negative,
-/// regardless of which side of the transfer this account is on) - not a
-/// new inconsistency, just not fixed here either.
+/// single account (see [_RecurringScreenState.build]).
+///
+/// Two corrections made 2026-08-07 after the first version looked wrong to
+/// the user testing it:
+/// - Each bill's raw [BillDeposit.amount] is converted to its
+///   monthly-equivalent cost via [recurrencePeriodToMonthlyFactor] (same
+///   conversion [MmexRepository.categoryMonthlyRecurringTotals] already
+///   uses for the budget screen's "auto" envelopes) - summing raw amounts
+///   made a single yearly bill's full annual cost look like a monthly one,
+///   and made the total swing depending on which bills happen to be due
+///   soonest rather than reflecting a stable "what this costs me per
+///   month" figure.
+/// - A transfer (virement) is excluded from both totals entirely, not
+///   folded into "Revenus" - confirmed explicitly: an incoming transfer
+///   (e.g. 700€ from a joint account) isn't new income, just money moving
+///   between the user's own accounts. Deliberately simpler than
+///   [MmexRepository.monthlyRecurringIncome]'s nuanced "incoming transfer
+///   counts as income unless it's a savings category" rule, which the
+///   budget screen's envelope logic still uses unchanged - this bar isn't
+///   that calculation and the user rejected transfers-as-income for it
+///   specifically.
+///
+/// Paused operations are excluded, same as everywhere else a total/
+/// forecast is derived from this schedule (paused explicitly means
+/// "excluded from ... le prévisionnel" per its own checkbox tooltip).
 class _RecurringTotalsBar extends StatelessWidget {
   final List<BillDeposit> bills;
   final CurrencyFormat? currency;
@@ -274,11 +292,14 @@ class _RecurringTotalsBar extends StatelessWidget {
     var income = 0.0;
     for (final bill in bills) {
       if (bill.paused) continue;
-      final signed = bill.transCode == TransCode.deposit ? bill.amount : -bill.amount;
-      if (signed >= 0) {
-        income += signed;
+      if (bill.transCode == TransCode.transfer) continue;
+      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      if (factor <= 0) continue;
+      final monthly = bill.amount * factor;
+      if (bill.transCode == TransCode.deposit) {
+        income += monthly;
       } else {
-        expense += -signed;
+        expense += monthly;
       }
     }
     final diff = income - expense;

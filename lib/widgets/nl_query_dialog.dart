@@ -106,6 +106,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   String? _answer;
   String? _error;
   bool _isAiFreeform = false;
+  bool _isAiSqlGrounded = false;
 
   @override
   void dispose() {
@@ -130,6 +131,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         _answer = null;
         _error = null;
         _isAiFreeform = false;
+        _isAiSqlGrounded = false;
       }
     });
   }
@@ -140,6 +142,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       _answer = null;
       _error = null;
       _isAiFreeform = false;
+      _isAiSqlGrounded = false;
     });
   }
 
@@ -150,6 +153,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       _answer = null;
       _error = null;
       _isAiFreeform = false;
+      _isAiSqlGrounded = false;
     });
 
     final repo = widget.repo;
@@ -172,6 +176,32 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
             payees: payees,
           )
         : (intent: null, periodWasExplicit: false);
+
+    // Full-database-access query engine (2026-08-07, "j'en ai marre d'être
+    // limité") - tried whenever the local AI either didn't recognize a
+    // fixed question shape at all, or landed on QueryKind.adHoc (its old
+    // closed metric/type/groupBy vocabulary, now treated purely as an
+    // "open-ended question" signal rather than something still answered
+    // with that vocabulary directly). Runs its own throwaway read-only
+    // connection internally (see askLocalLlmWithFullDataAccess), same
+    // OS-enforced guarantee as QueryKind.adHoc's dedicated connection
+    // below. On any failure - the model couldn't write usable SQL, the
+    // query errored, no local AI available - this changes nothing and
+    // falls straight through to whatever would have run anyway (the old
+    // adHoc vocabulary if that's what was recognized, or the rule-based
+    // parser).
+    if (isLocalLlmSupported && (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
+      final sqlAnswer = await askLocalLlmWithFullDataAccess(question, dbPath: repo.db.label);
+      if (sqlAnswer != null) {
+        setState(() {
+          _loading = false;
+          _answer = sqlAnswer;
+          _isAiSqlGrounded = true;
+        });
+        return;
+      }
+    }
+
     if (parsed.intent == null) {
       parsed = parseQuestion(
         question,
@@ -389,6 +419,37 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                                       const SizedBox(width: 4),
                                       Text(
                                         "Réponse libre de l'IA, pas un calcul sur tes données",
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Theme.of(context).colorScheme.primary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              // Distinct from both the above (not a real
+                              // figure at all) and a plain unbadged answer
+                              // (the exact deterministic formatter) - this
+                              // one *is* real data, but the IA wrote its own
+                              // query and phrased the answer itself rather
+                              // than going through answer_formatter.dart, so
+                              // it's shown as its own category rather than
+                              // silently passing as an exact computed answer.
+                              if (_isAiSqlGrounded)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 6),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.travel_explore,
+                                        size: 14,
+                                        color: Theme.of(context).colorScheme.primary,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        "Réponse IA à partir d'une requête sur tes données réelles",
                                         style: TextStyle(
                                           fontSize: 11,
                                           fontWeight: FontWeight.w600,

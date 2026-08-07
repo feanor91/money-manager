@@ -89,3 +89,20 @@ Future<String?> askLocalLlmFreeform(String question) => impl.askLocalLlmFreeform
 /// returned repository's `.db` once done with it.
 Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) =>
     impl.openReadOnlyAdHocRepository(dbPath);
+
+/// The editable system prompt behind [askLocalLlmWithFullDataAccess] (see
+/// Settings' "Prompt IA (accès complet aux données)") - device-local, same
+/// as the rest of this file's settings. Defaults to
+/// sql_query_engine.dart's `defaultSqlSystemPrompt`.
+Future<String> localLlmSqlSystemPrompt() => impl.localLlmSqlSystemPrompt();
+Future<void> setLocalLlmSqlSystemPrompt(String value) => impl.setLocalLlmSqlSystemPrompt(value);
+
+/// Full-database-access alternative to [extractIntentWithLocalLlm]'s closed
+/// vocabulary - the model writes real SQL against the schema described in
+/// [localLlmSqlSystemPrompt], run through the same OS-enforced read-only
+/// connection [openReadOnlyAdHocRepository] uses, then a second grounded
+/// call phrases the answer from the real result rows (see
+/// sql_query_engine.dart). Null (never throws) under the same conditions as
+/// every other local-AI entry point here.
+Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) =>
+    impl.askLocalLlmWithFullDataAccess(question, dbPath: dbPath);

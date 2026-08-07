@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/nl_query/local_llm/local_llm_manager.dart';
 import '../services/nl_query/local_llm/local_llm_support.dart';
 import '../services/nl_query/local_llm/model_catalog.dart';
+import '../services/nl_query/local_llm/sql_query_engine.dart' show defaultSqlSystemPrompt;
 
 /// Settings card for the optional, Windows-only local-AI layer behind
 /// "Poser une question" - hidden entirely (returns nothing) on any other
@@ -38,6 +39,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
   final _gpuLayersController = TextEditingController();
   String? _serverSettingsError;
 
+  final _sqlPromptController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +54,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     _portController.dispose();
     _contextSizeController.dispose();
     _gpuLayersController.dispose();
+    _sqlPromptController.dispose();
     super.dispose();
   }
 
@@ -66,6 +70,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     final port = await localLlmServerPort();
     final contextSize = await localLlmContextSize();
     final gpuLayers = await localLlmGpuLayers();
+    final sqlPrompt = await localLlmSqlSystemPrompt();
     if (!mounted) return;
     setState(() {
       _enabled = enabled;
@@ -77,6 +82,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
       _portController.text = '$port';
       _contextSizeController.text = '$contextSize';
       _gpuLayersController.text = '$gpuLayers';
+      _sqlPromptController.text = sqlPrompt;
       _loading = false;
     });
   }
@@ -166,6 +172,18 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
     );
+  }
+
+  Future<void> _saveSqlSystemPrompt() async {
+    await setLocalLlmSqlSystemPrompt(_sqlPromptController.text);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Prompt enregistré - appliqué à la prochaine question.')),
+    );
+  }
+
+  void _resetSqlSystemPrompt() {
+    setState(() => _sqlPromptController.text = defaultSqlSystemPrompt);
   }
 
   @override
@@ -320,6 +338,43 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
                 onPressed: _applyServerSettings,
                 child: const Text('Appliquer'),
               ),
+            ),
+            const Divider(height: 32),
+            Text('Prompt IA (accès complet aux données)', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 4),
+            const Text(
+              "Utilisé quand la question posée dans \"Poser une question\" ne correspond à aucun "
+              "des cas déjà prévus (solde, revenus/dépenses, prévision...) : l'IA écrit elle-même "
+              'une requête sur le schéma de la base, en lecture seule, puis formule la réponse à '
+              'partir du résultat réel - jamais de chiffre inventé. Modifie ce texte seulement si '
+              "tu comprends ce que tu fais : c'est ce qui empêche l'IA de dévier de ce cadre.",
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _sqlPromptController,
+              maxLines: 14,
+              minLines: 6,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _resetSqlSystemPrompt,
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Réinitialiser'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: _saveSqlSystemPrompt,
+                  child: const Text('Enregistrer'),
+                ),
+              ],
             ),
           ],
         ),

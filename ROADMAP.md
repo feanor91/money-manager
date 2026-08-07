@@ -38,10 +38,21 @@ courses, pas des engagements.
 ## Récemment fait
 
 - ~~Vérification de mise à jour avant le code PIN~~ - **fait (2026-08-07)**.
-  Bug de régression trouvé le jour même : la vérification ne se déclenchait
-  plus du tout (ni desktop ni Android) car elle s'appuyait sur un Navigator
-  qui n'existe qu'une fois déverrouillé - corrigé en la déclenchant depuis
-  l'écran de sélection de base/PIN lui-même.
+  Deux bugs de régression trouvés le jour même :
+  1. La vérification ne se déclenchait plus du tout (ni desktop ni Android)
+     car elle s'appuyait sur un Navigator qui n'existe qu'une fois
+     déverrouillé - corrigé en la déclenchant depuis l'écran de sélection
+     de base/PIN lui-même.
+  2. Une fois ce premier bug corrigé, la boîte de dialogue de mise à jour
+     apparaissait puis disparaissait aussitôt sur Android (jamais visible
+     du tout sur desktop, encore plus rapide) : chaque changement d'écran
+     du parcours de déverrouillage (sélection base → PIN → déverrouillé)
+     recréait un tout nouveau conteneur de navigation, détruisant la boîte
+     de dialogue au passage. Corrigé en remplaçant ça par un conteneur
+     unique et stable qui survit à toute la session - la boîte de dialogue
+     reste maintenant affichée quel que soit l'écran qui se prépare
+     derrière, et étant modale, bloque l'interaction avec cet écran tant
+     qu'elle n'est pas traitée.
 - ~~Question en langage naturel "somme des opérations récurrentes" fausse~~
   - **fait (2026-08-07)**. Deux bugs distincts trouvés en testant "Donne moi
   la somme des opérations récurrentes sur le compte Boursorama" sur
