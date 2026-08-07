@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.57] - 2026-08-07
+
+- fix(voice): word-overlap account match; add conflict-check spinner
+
 ## [1.0.56] - 2026-08-07
 
 - fix(android): duplicate transactions, silent save loss, voice account match
