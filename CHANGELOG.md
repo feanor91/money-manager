@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.56] - 2026-08-07
+
+- fix(android): duplicate transactions, silent save loss, voice account match
+
 ## [1.0.55] - 2026-08-07
 
 - fix(dashboard): fix double-counted spend and widen the category bar chart
