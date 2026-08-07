@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.62] - 2026-08-07
+
+- fix(dashboard): align spend-vs-planned bar chart windows on forecast day
+
 ## [1.0.61] - 2026-08-07
 
 - feat(update): check for new version before the PIN prompt
