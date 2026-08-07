@@ -12,6 +12,7 @@ import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/bento_card.dart';
+import '../widgets/bill_amount_sync.dart';
 import '../widgets/budget_preview_card.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/category_spend_analyzer.dart';
@@ -23,7 +24,7 @@ import '../widgets/transaction_tile.dart';
 import '../widgets/voice_transaction_sheet.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart' show openAccountEditor;
-import 'transactions_screen.dart' show TransactionEditorSheet;
+import 'transactions_screen.dart' show TransactionEditorSheet, TransactionEditorResult;
 
 /// Same convention as transactions_screen.dart / webdav_settings_card.dart -
 /// re-declared locally rather than shared, per this codebase's existing
@@ -439,7 +440,18 @@ Future<void> _openTransactionEditor(BuildContext context,
     {int? defaultAccountId, VoiceTransactionDraft? voicePrefill}) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
-  final categoryChange = await showModalBottomSheet<CategoryChange?>(
+  // Was showModalBottomSheet<CategoryChange?> - a silent type mismatch,
+  // never a compile error (Navigator.pop's result is only checked against
+  // this generic at runtime): TransactionEditorSheet._save has popped a
+  // TransactionEditorResult record ever since bill_amount_sync.dart was
+  // added, so this await threw a cast exception on every close and neither
+  // dbProvider.touch() nor offerBulkCategoryReassign below ever ran for
+  // this entry point (the dashboard's own "+" button) - found 2026-08-06
+  // live-testing on Android. The sheet's own repo.insertTransaction/
+  // updateTransaction call already happened by then (synchronous, before
+  // the pop), so data wasn't lost, but the touch() that flushes it to the
+  // real file never fired.
+  final result = await showModalBottomSheet<TransactionEditorResult>(
     context: context,
     isScrollControlled: true,
     builder: (_) => TransactionEditorSheet(
@@ -449,12 +461,20 @@ Future<void> _openTransactionEditor(BuildContext context,
     ),
   );
   dbProvider.touch();
-  if (categoryChange != null && context.mounted) {
+  if (result?.categoryChange != null && context.mounted) {
     await offerBulkCategoryReassign(
       context: context,
       repo: repo,
       dbProvider: dbProvider,
-      change: categoryChange,
+      change: result!.categoryChange!,
+    );
+  }
+  if (result?.billAmountChange != null && context.mounted) {
+    await offerBillAmountSync(
+      context: context,
+      repo: repo,
+      dbProvider: dbProvider,
+      change: result!.billAmountChange!,
     );
   }
 }
@@ -470,6 +490,7 @@ Future<void> _startVoiceEntry(BuildContext context, int? accountId) async {
     builder: (_) => VoiceTransactionSheet(
       payees: repo.getPayees(onlyActive: false),
       categories: repo.getCategories(),
+      accounts: repo.getAccounts(),
     ),
   );
   if (!context.mounted || draft == null) return;

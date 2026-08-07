@@ -1,3 +1,4 @@
+import '../../models/account.dart';
 import '../../models/category.dart';
 import '../../models/payee.dart';
 import '../../models/transaction.dart';
@@ -16,6 +17,11 @@ class VoiceTransactionDraft {
   final int? categoryId;
   final int? payeeId;
 
+  /// Null means "leave the default account untouched" (the one the "+"
+  /// button was pressed from) - only ever set when the transcript actually
+  /// named a compte (see [parseVoiceTransaction]'s "compte" gate).
+  final int? accountId;
+
   /// Only set when [amount] couldn't be found - the raw transcript, so
   /// nothing spoken is silently lost even when parsing fails on the one
   /// field that can't reasonably be left for a dropdown to default.
@@ -27,6 +33,7 @@ class VoiceTransactionDraft {
     required this.transCode,
     this.categoryId,
     this.payeeId,
+    this.accountId,
     this.notes,
   });
 }
@@ -63,6 +70,7 @@ VoiceTransactionDraft parseVoiceTransaction(
   String transcript, {
   required List<Payee> payees,
   required List<Category> categories,
+  required List<Account> accounts,
   DateTime? now,
 }) {
   final text = foldDiacritics(transcript);
@@ -80,6 +88,15 @@ VoiceTransactionDraft parseVoiceTransaction(
   // default - the spoken word is more specific to *this* transaction than
   // whatever category that payee usually falls under.
   final categoryId = categoryFromText ?? matchedPayee?.categoryId;
+  // Only attempted when "compte" is actually said - found 2026-08-06:
+  // matching account names unconditionally against the whole transcript is
+  // too easy to confuse with a similarly-named payee ("sur le compte
+  // Boursorama" needs to win over a "Boursorama" payee that may also
+  // exist, exactly what happened without this gate - the account was
+  // never touched and "Boursorama" landed in Tiers instead).
+  final accountId = RegExp(r'\bcompte\b').hasMatch(text)
+      ? bestNameMatch(text, accounts.map((a) => MapEntry(a.id, a.name)))
+      : null;
 
   return VoiceTransactionDraft(
     amount: amount,
@@ -87,6 +104,7 @@ VoiceTransactionDraft parseVoiceTransaction(
     transCode: transCode,
     categoryId: categoryId,
     payeeId: payeeId,
+    accountId: accountId,
     notes: amount == null ? transcript : null,
   );
 }

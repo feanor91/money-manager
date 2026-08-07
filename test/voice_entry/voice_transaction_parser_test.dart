@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:money_manager/models/account.dart';
 import 'package:money_manager/models/category.dart';
 import 'package:money_manager/models/payee.dart';
 import 'package:money_manager/models/transaction.dart';
@@ -17,10 +18,32 @@ void main() {
   const employeur = Payee(id: 21, name: 'Mon Employeur', active: true);
   const payees = [carrefour, employeur];
 
-  VoiceTransactionDraft parse(String transcript) => parseVoiceTransaction(
+  const boursorama = Account(
+    id: 30,
+    name: 'Boursorama',
+    type: 'Checking',
+    status: 'Open',
+    initialBalance: 0,
+    currencyId: 1,
+    favorite: false,
+  );
+  const livretA = Account(
+    id: 31,
+    name: 'Livret A',
+    type: 'Savings',
+    status: 'Open',
+    initialBalance: 0,
+    currencyId: 1,
+    favorite: false,
+  );
+  const accounts = [boursorama, livretA];
+
+  VoiceTransactionDraft parse(String transcript, {List<Account> withAccounts = accounts}) =>
+      parseVoiceTransaction(
         transcript,
         payees: payees,
         categories: categories,
+        accounts: withAccounts,
         now: now,
       );
 
@@ -96,5 +119,37 @@ void main() {
     final draft = parse('40 euros chez un endroit inconnu');
     expect(draft.payeeId, isNull);
     expect(draft.categoryId, isNull);
+  });
+
+  group('account recognition (2026-08-06)', () {
+    test('"compte" + a matching name resolves accountId', () {
+      final draft = parse('35 euros sur le compte Boursorama chez Carrefour');
+      expect(draft.accountId, 30);
+      // The payee match must still work normally alongside it - the bug
+      // report this fixed was "Boursorama" landing in Tiers *instead* of
+      // being recognized as the account, not payee recognition breaking.
+      expect(draft.payeeId, 20);
+    });
+
+    test('no "compte" word at all leaves accountId null, even if an account '
+        'name happens to appear in the sentence', () {
+      // Deliberately not matched: without the "compte" gate, a payee that
+      // happens to share a word with an account name would silently
+      // misfile the transaction onto the wrong account - see
+      // parseVoiceTransaction's doc comment.
+      final draft = parse('35 euros chez Boursorama');
+      expect(draft.accountId, isNull);
+    });
+
+    test('"compte" said but no account name matches leaves accountId null, '
+        'not a guess', () {
+      final draft = parse('35 euros sur le compte de la boulangerie');
+      expect(draft.accountId, isNull);
+    });
+
+    test('matches "Livret A" too, not just the first account in the list', () {
+      final draft = parse('20 euros sur mon compte Livret A');
+      expect(draft.accountId, 31);
+    });
   });
 }

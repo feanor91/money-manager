@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
+import '../models/account.dart';
 import '../models/category.dart';
 import '../models/payee.dart';
 import '../services/voice_entry/voice_transaction_parser.dart';
@@ -21,8 +22,14 @@ import '../services/voice_entry/voice_transaction_parser.dart';
 class VoiceTransactionSheet extends StatefulWidget {
   final List<Payee> payees;
   final List<Category> categories;
+  final List<Account> accounts;
 
-  const VoiceTransactionSheet({super.key, required this.payees, required this.categories});
+  const VoiceTransactionSheet({
+    super.key,
+    required this.payees,
+    required this.categories,
+    required this.accounts,
+  });
 
   @override
   State<VoiceTransactionSheet> createState() => _VoiceTransactionSheetState();
@@ -102,6 +109,7 @@ class _VoiceTransactionSheetState extends State<VoiceTransactionSheet> {
       _transcript,
       payees: widget.payees,
       categories: widget.categories,
+      accounts: widget.accounts,
     );
     Navigator.of(context).pop(draft);
   }

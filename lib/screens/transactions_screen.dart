@@ -401,6 +401,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       builder: (_) => VoiceTransactionSheet(
         payees: repo.getPayees(onlyActive: false),
         categories: repo.getCategories(),
+        accounts: repo.getAccounts(),
       ),
     );
     if (!context.mounted || draft == null) return;
@@ -1114,6 +1115,15 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   late DateTime _date;
   late bool _reconciled;
   late bool _paused;
+  // Guards against the modal bottom sheet's own dismiss animation staying
+  // tappable for its short duration - found 2026-08-06 live-testing on
+  // Android: without this, a couple of impatient taps on "Enregistrer"
+  // before the sheet actually finished closing each ran _save() again in
+  // full, inserting a duplicate transaction per extra tap (the "new
+  // transaction" branch has no id to update against, so every call is a
+  // fresh insert). Never reset back to false - the sheet is on its way out
+  // once this is set, there's nothing to re-enable for.
+  bool _saving = false;
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
 
@@ -1122,7 +1132,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     super.initState();
     final tx = widget.existing;
     final draft = tx == null ? widget.voicePrefill : null;
-    _accountId = tx?.accountId ?? widget.defaultAccountId;
+    _accountId = tx?.accountId ?? draft?.accountId ?? widget.defaultAccountId;
     _toAccountId = tx?.toAccountId;
     _categoryId = tx?.categoryId ?? draft?.categoryId;
     _payeeId = tx?.payeeId ?? draft?.payeeId;
@@ -1336,7 +1346,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                     ),
                   const Spacer(),
                   FilledButton(
-                    onPressed: _save,
+                    onPressed: _saving ? null : _save,
                     child: const Text('Enregistrer'),
                   ),
                 ],
@@ -1349,7 +1359,9 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   }
 
   void _save() {
+    if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
     final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
     final payeeId = isTransfer ? -1 : (_payeeId ?? -1);

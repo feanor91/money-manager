@@ -37,6 +37,40 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Android : "je ne peux pas valider" en saisissant une transaction, +
+  reconnaissance du compte à la voix~~ - **fait (2026-08-06)**. Trois
+  bugs distincts trouvés en testant en direct avec l'utilisateur :
+  1. La fiche transaction restait techniquement tapable pendant sa courte
+     animation de fermeture - quelques taps impatients sur "Enregistrer"
+     avant qu'elle disparaisse vraiment enregistraient chacun une nouvelle
+     transaction (aucun identifiant à mettre à jour pour une nouvelle
+     opération, donc chaque appel est un insert). Un verrou `_saving`
+     désactive le bouton dès le premier tap.
+  2. Plus sérieux : `dashboard_screen.dart` avait sa propre copie de la
+     logique d'ouverture de fiche, restée sur `showModalBottomSheet<CategoryChange?>`
+     - jamais mise à jour quand `TransactionEditorSheet._save` a commencé
+     à retourner un type différent (`TransactionEditorResult`, ajouté avec
+     la synchro de montant vers les récurrentes). Aucune erreur à la
+     compilation (`Navigator.pop`/`showModalBottomSheet` ne sont reliés
+     qu'à l'exécution) : une erreur de cast silencieuse à chaque fermeture,
+     qui empêchait `dbProvider.touch()` de s'exécuter - la transaction
+     s'enregistrait bien en mémoire (d'où "elle est bien là" à l'écran)
+     mais n'atteignait jamais le vrai fichier .mmb. Seulement si le "+" du
+     tableau de bord était utilisé (celui de l'onglet Transactions,
+     insensible à ce bug, a sa propre copie déjà correcte).
+  3. La saisie vocale ne reconnaissait jamais un compte du tout - dire
+     "sur le compte Boursorama" ne changeait rien au compte, "Boursorama"
+     atterrissait dans Tiers (ou Catégorie) à la place, faute de mieux.
+     `parseVoiceTransaction` accepte maintenant la liste des comptes et
+     tente une correspondance - uniquement si le mot "compte" est
+     prononcé quelque part, pour ne jamais confondre un compte avec un
+     tiers du même nom au hasard (exactement ce qui arrivait avant).
+
+  4 nouveaux tests de reconnaissance de compte
+  (`test/voice_entry/voice_transaction_parser_test.dart`).
+  `flutter analyze`/`flutter test` (285)/`flutter build apk --release`/
+  `flutter build web --release` tous vérifiés propres.
+
 - ~~Pause d'une opération du grand livre + synchro montant vers l'opération
   récurrente liée~~ - **fait (2026-08-06)**. Deux demandes distinctes :
   1. Case "En pause" dans la fiche d'une transaction existante - contrairement
