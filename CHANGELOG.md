@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.55] - 2026-08-07
+
+- fix(dashboard): fix double-counted spend and widen the category bar chart
+
 ## [1.0.54] - 2026-08-07
 
 - fix(ci): fix flutter analyze info-level lints that were failing the CI gate
