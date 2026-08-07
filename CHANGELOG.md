@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.65] - 2026-08-07
+
+- feat(nl-query): full database access for the local AI, editable system prompt
+
 ## [1.0.64] - 2026-08-07
 
 - fix(nl-query): answer opérations récurrentes from the bill schedule, not the ledger
