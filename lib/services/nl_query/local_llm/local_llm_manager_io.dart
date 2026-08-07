@@ -298,6 +298,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
     final raw = await engine.ask(question);
     return decodeIntentJson(
       raw,
+      question: question,
       categories: categories,
       accounts: accounts,
       payees: payees,

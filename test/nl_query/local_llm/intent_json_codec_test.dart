@@ -26,13 +26,32 @@ void main() {
     currencyId: 1,
     favorite: true,
   );
-  const accounts = [compteCourant];
+  const livretA = Account(
+    id: 11,
+    name: 'Livret A',
+    type: 'Savings',
+    status: 'Open',
+    initialBalance: 0,
+    currencyId: 1,
+    favorite: false,
+  );
+  const accounts = [compteCourant, livretA];
 
   const carrefour = Payee(id: 20, name: 'Carrefour', active: true);
   const payees = [carrefour];
 
-  ({QueryIntent? intent, bool periodWasExplicit}) decode(String rawResponse) => decodeIntentJson(
+  // Resolution matches against [question] (the user's real words), not the
+  // JSON's own category/account/payee field - see decodeIntentJson's doc
+  // comment. Defaults to text with no real category/account/payee name in
+  // it; individual tests that exercise resolution override it with a
+  // question that actually mentions the name(s) under test.
+  ({QueryIntent? intent, bool periodWasExplicit}) decode(
+    String rawResponse, {
+    String question = 'Combien ai-je dépensé ?',
+  }) =>
+      decodeIntentJson(
         rawResponse,
+        question: question,
         categories: categories,
         accounts: accounts,
         payees: payees,
@@ -55,11 +74,33 @@ void main() {
 
   test('category/account/payee names are resolved against the real lists, not trusted verbatim',
       () {
-    final result = decode('{"kind":"adHoc","period":null,"category":"restaurant",'
-        '"account":"compte courant","metric":"sum","transactionType":"withdrawal","groupBy":"none"}');
+    final result = decode(
+      '{"kind":"adHoc","period":null,"category":"restaurant",'
+      '"account":"compte courant","metric":"sum","transactionType":"withdrawal","groupBy":"none"}',
+      question: 'Combien ai-je dépensé en restaurant sur mon compte courant ?',
+    );
     expect(result.intent!.categoryId, restaurant.id);
     expect(result.intent!.accountId, compteCourant.id);
     expect(result.periodWasExplicit, isFalse);
+  });
+
+  test(
+      'a model-mistranscribed account name still resolves to the account the question actually '
+      'named - regression test for the 2026-08-07 report ("compte Boursorama" answered as a '
+      'completely different account)', () {
+    // The model was asked about "Livret A" but its own "account" field
+    // echoes back the wrong name entirely (as a real small local model did
+    // live) - resolution must still land on Livret A, because it matches
+    // against the question, not this field. The field only signals that
+    // *some* account was mentioned (non-null), which is exactly why an
+    // account this wrong-but-non-empty is still expected to resolve
+    // correctly rather than fail closed.
+    final result = decode(
+      '{"kind":"adHoc","account":"compte courant","metric":"sum","transactionType":"withdrawal",'
+      '"groupBy":"none"}',
+      question: 'Donne moi la somme des opérations récurrentes sur le Livret A',
+    );
+    expect(result.intent!.accountId, livretA.id);
   });
 
   test('a category name the model invents that matches nothing real fails closed, not a guess', () {
@@ -121,7 +162,9 @@ void main() {
 
   test('adHoc with a payee that resolves works normally', () {
     final result = decode(
-        '{"kind":"adHoc","payee":"Carrefour","metric":"sum","transactionType":"withdrawal","groupBy":"none"}');
+      '{"kind":"adHoc","payee":"Carrefour","metric":"sum","transactionType":"withdrawal","groupBy":"none"}',
+      question: 'Combien ai-je dépensé chez Carrefour ?',
+    );
     expect(result.intent!.kind, QueryKind.adHoc);
     expect(result.intent!.payeeId, carrefour.id);
   });
@@ -150,7 +193,10 @@ void main() {
   });
 
   test('balance with an explicit period sets asOf to the end of that period', () {
-    final result = decode('{"kind":"balance","period":"juillet","account":"Compte Courant"}');
+    final result = decode(
+      '{"kind":"balance","period":"juillet","account":"Compte Courant"}',
+      question: 'Quel est le solde de mon compte courant en juillet ?',
+    );
     expect(result.intent!.asOf, DateTime(2026, 7, 31));
   });
 

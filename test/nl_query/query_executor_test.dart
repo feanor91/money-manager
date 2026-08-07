@@ -111,8 +111,10 @@ void main() {
     expect(answer.total, 75);
   });
 
-  test('expenseTotal with recurringOnly only counts transactions linked to a recurring bill', () {
-    final billId = repo.insertBillDeposit(
+  test(
+      'expenseTotal with recurringOnly counts the bill schedule itself, not the ledger - '
+      'regression test for the 2026-08-07 report of a wrong-looking total', () {
+    repo.insertBillDeposit(
       accountId: accountId,
       payeeId: payeeId,
       transCode: TransCode.withdrawal,
@@ -122,17 +124,42 @@ void main() {
       autoExecute: RecurrenceAutoExecute.manual,
       categoryId: alimentationId,
     );
-    final bill = repo.getBillDeposits().firstWhere((b) => b.id == billId);
-    repo.recordBillOccurrence(bill, date: DateTime(2026, 7, 20));
 
-    // Recurring-only: just the bill-linked 15, not the two ad-hoc withdrawals
-    // (40 + 25) already seeded in setUp.
+    // No repo.recordBillOccurrence call - recurringOnly must answer purely
+    // from the schedule, ignoring the two ad-hoc ledger withdrawals (40 +
+    // 25) already seeded in setUp, whether or not the bill has actually
+    // fired in the ledger yet.
     final answer = runQuery(
       QueryIntent(kind: QueryKind.expenseTotal, period: july, recurringOnly: true),
       repo,
     );
     expect(answer.total, 15);
     expect(answer.categoryBreakdown, {alimentationId: 15});
+  });
+
+  test('expenseTotal with recurringOnly and a categoryId has no ledger detail to show', () {
+    repo.insertBillDeposit(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 15,
+      nextOccurrence: DateTime(2026, 7, 20),
+      period: RecurrencePeriod.monthly,
+      autoExecute: RecurrenceAutoExecute.manual,
+      categoryId: alimentationId,
+    );
+
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.expenseTotal,
+        period: july,
+        categoryId: alimentationId,
+        recurringOnly: true,
+      ),
+      repo,
+    );
+    expect(answer.total, 15);
+    expect(answer.transactions, isEmpty); // a schedule occurrence isn't a MoneyTransaction to show
   });
 
   test('expenseByMonth breaks down a category across months, zero-filling months with no spend', () {

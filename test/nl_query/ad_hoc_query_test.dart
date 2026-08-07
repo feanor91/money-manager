@@ -29,8 +29,16 @@ void main() {
 
   List<MapEntry<String, double>> run(QueryIntent intent) {
     final categories = repo.getCategories(onlyActive: false);
-    final built = buildAdHocSql(intent, categories: categories);
-    final rows = repo.db.query(built.sql, built.params);
+    final rows = intent.recurringOnly
+        ? aggregateRecurringScheduleRows(
+            repo.recurringScheduleRows(start: intent.period.start, end: intent.period.end),
+            intent,
+            categories: categories,
+          )
+        : repo.db.query(
+            buildAdHocSql(intent, categories: categories).sql,
+            buildAdHocSql(intent, categories: categories).params,
+          );
     return mapAdHocRows(rows, intent,
         categories: categories, accounts: repo.getAccounts(), payees: repo.getPayees(onlyActive: false));
   }
@@ -148,8 +156,10 @@ void main() {
     expect(result[2].value, 0); // August: no data
   });
 
-  test('recurringOnly only counts transactions linked to a recurring bill', () {
-    final billId = repo.insertBillDeposit(
+  test(
+      'recurringOnly counts the bill schedule itself - never the ledger, even ignoring the '
+      'unrelated real withdrawals already in the ledger from setUp', () {
+    repo.insertBillDeposit(
       accountId: accountId,
       payeeId: carrefourId,
       transCode: TransCode.withdrawal,
@@ -159,11 +169,13 @@ void main() {
       autoExecute: RecurrenceAutoExecute.manual,
       categoryId: alimentationId,
     );
-    final bill = repo.getBillDeposits().firstWhere((b) => b.id == billId);
-    repo.recordBillOccurrence(bill, date: DateTime(2026, 7, 20));
 
+    // No repo.recordBillOccurrence call here on purpose - 2026-08-07
+    // decision: recurringOnly must answer purely from the schedule, so the
+    // bill's own scheduled amount counts here whether or not anything's
+    // actually been recorded in the ledger for it yet.
     final result = run(adHoc(recurringOnly: true));
-    expect(result.single.value, 12); // only the bill-linked transaction
+    expect(result.single.value, 12); // only the bill's own scheduled amount
   });
 
   test('transactionType: any includes transfers, unlike the 3 specific values', () {

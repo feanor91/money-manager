@@ -38,6 +38,25 @@ courses, pas des engagements.
 ## Récemment fait
 
 - ~~Vérification de mise à jour avant le code PIN~~ - **fait (2026-08-07)**.
+  Bug de régression trouvé le jour même : la vérification ne se déclenchait
+  plus du tout (ni desktop ni Android) car elle s'appuyait sur un Navigator
+  qui n'existe qu'une fois déverrouillé - corrigé en la déclenchant depuis
+  l'écran de sélection de base/PIN lui-même.
+- ~~Question en langage naturel "somme des opérations récurrentes" fausse~~
+  - **fait (2026-08-07)**. Deux bugs distincts trouvés en testant "Donne moi
+  la somme des opérations récurrentes sur le compte Boursorama" sur
+  desktop : (1) le petit modèle local (Qwen2.5) recopiait parfois mal le
+  nom du compte dans son propre JSON - la réponse portait sur "Crédit
+  Agricole Compte commun" au lieu de "Boursorama" ; corrigé en résolvant
+  compte/catégorie/tiers sur le texte réel de la question plutôt que sur le
+  champ recopié par le modèle. (2) "opérations récurrentes" comptait les
+  opérations déjà enregistrées dans le grand livre et liées à une
+  récurrence, pas le calendrier des opérations récurrentes lui-même -
+  changé pour répondre uniquement à partir du calendrier (BILLSDEPOSITS),
+  comme la page "Opérations récurrentes" et le "Prévu" du tableau de bord.
+- ~~Totaux (dépenses/revenus/différence) sur la page "Opérations
+  récurrentes"~~ - **fait (2026-08-07)**, affichés uniquement quand un seul
+  compte est sélectionné.
   Se déclenchait auparavant seulement une fois `HomeShell` affiché - donc
   après un déverrouillage complet. Déplacée dans `app.dart`'s `_PinGate`,
   dès que l'écran de choix de fichier/code PIN apparaît. Ajout d'une

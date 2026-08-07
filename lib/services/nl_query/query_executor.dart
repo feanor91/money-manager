@@ -107,23 +107,26 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
           for (final c in categories)
             if (c.parentId == intent.categoryId) c.id,
         ];
-        // No cap the user can actually control exists for this detail list
-        // (unlike QueryKind.topExpenses' own explicit topN) - showing only
-        // the biggest 5 by default made the number above look backed by
-        // less than it really was. 500 is a safety ceiling against a truly
-        // extreme query, not a real-world limit: comfortably above what a
-        // single category+account+period realistically produces.
-        var transactions = repo.transactionsForCategories(
-          categoryIds,
-          intent.period.start,
-          intent.period.end,
-          accountId: intent.accountId,
-          limit: 500,
-        );
-        if (intent.recurringOnly) {
-          final recurringIds = repo.recurringTransactionIds();
-          transactions = transactions.where((t) => recurringIds.contains(t.id)).toList();
-        }
+        // recurringOnly's total now comes from the bill schedule itself
+        // (see recurringCategorySpendForPeriod), which has no
+        // MoneyTransaction to show as backing detail - the answer stands on
+        // its own number, same as QueryKind.balance/incomeVsExpense already
+        // do with no detail list. Otherwise: no cap the user can actually
+        // control exists for this detail list (unlike QueryKind.topExpenses'
+        // own explicit topN) - showing only the biggest 5 by default made
+        // the number above look backed by less than it really was. 500 is a
+        // safety ceiling against a truly extreme query, not a real-world
+        // limit: comfortably above what a single category+account+period
+        // realistically produces.
+        final transactions = intent.recurringOnly
+            ? const <MoneyTransaction>[]
+            : repo.transactionsForCategories(
+                categoryIds,
+                intent.period.start,
+                intent.period.end,
+                accountId: intent.accountId,
+                limit: 500,
+              );
         return QueryAnswer(
           total: rolledUpSpend(intent.categoryId!, totals, categories),
           transactions: transactions,
@@ -145,8 +148,20 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
 
     case QueryKind.adHoc:
       final categories = repo.getCategories(onlyActive: false);
-      final built = buildAdHocSql(intent, categories: categories);
-      final rows = repo.db.query(built.sql, built.params);
+      // recurringOnly answers from the bill schedule itself, never the
+      // ledger - see MmexRepository.recurringScheduleRows/
+      // aggregateRecurringScheduleRows's doc comments.
+      List<Map<String, Object?>> rows;
+      if (intent.recurringOnly) {
+        rows = aggregateRecurringScheduleRows(
+          repo.recurringScheduleRows(start: intent.period.start, end: intent.period.end),
+          intent,
+          categories: categories,
+        );
+      } else {
+        final built = buildAdHocSql(intent, categories: categories);
+        rows = repo.db.query(built.sql, built.params);
+      }
       return QueryAnswer(
         adHocResult: mapAdHocRows(
           rows,

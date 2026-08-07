@@ -25,6 +25,7 @@ import '../query_intent.dart';
 /// didn't understand" message) rather than acting on a half-broken guess.
 ({QueryIntent? intent, bool periodWasExplicit}) decodeIntentJson(
   String rawResponse, {
+  required String question,
   required List<Category> categories,
   required List<Account> accounts,
   required List<Payee> payees,
@@ -50,9 +51,23 @@ import '../query_intent.dart';
   final period = explicitPeriod ?? currentMonthRange(now: now);
   final periodWasExplicit = explicitPeriod != null;
 
-  int? resolveName(String? name, Iterable<MapEntry<int, String>> candidates) {
-    if (name == null || name.trim().isEmpty) return null;
-    return bestNameMatch(foldDiacritics(name), candidates);
+  // Matched against the full original [question], not the model's own
+  // "account"/"category"/"payee" field - found 2026-08-07 answering a
+  // completely different account than the one actually asked about
+  // ("compte Boursorama" answered as "Crédit Agricole Compte commun"):
+  // the small on-device model can mis-copy the name it's supposed to be
+  // quoting verbatim (see _systemPrompt's "recopie seulement ce que dit
+  // la question"), and bestNameMatch happily resolves whatever it *did*
+  // write to a real, but wrong, account. The field is still used as the
+  // signal for *whether* a name was mentioned at all (a null field means
+  // no filter, even if some unrelated word in the question happens to
+  // collide with a real name) - only the text actually searched for a
+  // match changes, to the one source the model can't have transcribed
+  // wrong: the user's own words.
+  final foldedQuestion = foldDiacritics(question);
+  int? resolveName(String? mentioned, Iterable<MapEntry<int, String>> candidates) {
+    if (mentioned == null || mentioned.trim().isEmpty) return null;
+    return bestNameMatch(foldedQuestion, candidates);
   }
 
   final categoryId = resolveName(json['category'] as String?, categories.map((c) => MapEntry(c.id, c.name)));

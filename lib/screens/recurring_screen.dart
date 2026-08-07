@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../data/mmex_repository.dart';
 import '../models/bill_deposit.dart';
 import '../models/category.dart';
+import '../models/currency.dart';
 import '../models/payee.dart';
 import '../models/recurrence.dart';
 import '../models/transaction.dart';
@@ -110,6 +111,11 @@ class _RecurringScreenState extends State<RecurringScreen> {
                 onChanged: (v) => setState(() => _searchQuery = v),
               ),
             ),
+            // Only when scoped to a single account - a "total" across every
+            // account mixed together isn't a meaningful number (different
+            // currencies/purposes), and the user explicitly asked for this
+            // to stay off the "tous les comptes" view (2026-08-07).
+            if (_accountFilter != null) _RecurringTotalsBar(bills: bills, currency: currency),
             Expanded(
               child: bills.isEmpty
                   ? const Center(child: Text('Aucune opération récurrente'))
@@ -244,6 +250,70 @@ class _RecurringScreenState extends State<RecurringScreen> {
         change: categoryChange,
       );
     }
+  }
+}
+
+/// Dépenses / Revenus / Différence for the currently visible (account +
+/// search filtered) recurring operations - only shown when scoped to a
+/// single account (see [_RecurringScreenState.build]). Paused operations
+/// are excluded, same as everywhere else a total/forecast is derived from
+/// this schedule (paused explicitly means "excluded from ... the
+/// prévisionnel" per its own checkbox tooltip). A transfer is treated the
+/// same simplified way the list's own per-row amount already is (negative,
+/// regardless of which side of the transfer this account is on) - not a
+/// new inconsistency, just not fixed here either.
+class _RecurringTotalsBar extends StatelessWidget {
+  final List<BillDeposit> bills;
+  final CurrencyFormat? currency;
+
+  const _RecurringTotalsBar({required this.bills, required this.currency});
+
+  @override
+  Widget build(BuildContext context) {
+    var expense = 0.0;
+    var income = 0.0;
+    for (final bill in bills) {
+      if (bill.paused) continue;
+      final signed = bill.transCode == TransCode.deposit ? bill.amount : -bill.amount;
+      if (signed >= 0) {
+        income += signed;
+      } else {
+        expense += -signed;
+      }
+    }
+    final diff = income - expense;
+    String format(double value) => currency?.format(value) ?? value.toStringAsFixed(2);
+
+    Widget stat(String label, double value, Color color) => Expanded(
+          child: Column(
+            children: [
+              Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+              const SizedBox(height: 2),
+              Text(
+                format(value),
+                style: TextStyle(fontWeight: FontWeight.w700, color: color),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+          child: Row(
+            children: [
+              stat('Dépenses', expense, AppTheme.negative),
+              stat('Revenus', income, AppTheme.positive),
+              stat('Différence', diff, diff >= 0 ? AppTheme.positive : AppTheme.negative),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

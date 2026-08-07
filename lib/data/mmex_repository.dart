@@ -1123,6 +1123,49 @@ class MmexRepository {
     return result;
   }
 
+  /// Every individual recurring-bill occurrence within [start, end)
+  /// (half-open, matching every other period-based query here) as a plain
+  /// filterable/groupable row - the "opérations récurrentes" schedule
+  /// itself (BILLSDEPOSITS_V1), never the ledger. See
+  /// [recurringCategorySpendForPeriod]/ad_hoc_query.dart for why: an
+  /// explicit 2026-08-07 decision that "opérations récurrentes" questions
+  /// must answer purely from the schedule, matching the "Opérations
+  /// récurrentes" screen and the dashboard's own "Prévu" figures, never
+  /// mixed with what's separately been recorded in the ledger. Paused
+  /// bills are excluded, same as every other recurring-projection method
+  /// here. Unlike [recurringOccurrencesInRange] (signed net amount, transfer-
+  /// aware, built for the forecast chart), this keeps each bill's raw
+  /// [BillDeposit.amount] (always positive) and [BillDeposit.transCode]
+  /// separate - mirrors CHECKINGACCOUNT_V1's own TRANSAMOUNT/TRANSCODE
+  /// shape, so ad_hoc_query.dart's filter/group/metric logic applies
+  /// identically to either source. Only ever matches a bill by its
+  /// [BillDeposit.accountId] (the transfer's *source* side), never
+  /// [BillDeposit.toAccountId] either - same convention the ledger-based
+  /// queries use (a transfer is one CHECKINGACCOUNT_V1 row, matched by
+  /// ACCOUNTID only), so filtering by account behaves identically
+  /// regardless of which source a query ends up reading from.
+  List<RecurringScheduleRow> recurringScheduleRows({
+    required DateTime start,
+    required DateTime end,
+  }) {
+    final inclusiveEnd = _addDays(end, -1);
+    final result = <RecurringScheduleRow>[];
+    for (final bill in getBillDeposits()) {
+      if (bill.paused) continue;
+      for (final occurrence in _occurrencesInRange(bill, start, inclusiveEnd)) {
+        result.add(RecurringScheduleRow(
+          accountId: bill.accountId,
+          categoryId: bill.categoryId,
+          payeeId: bill.payeeId,
+          transCode: bill.transCode,
+          amount: bill.amount,
+          date: occurrence,
+        ));
+      }
+    }
+    return result;
+  }
+
   double _billSignedAmount(BillDeposit bill, int? accountId) {
     if (bill.transCode == TransCode.deposit) return bill.amount;
     if (bill.transCode == TransCode.withdrawal) return -bill.amount;
@@ -1174,42 +1217,26 @@ class MmexRepository {
     return totals;
   }
 
-  /// Same filters as [categorySpendForPeriod], restricted to transactions
-  /// actually linked to a recurring bill (see [recurringTransactionIds]/
-  /// APP_TRANSACTION_BILL_LINKS in [ensureAppSchema]) - the "dépenses
-  /// récurrentes" natural-language question (QueryKind.expenseTotal with
-  /// recurringOnly). Deliberately reads real recorded transactions rather
-  /// than projecting from the bill *definitions* like [recurringCategoryNet]
-  /// does: for a closed past period, what was actually recorded is the
-  /// honest answer, and can legitimately differ from the schedule (a bill
-  /// paused mid-period, a catch-up recorded off its original date, an
-  /// amount edited after the fact, ...).
+  /// Same shape as [categorySpendForPeriod] restricted to withdrawals, but
+  /// computed from the recurring bill *schedule* itself
+  /// ([recurringScheduleRows]/BILLSDEPOSITS_V1) - the "dépenses récurrentes"
+  /// natural-language question (QueryKind.expenseTotal/QueryKind.adHoc with
+  /// recurringOnly). Explicit 2026-08-07 decision (reversing an earlier
+  /// "read what was actually recorded in the ledger" design, after that
+  /// answered a completely different, wrong-looking total than the
+  /// "Opérations récurrentes" screen for the same account/period): this
+  /// must match that screen and the dashboard's own "Prévu" figures
+  /// exactly, with nothing from the ledger mixed in - a bill not yet due
+  /// this period still counts here, the same way it already does there.
   Map<int, double> recurringCategorySpendForPeriod(DateTime start, DateTime end,
       {int? accountId}) {
-    final where = <String>[
-      "c.TRANSDATE >= ?",
-      "c.TRANSDATE < ?",
-      "c.TRANSCODE = 'Withdrawal'",
-      "UPPER(TRIM(c.STATUS)) != 'V'",
-      "(c.DELETEDTIME IS NULL OR c.DELETEDTIME = '')",
-    ];
-    final params = <Object?>[_isoDate(start), _isoDate(end)];
-    if (accountId != null) {
-      where.add('c.ACCOUNTID = ?');
-      params.add(accountId);
-    }
-    final rows = db.query(
-      'SELECT c.CATEGID, c.TRANSAMOUNT FROM CHECKINGACCOUNT_V1 c '
-      'JOIN APP_TRANSACTION_BILL_LINKS l ON l.TRANSID = c.TRANSID '
-      'WHERE ${where.join(' AND ')}',
-      params,
-    );
     final totals = <int, double>{};
-    for (final row in rows) {
-      final categId = row['CATEGID'] as int?;
+    for (final row in recurringScheduleRows(start: start, end: end)) {
+      if (row.transCode != TransCode.withdrawal) continue;
+      if (accountId != null && row.accountId != accountId) continue;
+      final categId = row.categoryId;
       if (categId == null) continue;
-      final amount = (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
-      totals[categId] = (totals[categId] ?? 0) + amount;
+      totals[categId] = (totals[categId] ?? 0) + row.amount;
     }
     return totals;
   }
@@ -2354,6 +2381,27 @@ class RecurringOccurrence {
   final double signedAmount;
 
   RecurringOccurrence({required this.date, required this.label, required this.signedAmount});
+}
+
+/// One occurrence of a recurring bill, shaped like a CHECKINGACCOUNT_V1 row
+/// (unsigned [amount] + [transCode], not a net-signed figure) - see
+/// [MmexRepository.recurringScheduleRows].
+class RecurringScheduleRow {
+  final int accountId;
+  final int? categoryId;
+  final int payeeId;
+  final TransCode transCode;
+  final double amount;
+  final DateTime date;
+
+  RecurringScheduleRow({
+    required this.accountId,
+    required this.categoryId,
+    required this.payeeId,
+    required this.transCode,
+    required this.amount,
+    required this.date,
+  });
 }
 
 /// Result of walking a [BillDeposit]'s schedule forward - see

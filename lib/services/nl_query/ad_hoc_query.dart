@@ -1,22 +1,32 @@
 import 'package:intl/intl.dart';
 
+import '../../data/mmex_repository.dart';
 import '../../models/account.dart';
 import '../../models/category.dart';
 import '../../models/payee.dart';
+import '../../models/transaction.dart';
 import 'query_intent.dart';
 
 String _isoDate(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
 /// Builds the parameterized SQL for a [QueryKind.adHoc] intent - mirrors
-/// MmexRepository.categorySpendForPeriod/recurringCategorySpendForPeriod's
-/// base WHERE/JOIN pattern (voided/soft-deleted exclusion, the
-/// APP_TRANSACTION_BILL_LINKS join for recurringOnly), generalized across
-/// any metric/transactionType/groupBy combination. Every value the model
-/// could have influenced (category/account/payee names, period text) was
-/// already resolved to a real id/DateTime by decodeIntentJson before this
-/// ever runs - only validated ids/enums reach here, and this only ever
-/// emits a SELECT.
+/// MmexRepository.categorySpendForPeriod's base WHERE pattern (voided/
+/// soft-deleted exclusion), generalized across any
+/// metric/transactionType/groupBy combination. Every value the model could
+/// have influenced (category/account/payee names, period text) was already
+/// resolved to a real id/DateTime by decodeIntentJson before this ever
+/// runs - only validated ids/enums reach here, and this only ever emits a
+/// SELECT.
+///
+/// **Never called when [QueryIntent.recurringOnly] is set** - see
+/// [aggregateRecurringScheduleRows] instead, called directly from
+/// query_executor.dart. Queries the ledger (CHECKINGACCOUNT_V1) only;
+/// "opérations récurrentes" questions must answer from the bill schedule
+/// itself instead (2026-08-07 decision - see
+/// MmexRepository.recurringCategorySpendForPeriod's doc comment for why),
+/// which this function has no way to express as SQL against a table that
+/// doesn't exist as such.
 ///
 /// [groupBy]'s column can't be a bound `?` parameter (SQL doesn't allow
 /// parameterizing an identifier) - safe regardless, because the only thing
@@ -36,6 +46,7 @@ String _isoDate(DateTime date) =>
         'QueryKind.adHoc requires adHocMetric/adHocTransactionType/adHocGroupBy - '
         'decodeIntentJson never produces this kind without all three.');
   }
+  assert(!intent.recurringOnly, 'recurringOnly must use aggregateRecurringScheduleRows instead');
 
   final where = <String>[
     'c.TRANSDATE >= ?',
@@ -80,10 +91,7 @@ String _isoDate(DateTime date) =>
     params.addAll(ids);
   }
 
-  var from = 'CHECKINGACCOUNT_V1 c';
-  if (intent.recurringOnly) {
-    from += ' JOIN APP_TRANSACTION_BILL_LINKS l ON l.TRANSID = c.TRANSID';
-  }
+  const from = 'CHECKINGACCOUNT_V1 c';
 
   final metricSql = switch (metric) {
     AdHocMetric.sum => 'SUM(c.TRANSAMOUNT)',
@@ -123,6 +131,102 @@ String _isoDate(DateTime date) =>
     }
   }
   return (sql: sql, params: params);
+}
+
+/// [QueryIntent.recurringOnly] counterpart to [buildAdHocSql]: filters and
+/// aggregates [rows] (the bill *schedule*, from
+/// MmexRepository.recurringScheduleRows - already restricted to
+/// [QueryIntent.period] by the caller, same as the SQL path's own
+/// TRANSDATE bounds) instead of building SQL against the ledger. Produces
+/// rows in the exact same `{'bucket': ..., 'value': ...}` / `{'value': ...}`
+/// shape [buildAdHocSql]'s SQL would, so [mapAdHocRows] - the
+/// labeling/month-zero-fill/ordering logic - applies identically regardless
+/// of which source answered the question.
+List<Map<String, Object?>> aggregateRecurringScheduleRows(
+  List<RecurringScheduleRow> rows,
+  QueryIntent intent, {
+  required List<Category> categories,
+}) {
+  final metric = intent.adHocMetric;
+  final transactionType = intent.adHocTransactionType;
+  final groupBy = intent.adHocGroupBy;
+  if (metric == null || transactionType == null || groupBy == null) {
+    throw ArgumentError(
+        'QueryKind.adHoc requires adHocMetric/adHocTransactionType/adHocGroupBy - '
+        'decodeIntentJson never produces this kind without all three.');
+  }
+
+  List<int>? categoryIds;
+  if (intent.categoryId != null) {
+    categoryIds = [
+      intent.categoryId!,
+      for (final c in categories)
+        if (c.parentId == intent.categoryId) c.id,
+    ];
+  }
+
+  bool matchesType(RecurringScheduleRow r) => switch (transactionType) {
+        AdHocTransactionType.withdrawal => r.transCode == TransCode.withdrawal,
+        AdHocTransactionType.deposit => r.transCode == TransCode.deposit,
+        AdHocTransactionType.transfer => r.transCode == TransCode.transfer,
+        AdHocTransactionType.any => true,
+      };
+
+  final filtered = rows.where((r) {
+    if (!matchesType(r)) return false;
+    if (intent.accountId != null && r.accountId != intent.accountId) return false;
+    if (intent.payeeId != null && r.payeeId != intent.payeeId) return false;
+    if (categoryIds != null && !categoryIds.contains(r.categoryId)) return false;
+    return true;
+  }).toList();
+
+  double aggregate(List<RecurringScheduleRow> group) => switch (metric) {
+        AdHocMetric.sum => group.fold(0.0, (a, r) => a + r.amount),
+        AdHocMetric.count => group.length.toDouble(),
+        AdHocMetric.average =>
+          group.isEmpty ? 0.0 : group.fold(0.0, (a, r) => a + r.amount) / group.length,
+      };
+
+  if (groupBy == AdHocGroupBy.none) {
+    return [
+      {'value': aggregate(filtered)}
+    ];
+  }
+
+  Object? bucketFor(RecurringScheduleRow r) => switch (groupBy) {
+        AdHocGroupBy.none => throw StateError('handled above'),
+        AdHocGroupBy.category => r.categoryId,
+        AdHocGroupBy.payee => r.payeeId,
+        AdHocGroupBy.account => r.accountId,
+        AdHocGroupBy.month =>
+          '${r.date.year.toString().padLeft(4, '0')}-${r.date.month.toString().padLeft(2, '0')}',
+      };
+
+  // Drop the null-bucket rows (uncategorized bills) - matches
+  // buildAdHocSql's "$groupColumn IS NOT NULL". payeeId/accountId are never
+  // null on a BillDeposit so this only ever trims category buckets.
+  final buckets = <Object, List<RecurringScheduleRow>>{};
+  for (final r in filtered) {
+    final bucket = bucketFor(r);
+    if (bucket == null) continue;
+    buckets.putIfAbsent(bucket, () => []).add(r);
+  }
+
+  var result = [
+    for (final entry in buckets.entries) {'bucket': entry.key, 'value': aggregate(entry.value)},
+  ];
+
+  if (groupBy == AdHocGroupBy.month) {
+    // Chronological - mapAdHocRows zero-fills/orders month buckets itself,
+    // matching buildAdHocSql's own "ORDER BY bucket ASC" contract.
+    result.sort((a, b) => (a['bucket'] as String).compareTo(b['bucket'] as String));
+  } else {
+    result.sort((a, b) => (b['value'] as double).compareTo(a['value'] as double));
+    if (intent.adHocLimit != null) {
+      result = result.take(intent.adHocLimit!).toList();
+    }
+  }
+  return result;
 }
 
 /// Turns raw rows (as returned by running [buildAdHocSql]'s query) into the
