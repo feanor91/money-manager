@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.54] - 2026-08-07
+
+- fix(ci): fix flutter analyze info-level lints that were failing the CI gate
+- fix(forms): accept comma as decimal separator in every amount field
+- feat(dashboard): add spent-vs-planned bar chart, toggleable with forecast
+- feat(recurring): add amount field to record-occurrence dialog
+
 ## [1.0.53] - 2026-08-06
 
 - feat(ledger): pause a transaction, sync amount edits to linked bill
