@@ -4,7 +4,9 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../models/account.dart';
 import '../models/category.dart';
 import '../models/payee.dart';
+import '../models/transaction.dart' show TransCode;
 import '../services/voice_entry/voice_transaction_parser.dart';
+import '../utils/list_utils.dart' show findById;
 
 /// Captures one spoken sentence and turns it into a [VoiceTransactionDraft]
 /// via [parseVoiceTransaction] - Android only (see transactions_screen.dart's
@@ -117,6 +119,16 @@ class _VoiceTransactionSheetState extends State<VoiceTransactionSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Live preview of what parseVoiceTransaction actually understood -
+    // added 2026-08-07 after a report that the recognized account never
+    // made it into the transaction, to show right here whether the miss is
+    // in parsing itself or somewhere after (TransactionEditorSheet's own
+    // prefill) - and useful in its own right either way, catching a
+    // misheard payee/compte before opening the full form instead of after.
+    final draft = _transcript.isEmpty
+        ? null
+        : parseVoiceTransaction(_transcript,
+            payees: widget.payees, categories: widget.categories, accounts: widget.accounts);
     return Padding(
       padding: EdgeInsets.only(
         left: 20,
@@ -182,6 +194,15 @@ class _VoiceTransactionSheetState extends State<VoiceTransactionSheet> {
                     : null,
               ),
             ),
+            if (draft != null) ...[
+              const SizedBox(height: 8),
+              _ParsedPreview(
+                draft: draft,
+                payees: widget.payees,
+                categories: widget.categories,
+                accounts: widget.accounts,
+              ),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
@@ -203,6 +224,60 @@ class _VoiceTransactionSheetState extends State<VoiceTransactionSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Shows the transcript's *interpretation*, not just its raw text - lets a
+/// misheard payee/compte be caught right here instead of only surfacing
+/// once the full form is already open (or not surfacing at all, which is
+/// what a silent parsing miss looked like before this existed).
+class _ParsedPreview extends StatelessWidget {
+  final VoiceTransactionDraft draft;
+  final List<Payee> payees;
+  final List<Category> categories;
+  final List<Account> accounts;
+
+  const _ParsedPreview({
+    required this.draft,
+    required this.payees,
+    required this.categories,
+    required this.accounts,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final payeeName = findById(payees, draft.payeeId, (p) => p.id)?.name;
+    final categoryName = findById(categories, draft.categoryId, (c) => c.id)?.name;
+    final accountName = findById(accounts, draft.accountId, (a) => a.id)?.name;
+
+    final mainParts = <String>[
+      if (draft.amount != null)
+        '${draft.transCode == TransCode.deposit ? '+' : '-'}${draft.amount!.toStringAsFixed(2)} €',
+      if (payeeName != null) 'chez $payeeName',
+      if (categoryName != null) '($categoryName)',
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (mainParts.isNotEmpty)
+          Text(
+            'Compris : ${mainParts.join(' ')}',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        Text(
+          accountName != null ? 'Compte reconnu : $accountName' : 'Compte : inchangé',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: accountName != null
+                ? theme.colorScheme.primary
+                : theme.colorScheme.onSurfaceVariant,
+            fontWeight: accountName != null ? FontWeight.w600 : null,
+          ),
+        ),
+      ],
     );
   }
 }

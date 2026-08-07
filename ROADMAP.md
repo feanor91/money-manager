@@ -37,6 +37,26 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Reconnaissance du compte vocal : toujours en échec malgré deux
+  correctifs~~ - **en cours de diagnostic (2026-08-07)**. Le mot par mot
+  (voir entrée précédente) a été vérifié correct par deux tests distincts
+  reproduisant exactement la phrase et les comptes réels de l'utilisateur
+  ("35 euros sur le compte boursorama perso chez carrefour alimentation"
+  → résout bien le bon compte, en isolation ET via `TransactionEditorSheet`
+  au complet) - pourtant en conditions réelles sur le téléphone, la fiche
+  s'ouvre toujours sur le compte par défaut. Cause encore non identifiée :
+  soit le texte réellement transcrit diffère de ce que l'utilisateur croit
+  avoir dit/vu, soit un écart entre le comportement testé et l'appareil
+  réel. Ajouté en attendant : un aperçu visible dans l'écran de dictée
+  ("Compris : ... / Compte reconnu : ...") montrant exactement ce que
+  `parseVoiceTransaction` a compris, avant même d'ouvrir la fiche - sert
+  à la fois de diagnostic (isole si le problème est dans l'analyse ou
+  après) et de fonctionnalité utile en soi (repérer une mauvaise
+  reconnaissance tout de suite plutôt qu'après coup).
+
+  `flutter analyze`/`flutter test` (287)/`flutter build apk --release`
+  tous vérifiés propres.
+
 - ~~Reconnaissance vocale du compte : toujours en échec malgré le premier
   correctif~~ - **fait (2026-08-07)**. Cause réelle : le premier correctif
   (voir entrée précédente) exigeait une correspondance exacte du nom
