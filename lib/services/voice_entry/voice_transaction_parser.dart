@@ -93,9 +93,12 @@ VoiceTransactionDraft parseVoiceTransaction(
   // too easy to confuse with a similarly-named payee ("sur le compte
   // Boursorama" needs to win over a "Boursorama" payee that may also
   // exist, exactly what happened without this gate - the account was
-  // never touched and "Boursorama" landed in Tiers instead).
+  // never touched and "Boursorama" landed in Tiers instead). Word-overlap,
+  // not bestNameMatch's exact whole-name match - found the same day that
+  // real account names are routinely multi-word ("Boursorama perso",
+  // "Crédit Agricole compte commun"), which nobody says in full out loud.
   final accountId = RegExp(r'\bcompte\b').hasMatch(text)
-      ? bestNameMatch(text, accounts.map((a) => MapEntry(a.id, a.name)))
+      ? _bestAccountWordMatch(text, accounts)
       : null;
 
   return VoiceTransactionDraft(
@@ -107,6 +110,45 @@ VoiceTransactionDraft parseVoiceTransaction(
     accountId: accountId,
     notes: amount == null ? transcript : null,
   );
+}
+
+// Excluded from account-name scoring below: "compte" is the gate word
+// itself (already guaranteed present) and would otherwise favor every
+// account whose own name happens to contain it too ("Crédit Agricole
+// *compte* commun") without actually distinguishing anything; the rest are
+// French articles/possessives too generic to mean anything on their own.
+const _accountStopWords = {'compte', 'de', 'du', 'des', 'la', 'le', 'les', 'mon', 'ma', 'mes'};
+
+/// Which account best matches [text], by how many of *that account's own*
+/// significant words (see [_accountStopWords]) show up as whole words in
+/// [text] - not [bestNameMatch]'s exact whole-name match, which real
+/// multi-word account names ("Boursorama perso") essentially never satisfy
+/// from natural speech. Returns null - never a guess - when the best score
+/// is shared by more than one account (e.g. "compte crédit agricole" alone,
+/// with both a "...compte commun" and a "...CODEVI" account, neither
+/// mentioned specifically enough to break the tie).
+int? _bestAccountWordMatch(String text, List<Account> accounts) {
+  var bestScore = 0;
+  int? bestId;
+  var tie = false;
+  for (final account in accounts) {
+    final words = foldDiacritics(account.name)
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((w) => w.length >= 3 && !_accountStopWords.contains(w));
+    var score = 0;
+    for (final word in words) {
+      if (RegExp('\\b$word\\b').hasMatch(text)) score++;
+    }
+    if (score == 0) continue;
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = account.id;
+      tie = false;
+    } else if (score == bestScore) {
+      tie = true;
+    }
+  }
+  return tie ? null : bestId;
 }
 
 DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);

@@ -37,6 +37,30 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Reconnaissance vocale du compte : toujours en échec malgré le premier
+  correctif~~ - **fait (2026-08-07)**. Cause réelle : le premier correctif
+  (voir entrée précédente) exigeait une correspondance exacte du nom
+  complet du compte - mais les vrais comptes de l'utilisateur sont
+  composés de plusieurs mots ("Boursorama Perso", "Crédit Agricole
+  Compte Commun"), que personne ne prononce en entier à l'oral.
+  Remplacé par une correspondance mot par mot : le compte dont le plus
+  de mots significatifs (hors "compte" et les articles/possessifs)
+  apparaissent dans la phrase l'emporte - et en cas d'égalité entre deux
+  comptes (ex. "compte crédit agricole" tout seul, avec un compte
+  "...Compte Commun" et un "...Codevi" existants) reste `null` plutôt
+  que de deviner au hasard. 2 nouveaux tests pour ce cas d'égalité.
+
+- ~~Bannière de conflit WebDAV : aucun retour visible après avoir tapé
+  "Résoudre"~~ - **fait (2026-08-07)**. La vérification télécharge
+  réellement la version distante pour comparer - un vrai temps réseau,
+  sans rien à l'écran pour l'indiquer. Un spinner plein écran bloque
+  maintenant l'interface le temps de cette vérification, jusqu'à ce que
+  la boîte de dialogue de choix apparaisse ou que la résolution
+  silencieuse (versions identiques) se termine.
+
+  `flutter analyze`/`flutter test` (287)/`flutter build apk --release`
+  tous vérifiés propres.
+
 - ~~Android : "je ne peux pas valider" en saisissant une transaction, +
   reconnaissance du compte à la voix~~ - **fait (2026-08-06)**. Trois
   bugs distincts trouvés en testant en direct avec l'utilisateur :

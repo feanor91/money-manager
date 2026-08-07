@@ -20,8 +20,20 @@ Future<void> handleWebDavSyncTap(BuildContext context) async {
     case SyncStatus.syncing:
       break;
     case SyncStatus.conflictPending:
+      // prepareConflictResolution downloads the remote copy to actually
+      // compare it - real network time, with nothing else on screen
+      // changing in the meantime. Without this, tapping "Résoudre" looked
+      // exactly like nothing had happened until it finished (found
+      // 2026-08-07 live-testing) - a blocking spinner at least confirms
+      // something is happening, even though the wait itself is unchanged.
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()),
+      );
       final info = await dbProvider.prepareConflictResolution();
       if (!context.mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
       if (info == null) {
         // Two different reasons this can come back empty - tell them apart
         // rather than silently doing nothing either way, which is exactly

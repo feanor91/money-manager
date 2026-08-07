@@ -18,9 +18,14 @@ void main() {
   const employeur = Payee(id: 21, name: 'Mon Employeur', active: true);
   const payees = [carrefour, employeur];
 
+  // Deliberately multi-word, matching how real accounts actually get named
+  // in this app (confirmed 2026-08-07 by the user's own real account
+  // names) - nobody says a full "Boursorama Perso" or "Crédit Agricole
+  // Compte Commun" out loud, which is exactly what broke the first version
+  // of this feature (an exact whole-name match via bestNameMatch).
   const boursorama = Account(
     id: 30,
-    name: 'Boursorama',
+    name: 'Boursorama Perso',
     type: 'Checking',
     status: 'Open',
     initialBalance: 0,
@@ -36,7 +41,25 @@ void main() {
     currencyId: 1,
     favorite: false,
   );
-  const accounts = [boursorama, livretA];
+  const caCommun = Account(
+    id: 32,
+    name: 'Crédit Agricole Compte Commun',
+    type: 'Checking',
+    status: 'Open',
+    initialBalance: 0,
+    currencyId: 1,
+    favorite: false,
+  );
+  const caCodevi = Account(
+    id: 33,
+    name: 'Crédit Agricole Codevi',
+    type: 'Savings',
+    status: 'Open',
+    initialBalance: 0,
+    currencyId: 1,
+    favorite: false,
+  );
+  const accounts = [boursorama, livretA, caCommun, caCodevi];
 
   VoiceTransactionDraft parse(String transcript, {List<Account> withAccounts = accounts}) =>
       parseVoiceTransaction(
@@ -150,6 +173,18 @@ void main() {
     test('matches "Livret A" too, not just the first account in the list', () {
       final draft = parse('20 euros sur mon compte Livret A');
       expect(draft.accountId, 31);
+    });
+
+    test('a distinguishing word breaks the tie between two similarly-named '
+        'accounts', () {
+      final draft = parse('30 euros sur le compte crédit agricole commun');
+      expect(draft.accountId, 32); // "...Compte Commun", not "...Codevi"
+    });
+
+    test('two accounts scoring equally (nothing distinguishing mentioned) '
+        'leaves accountId null rather than guessing which one', () {
+      final draft = parse('30 euros sur le compte crédit agricole');
+      expect(draft.accountId, isNull);
     });
   });
 }
