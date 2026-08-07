@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.60] - 2026-08-07
+
+- fix(voice): don't let an already-matched account word also win payee
+
 ## [1.0.59] - 2026-08-07
 
 - fix(voice): exclude hidden accounts from matching; share entry flow
