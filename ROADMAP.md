@@ -37,6 +37,27 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Vérification de mise à jour avant le code PIN~~ - **fait (2026-08-07)**.
+  Se déclenchait auparavant seulement une fois `HomeShell` affiché - donc
+  après un déverrouillage complet. Déplacée dans `app.dart`'s `_PinGate`,
+  dès que l'écran de choix de fichier/code PIN apparaît. Ajout d'une
+  `navigatorKey` racine (`rootNavigatorKey`) pour que la boîte de dialogue
+  puisse s'afficher correctement quel que soit l'écran affiché au moment
+  où la vérification (un vrai appel réseau) se termine - un contexte pris
+  sur un écran de connexion spécifique mourrait dès que cet écran change
+  (choix du fichier → code PIN → appli réelle), perdant silencieusement la
+  proposition si la vérification n'avait pas fini à temps.
+
+  Découverte au passage, sans rapport : `flutter build windows` échoue
+  actuellement (composant Windows manquant, `atlbase.h`, pour
+  `flutter_local_notifications` - ajoutée plus tôt pour les notifications
+  de synchro WebDAV). Pas corrigé - nécessite l'installation d'un
+  composant Visual Studio, à faire manuellement si la version desktop doit
+  être reconstruite prochainement.
+
+  `flutter analyze`/`flutter test` (288)/`flutter build apk --release`/
+  `flutter build web --release` tous vérifiés propres.
+
 - ~~Saisie vocale : "Boursorama" gagnait le tiers alors que "Carrefour"
   était dit explicitement~~ - **fait (2026-08-07)**. Une fois le compte
   correctement reconnu (voir les deux entrées précédentes), un dernier

@@ -8,7 +8,6 @@ import '../models/bill_deposit.dart';
 import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import '../state/database_provider.dart';
-import '../widgets/update_prompt.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart';
 import 'budget_screen.dart';
@@ -45,8 +44,9 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _runRecurringCatchUp());
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => checkForUpdatesAndPrompt(context));
+    // Update check moved to app.dart's _PinGateState (2026-08-07, user
+    // request) - starts as soon as the database-picker/PIN screen shows
+    // instead of waiting all the way until here (post-unlock).
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _version = info.version);
     });

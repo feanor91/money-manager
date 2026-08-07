@@ -12,6 +12,16 @@ import 'services/notifications/sync_notification_service.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'theme/app_theme.dart';
+import 'widgets/update_prompt.dart';
+
+/// MaterialApp's own internal Navigator, exposed so the update check (see
+/// _PinGateState.initState) can show its dialog regardless of which gate
+/// screen happens to be on top when the (real, network-bound) check
+/// resolves - a context captured from any one specific gate screen would
+/// die the moment that screen gets replaced by the next one (db picker ->
+/// PIN -> the real app), silently losing the prompt if the check hadn't
+/// resolved yet by then. This one lives for the whole app session.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 class MoneyManagerApp extends StatelessWidget {
   const MoneyManagerApp({super.key});
@@ -24,6 +34,7 @@ class MoneyManagerApp extends StatelessWidget {
     // needing to thread that state through every individual screen.
     final dbProvider = context.watch<DatabaseProvider>();
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'Money Manager',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
@@ -83,6 +94,17 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Starts as soon as the database-picker/PIN screen shows, not after a
+    // full unlock (2026-08-07, user request: check before being asked for
+    // the PIN) - deferred one frame so rootNavigatorKey's Navigator has
+    // actually mounted by the time this reads its context. Runs at most
+    // once: initState only ever fires once for _PinGate's whole lifetime,
+    // which spans the entire app session (MaterialApp.builder wraps every
+    // route in the same single _PinGate instance, never recreates it).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navContext = rootNavigatorKey.currentContext;
+      if (navContext != null) checkForUpdatesAndPrompt(navContext);
+    });
   }
 
   @override
