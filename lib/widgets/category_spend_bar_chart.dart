@@ -5,9 +5,12 @@ import 'package:intl/intl.dart';
 import '../data/mmex_repository.dart';
 import '../models/category.dart';
 import '../models/currency.dart';
+import '../models/recurrence.dart';
+import '../models/transaction.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 import 'envelope_gauge.dart' show forecastColor;
+import 'transaction_tile.dart';
 
 /// Adds [months] calendar months to [date], clamping the day of month to
 /// the destination month's actual last day when it doesn't have one - same
@@ -51,7 +54,17 @@ class _BarItem {
   final double spent;
   final double planned;
 
-  _BarItem({required this.name, required this.spent, required this.planned});
+  /// The category itself plus its direct children - same set [rolledUpSpend]
+  /// summed over to produce [spent]/[planned], reused to fetch the actual
+  /// operations behind a tapped bar (see [_CategorySpendBarChartState._showBarDetail]).
+  final List<int> categoryIds;
+
+  _BarItem({
+    required this.name,
+    required this.spent,
+    required this.planned,
+    required this.categoryIds,
+  });
 
   double get tallest => spent > planned ? spent : planned;
 }
@@ -62,7 +75,9 @@ class _BarItem {
 /// "auto" envelope target) - dépensé vs prévu, side by side, sorted from
 /// the biggest category down. Categories with neither any real spend nor
 /// any recurring bill in the window are left out entirely rather than
-/// padding the chart with empty bars.
+/// padding the chart with empty bars. Tapping a bar lists the operations
+/// (real transactions, or recurring bill templates for "prévu") that make
+/// up its total - see [_showBarDetail].
 ///
 /// Navigation mirrors [ForecastChart]'s duration dropdown + left/right
 /// paging, but this chart never projects into the future the way that one
@@ -100,13 +115,21 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
     final repo = widget.repository;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final windowEnd = _addMonths(today, _offsetSteps * _duration.months);
-    final windowStart = _addMonths(windowEnd, -_duration.months);
+    // Half-open [windowStart, windowEndExclusive) window - windowEndExclusive
+    // of window N is exactly windowStart of window N+1, so adjacent windows
+    // tile without overlap. Getting this wrong (both ends inclusive, as an
+    // earlier version of this widget did) double-counts any operation dated
+    // exactly on the shared boundary day into *both* windows - easy to miss
+    // in general, but glaring for a monthly-recurring category (e.g. "Crédits")
+    // whose payment date reliably lands on that exact boundary every month.
+    final windowEndExclusive = _addMonths(_addDays(today, 1), _offsetSteps * _duration.months);
+    final windowStart = _addMonths(windowEndExclusive, -_duration.months);
+    final windowEndInclusive = _addDays(windowEndExclusive, -1);
 
     final categories = repo.getCategories(onlyActive: false);
     final rawSpend = repo.categorySpendForPeriod(
       windowStart,
-      _addDays(windowEnd, 1),
+      windowEndExclusive,
       accountId: widget.accountId,
     );
     final recurringMonthly = repo.categoryMonthlyRecurringTotals(accountId: widget.accountId);
@@ -116,13 +139,19 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
       final spent = rolledUpSpend(c.id, rawSpend, categories);
       final planned = rolledUpSpend(c.id, recurringMonthly, categories) * _duration.months;
       if (spent == 0 && planned == 0) continue;
-      items.add(_BarItem(name: c.name, spent: spent, planned: planned));
+      final childIds = categories.where((x) => x.parentId == c.id).map((x) => x.id);
+      items.add(_BarItem(
+        name: c.name,
+        spent: spent,
+        planned: planned,
+        categoryIds: [c.id, ...childIds],
+      ));
     }
     items.sort((a, b) => b.tallest.compareTo(a.tallest));
 
     return BentoCard(
       title: 'Dépenses par catégorie',
-      trailing: _RangeLabel(start: windowStart, end: windowEnd),
+      trailing: _RangeLabel(start: windowStart, end: windowEndInclusive),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -187,16 +216,37 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
           Expanded(
             child: items.isEmpty
                 ? const Center(child: Text('Aucune dépense sur cette période.'))
-                : _buildChart(items, widget.currency),
+                : LayoutBuilder(
+                    builder: (context, constraints) => _buildChart(
+                      items,
+                      widget.currency,
+                      constraints.maxWidth,
+                      windowStart,
+                      windowEndExclusive,
+                    ),
+                  ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildChart(List<_BarItem> items, CurrencyFormat? currency) {
+  Widget _buildChart(
+    List<_BarItem> items,
+    CurrencyFormat? currency,
+    double availableWidth,
+    DateTime windowStart,
+    DateTime windowEndExclusive,
+  ) {
     final maxVal = items.fold(0.0, (m, it) => it.tallest > m ? it.tallest : m);
     final maxY = maxVal <= 0 ? 10.0 : maxVal * 1.2;
+
+    // Scale bar width with however much horizontal room each category
+    // actually has, instead of a fixed width that looks fine with a dozen
+    // categories but leaves a wide desktop card mostly empty when there are
+    // only two or three.
+    final perGroup = availableWidth / items.length;
+    final barWidth = (perGroup * 0.28).clamp(14.0, 46.0);
 
     return BarChart(
       BarChartData(
@@ -242,6 +292,7 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
         ),
         barTouchData: BarTouchData(
           touchTooltipData: BarTouchTooltipData(
+            maxContentWidth: 220,
             fitInsideHorizontally: true,
             fitInsideVertically: true,
             getTooltipItem: (group, groupIndex, rod, rodIndex) {
@@ -256,28 +307,149 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
               );
             },
           ),
+          touchCallback: (event, response) {
+            if (event is! FlTapUpEvent) return;
+            final spot = response?.spot;
+            if (spot == null) return;
+            final item = items[spot.touchedBarGroupIndex];
+            final isSpent = spot.touchedRodDataIndex == 0;
+            _showBarDetail(item, isSpent, windowStart, windowEndExclusive);
+          },
         ),
         barGroups: [
           for (var i = 0; i < items.length; i++)
             BarChartGroupData(
               x: i,
+              barsSpace: 3,
               barRods: [
                 BarChartRodData(
                   toY: items[i].spent,
                   color: AppTheme.negative,
-                  width: 10,
+                  width: barWidth,
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
                 ),
                 if (items[i].planned > 0)
                   BarChartRodData(
                     toY: items[i].planned,
                     color: forecastColor,
-                    width: 10,
+                    width: barWidth,
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
                   ),
               ],
             ),
         ],
+      ),
+    );
+  }
+
+  /// Lists the real operations (or, for "prévu", the recurring bill
+  /// templates) that add up to a tapped bar - the same rolled-up category
+  /// set (see [_BarItem.categoryIds]) and window the bar's own total was
+  /// computed from, so the numbers always match what's on screen.
+  void _showBarDetail(
+    _BarItem item,
+    bool isSpent,
+    DateTime windowStart,
+    DateTime windowEndExclusive,
+  ) {
+    final repo = widget.repository;
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+
+    if (isSpent) {
+      final accounts = {for (final a in repo.getAccounts()) a.id: a};
+      final categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
+      final txns = repo
+          .getTransactions(
+            accountId: widget.accountId,
+            from: windowStart,
+            to: windowEndExclusive,
+            limit: 1000,
+          )
+          .where((t) =>
+              t.transCode == TransCode.withdrawal &&
+              !t.isVoid &&
+              t.categoryId != null &&
+              item.categoryIds.contains(t.categoryId))
+          .toList();
+
+      _openDetailSheet(
+        title: item.name,
+        subtitle: 'Dépensé',
+        itemCount: txns.length,
+        itemBuilder: (context, i) {
+          final t = txns[i];
+          return TransactionTile(
+            transaction: t,
+            payee: payees[t.payeeId],
+            category: categoriesById[t.categoryId],
+            fromAccount: accounts[t.accountId],
+            toAccount: t.toAccountId != null ? accounts[t.toAccountId] : null,
+            viewpointAccountId: widget.accountId,
+            currency: widget.currency,
+          );
+        },
+      );
+    } else {
+      final bills = repo.getBillDeposits().where((b) =>
+          !b.paused &&
+          b.transCode == TransCode.withdrawal &&
+          b.categoryId != null &&
+          item.categoryIds.contains(b.categoryId) &&
+          (widget.accountId == null || b.accountId == widget.accountId)).toList();
+
+      _openDetailSheet(
+        title: item.name,
+        subtitle: 'Prévu (opérations récurrentes)',
+        itemCount: bills.length,
+        itemBuilder: (context, i) {
+          final b = bills[i];
+          return ListTile(
+            title: Text(payees[b.payeeId]?.name ?? 'Tiers inconnu'),
+            subtitle: Text(recurrencePeriodLabel(b.period)),
+            trailing: Text(
+              widget.currency?.format(b.amount) ?? b.amount.toStringAsFixed(2),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          );
+        },
+      );
+    }
+  }
+
+  void _openDetailSheet({
+    required String title,
+    required String subtitle,
+    required int itemCount,
+    required Widget Function(BuildContext, int) itemBuilder,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.6,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleLarge),
+              Text(subtitle, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+              const SizedBox(height: 8),
+              Expanded(
+                child: itemCount == 0
+                    ? const Center(child: Text('Aucune opération sur cette période.'))
+                    : ListView.separated(
+                        controller: scrollController,
+                        itemCount: itemCount,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: itemBuilder,
+                      ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
