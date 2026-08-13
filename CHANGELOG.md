@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.67] - 2026-08-13
+
+- ci(android): bump Gradle to 8.14.2 and AGP to 8.11.1
+- feat(pin): grace period before re-locking on background (Android)
+
 ## [1.0.66] - 2026-08-07
 
 - fix(recurring): count a transfer as income/expense for the totals bar
