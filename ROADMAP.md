@@ -37,6 +37,24 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Délai de grâce avant redemander le code PIN (Android)~~ - **fait
+  (2026-08-08)**. Auparavant, dès que l'appli passait en arrière-plan ne
+  serait-ce qu'un instant, revenir dessus redemandait systématiquement le
+  code PIN - trop pénible en usage réel. Un délai de grâce de 3 minutes
+  (`PinLockProvider.backgroundGracePeriod`) est maintenant appliqué : le
+  code n'est redemandé que si l'appli est restée en arrière-plan au moins
+  3 minutes, et le délai repart de zéro à chaque retour au premier plan.
+- ~~Conflit WebDAV résolu automatiquement par horodatage~~ - **fait
+  (2026-08-08)**. Un conflit détecté à l'ouverture/synchro automatique
+  (les deux côtés ont changé depuis la dernière synchro) demandait
+  systématiquement un choix manuel, même quand un seul appareil avait
+  réellement été utilisé - pénible en usage quotidien réel côté téléphone.
+  Résolu automatiquement maintenant en comparant la date de dernière
+  modification du fichier local (SAF) à l'en-tête HTTP `Last-Modified` du
+  fichier distant, et en gardant la plus récente - le choix manuel
+  (boîte de dialogue) ne reste nécessaire que si l'un des deux horodatages
+  est indisponible ou illisible. Suppose que les horloges des deux
+  appareils concordent à peu près - accepté explicitement par l'utilisateur.
 - ~~Vérification de mise à jour avant le code PIN~~ - **fait (2026-08-07)**.
   Deux bugs de régression trouvés le jour même :
   1. La vérification ne se déclenchait plus du tout (ni desktop ni Android)

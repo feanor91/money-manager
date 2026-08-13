@@ -957,8 +957,11 @@ class DatabaseProvider extends ChangeNotifier {
   }) async {
     final sync = await _ensureWebDavSync();
     if (sync == null || !sync.isConfiguredAndEnabled) return localBytes;
-    final result =
-        await sync.reconcile(localBytes: localBytes, allowAutoPush: allowAutoPush);
+    final result = await sync.reconcile(
+      localBytes: localBytes,
+      allowAutoPush: allowAutoPush,
+      localLastModified: await link.lastModified(),
+    );
     _applyReconcileStatus(result);
     if (result.action == SyncAction.pullRemote && result.pulledBytes != null) {
       try {
@@ -1026,7 +1029,11 @@ class DatabaseProvider extends ChangeNotifier {
     syncStatus = SyncStatus.syncing;
     syncError = null;
     notifyListeners();
-    final result = await sync.reconcile(localBytes: db.exportBytes(), allowAutoPush: true);
+    final result = await sync.reconcile(
+      localBytes: db.exportBytes(),
+      allowAutoPush: true,
+      localLastModified: await link.lastModified(),
+    );
     if (result.action == SyncAction.pullRemote && result.pulledBytes != null) {
       try {
         _backupNow(db);

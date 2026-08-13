@@ -85,6 +85,13 @@ class _AndroidFileLinkImpl implements AndroidFileLink {
   Future<void> writeBytes(List<int> bytes) => _write(fileName, bytes);
 
   @override
+  Future<DateTime?> lastModified() async {
+    final file = await _safUtil.child(directoryUri, [fileName]);
+    if (file == null) return null;
+    return DateTime.fromMillisecondsSinceEpoch(file.lastModified);
+  }
+
+  @override
   Future<void> writeBackup(List<int> bytes, String backupFileName) async {
     try {
       final backupDir = await _safUtil.mkdirp(directoryUri, ['backup']);

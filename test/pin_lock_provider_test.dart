@@ -184,6 +184,82 @@ void main() {
     expect(provider.status, PinGateStatus.unlocked);
   });
 
+  group('background grace period', () {
+    test('a return within the grace period stays unlocked', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      expect((await provider.verify('1234')).ok, isTrue);
+      expect(provider.status, PinGateStatus.unlocked);
+
+      final backgroundedAt = DateTime(2026, 8, 8, 10, 0, 0);
+      provider.noteBackgrounded(now: backgroundedAt);
+      provider.handleForeground(
+        now: backgroundedAt.add(PinLockProvider.backgroundGracePeriod - const Duration(seconds: 1)),
+      );
+      expect(provider.status, PinGateStatus.unlocked);
+    });
+
+    test('a return at or after the grace period re-locks', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      await provider.verify('1234');
+
+      final backgroundedAt = DateTime(2026, 8, 8, 10, 0, 0);
+      provider.noteBackgrounded(now: backgroundedAt);
+      provider.handleForeground(now: backgroundedAt.add(PinLockProvider.backgroundGracePeriod));
+      expect(provider.status, PinGateStatus.locked);
+    });
+
+    test('the timer resets on each foreground - a second short return after '
+        'a long one does not spuriously re-lock', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      await provider.verify('1234');
+
+      var now = DateTime(2026, 8, 8, 10, 0, 0);
+      provider.noteBackgrounded(now: now);
+      now = now.add(PinLockProvider.backgroundGracePeriod);
+      provider.handleForeground(now: now); // long absence - locks
+      expect(provider.status, PinGateStatus.locked);
+      await provider.verify('1234'); // unlock again for the next check
+
+      now = now.add(const Duration(seconds: 5));
+      provider.noteBackgrounded(now: now);
+      now = now.add(const Duration(seconds: 10)); // well within the grace period
+      provider.handleForeground(now: now);
+      expect(provider.status, PinGateStatus.unlocked);
+    });
+
+    test('handleForeground with no prior noteBackgrounded call is a no-op', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      await provider.verify('1234');
+
+      provider.handleForeground();
+      expect(provider.status, PinGateStatus.unlocked);
+    });
+
+    test('no PIN configured - noteBackgrounded/handleForeground never lock anything', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      expect(provider.hasPin, isFalse);
+
+      final backgroundedAt = DateTime(2026, 8, 8, 10, 0, 0);
+      provider.noteBackgrounded(now: backgroundedAt);
+      provider.handleForeground(now: backgroundedAt.add(const Duration(hours: 1)));
+      expect(provider.status, PinGateStatus.unlocked);
+    });
+  });
+
   test('setMaxAttempts/setLockoutMinutes clamp to their valid range',
       () async {
     final prefs = _FakeCompanionPrefs();

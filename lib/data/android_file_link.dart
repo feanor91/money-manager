@@ -34,6 +34,15 @@ abstract class AndroidFileLink {
   /// folder (matches WebFileLink.readBytes).
   Future<List<int>> readBytes();
 
+  /// The main database file's own last-modified timestamp, straight from
+  /// the SAF document metadata (not this device's read/write activity) -
+  /// null if the file can't be found. Used to auto-resolve a WebDAV sync
+  /// conflict by "most recently modified wins" (see
+  /// WebDavSyncService.reconcile) instead of always demanding a manual
+  /// choice - 2026-08-08 user request, explicitly accepting that this
+  /// assumes both devices' clocks roughly agree.
+  Future<DateTime?> lastModified();
+
   /// Overwrites the main database file's contents (matches
   /// WebFileLink.writeBytes).
   Future<void> writeBytes(List<int> bytes);

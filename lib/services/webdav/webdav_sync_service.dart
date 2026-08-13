@@ -1,3 +1,5 @@
+import 'dart:io' show HttpDate;
+
 import 'package:http/http.dart' as http;
 
 import 'webdav_client.dart';
@@ -111,21 +113,38 @@ class WebDavSyncService {
   /// pickDatabaseFile) and the manual "Synchroniser maintenant" trigger -
   /// same decision, different [allowAutoPush]. Only ever issues a HEAD
   /// request to decide - a genuine pull still downloads the full file (the
-  /// whole point), but a detected conflict is left unresolved rather than
-  /// downloaded speculatively, since this runs on every single launch and
-  /// spending mobile data on a multi-MB download the user may not act on
-  /// for hours isn't worth it. See [prepareConflictResolution] for the
-  /// deferred download.
+  /// whole point), but a detected conflict this can't auto-resolve (see
+  /// below) is left unresolved rather than downloaded speculatively, since
+  /// this runs on every single launch and spending mobile data on a
+  /// multi-MB download the user may not act on for hours isn't worth it.
+  /// See [prepareConflictResolution] for the deferred download that case
+  /// still needs.
   ///
   /// [allowAutoPush] false degrades a would-be [SyncAction.pushLocal] down
   /// to [SyncAction.conflict] - used for pickDatabaseFile(), where the
   /// local bytes might be an unrelated freshly-picked file with no real
   /// relationship to the stored marker, so an apparent "push" verdict can't
   /// be trusted to mean "this device has new edits worth keeping" the way
-  /// it can for restoreLastDatabase()'s continuously-used file.
+  /// it can for restoreLastDatabase()'s continuously-used file. For the
+  /// same reason, a genuine conflict is never auto-resolved by timestamp
+  /// when [allowAutoPush] is false, even if [localLastModified] is given -
+  /// only a manual choice is trustworthy there.
+  ///
+  /// [localLastModified] enables automatic "most recently modified wins"
+  /// conflict resolution (2026-08-08 user request: manually resolving a
+  /// conflict on every single app open, when in practice only one device
+  /// had actually been used, was reported as too disruptive) - compared
+  /// against the remote's own HTTP `Last-Modified` header. Left null (or
+  /// unparseable against the remote header), a conflict still falls back to
+  /// [SyncAction.conflict] exactly as before, so callers that can't supply
+  /// a reliable local timestamp keep the old, safe, manual-choice behavior.
+  /// Deliberately just wall-clock comparison, not any kind of merge - the
+  /// user explicitly accepted that this assumes both devices' clocks
+  /// roughly agree, in exchange for not choosing manually every time.
   Future<ReconcileResult> reconcile({
     required List<int> localBytes,
     required bool allowAutoPush,
+    DateTime? localLastModified,
   }) async {
     if (!isConfiguredAndEnabled) return const ReconcileResult(SyncAction.noop);
     try {
@@ -141,6 +160,13 @@ class WebDavSyncService {
       );
       if (!allowAutoPush && action == SyncAction.pushLocal) {
         action = SyncAction.conflict;
+      }
+      if (action == SyncAction.conflict && allowAutoPush) {
+        final byTimestamp = _resolveConflictByTimestamp(
+          localLastModified: localLastModified,
+          remoteLastModifiedRaw: remoteInfo?.lastModifiedRaw,
+        );
+        if (byTimestamp != null) action = byTimestamp;
       }
       switch (action) {
         case SyncAction.noop:
@@ -172,6 +198,28 @@ class WebDavSyncService {
     } catch (e) {
       return ReconcileResult(SyncAction.noop, errorMessage: e.toString());
     }
+  }
+
+  /// [SyncAction.pushLocal] if [localLastModified] is strictly newer than
+  /// the remote's `Last-Modified` header, [SyncAction.pullRemote] otherwise
+  /// (including an exact tie - arbitrary, but a genuine tie down to the
+  /// second is vanishingly unlikely for a real edit) - null (meaning "can't
+  /// decide, keep it a manual conflict") if either timestamp is missing or
+  /// the remote header doesn't parse as a valid HTTP date.
+  SyncAction? _resolveConflictByTimestamp({
+    required DateTime? localLastModified,
+    required String? remoteLastModifiedRaw,
+  }) {
+    if (localLastModified == null || remoteLastModifiedRaw == null) return null;
+    final DateTime remoteLastModified;
+    try {
+      remoteLastModified = HttpDate.parse(remoteLastModifiedRaw);
+    } catch (_) {
+      return null;
+    }
+    return localLastModified.isAfter(remoteLastModified)
+        ? SyncAction.pushLocal
+        : SyncAction.pullRemote;
   }
 
   /// Called only when the user actually opens the conflict dialog (never

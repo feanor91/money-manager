@@ -138,9 +138,13 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
     // loss (alt-tab, opening dev tools, switching windows), which would
     // relock far too aggressively for a browser tab left open. `paused`
     // itself doesn't fire on web, so in practice the web app only ever
-    // locks again after an actual page reload.
+    // locks again after an actual page reload. Doesn't lock immediately -
+    // starts PinLockProvider.backgroundGracePeriod's timer instead, see
+    // handleForeground below (2026-08-07: locking on every single
+    // backgrounding, however brief, was reported as too aggressive for
+    // real daily Android use).
     if (state == AppLifecycleState.paused) {
-      context.read<PinLockProvider>().lockOnBackground();
+      context.read<PinLockProvider>().noteBackgrounded();
       // Push local edits out as soon as the user leaves, not just on the
       // *next* resume - user-requested 2026-08-04, symmetric with the
       // resume-triggered pull below. Best-effort only: Android can suspend
@@ -152,6 +156,12 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
       // notification confirms it instead.
       unawaited(_syncInBackground(context.read<DatabaseProvider>()));
     } else if (state == AppLifecycleState.resumed) {
+      // Decides whether the grace period (see noteBackgrounded above) has
+      // elapsed - locks if so, otherwise stays unlocked and resets the
+      // timer either way. Safe to call even if the app was never actually
+      // backgrounded (e.g. a spurious resume) - handleForeground no-ops
+      // when there's no pending noteBackgrounded timestamp.
+      context.read<PinLockProvider>().handleForeground();
       // restoreLastDatabase() (main.dart) only runs once per process, at a
       // true cold start - on Android, switching away and back (the common
       // case; the OS keeps the process alive) never re-runs it, so without

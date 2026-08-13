@@ -238,11 +238,39 @@ class PinLockProvider extends ChangeNotifier {
     return PinVerifyResult.wrong(_maxAttempts - attempts);
   }
 
-  /// Called when the app is backgrounded (mobile) so returning to it
-  /// requires the PIN again - a lock that only checked once at launch
-  /// wouldn't do much for a phone left unlocked on a table.
-  void lockOnBackground() {
+  /// How long the app can sit in the background before [handleForeground]
+  /// re-locks it - a grace period rather than an immediate lock, so a
+  /// brief switch-away (a notification, glancing at the app switcher,
+  /// answering a call) doesn't demand the PIN again every single time.
+  /// Explicit 2026-08-07 user request ("le déverrouillage par code pin est
+  /// pénible") after the original design (lock on every single
+  /// backgrounding, however brief) proved too aggressive in real daily use
+  /// on Android.
+  static const backgroundGracePeriod = Duration(minutes: 3);
+
+  DateTime? _backgroundedAt;
+
+  /// Called when the app is backgrounded (mobile) - starts the grace-period
+  /// timer rather than locking immediately; see [handleForeground], which
+  /// actually decides whether to lock once the app comes back.
+  void noteBackgrounded({DateTime? now}) {
     if (_hasPin && _status == PinGateStatus.unlocked) {
+      _backgroundedAt = now ?? DateTime.now();
+    }
+  }
+
+  /// Called when the app returns to the foreground - locks only if the app
+  /// was backgrounded for at least [backgroundGracePeriod]; a return within
+  /// the grace period stays unlocked. Resets the timer to "not backgrounded"
+  /// either way, per the user's own framing ("réinitialiser à 0 quand
+  /// l'appli revient au premier plan") - the *next* backgrounding starts a
+  /// fresh grace period rather than accumulating.
+  void handleForeground({DateTime? now}) {
+    final backgroundedAt = _backgroundedAt;
+    _backgroundedAt = null;
+    if (backgroundedAt == null) return;
+    final elapsed = (now ?? DateTime.now()).difference(backgroundedAt);
+    if (_hasPin && _status == PinGateStatus.unlocked && elapsed >= backgroundGracePeriod) {
       _status = PinGateStatus.locked;
       notifyListeners();
     }

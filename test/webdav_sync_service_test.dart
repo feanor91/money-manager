@@ -39,6 +39,7 @@ void main() {
   WebDavSyncService serviceWith({
     List<int>? remoteBytes,
     String? etag,
+    String? lastModifiedRaw,
     List<int>? uploadedBytesSink,
     void Function(http.Request request)? onRequest,
   }) {
@@ -48,6 +49,7 @@ void main() {
         if (remoteBytes == null) return http.Response('', 404);
         return http.Response('', 200, headers: {
           if (etag != null) 'etag': etag,
+          if (lastModifiedRaw != null) 'last-modified': lastModifiedRaw,
           'content-length': '${remoteBytes.length}',
         });
       }
@@ -175,6 +177,141 @@ void main() {
       final result =
           await service.reconcile(localBytes: unrelatedLocalBytes, allowAutoPush: false);
       expect(result.action, SyncAction.conflict);
+    });
+
+    group('conflict auto-resolution by timestamp (2026-08-08)', () {
+      // A real HTTP date - HttpDate.parse only accepts RFC 1123 format.
+      const remoteLastModifiedRaw = 'Fri, 07 Aug 2026 12:00:00 GMT';
+      final remoteLastModified = DateTime.utc(2026, 8, 7, 12);
+
+      test('local strictly newer than remote - auto-pushes, no manual conflict', () async {
+        final oldBytes = utf8.encode('old content');
+        final newLocalBytes = utf8.encode('new local content');
+        final newRemoteBytes = utf8.encode('new remote content');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final uploaded = <int>[];
+        final service = serviceWith(
+          remoteBytes: newRemoteBytes,
+          etag: '"etag-2"',
+          lastModifiedRaw: remoteLastModifiedRaw,
+          uploadedBytesSink: uploaded,
+        );
+        final result = await service.reconcile(
+          localBytes: newLocalBytes,
+          allowAutoPush: true,
+          localLastModified: remoteLastModified.add(const Duration(minutes: 5)),
+        );
+        expect(result.action, SyncAction.pushLocal);
+        expect(uploaded, newLocalBytes);
+      });
+
+      test('remote newer than local - auto-pulls, no manual conflict', () async {
+        final oldBytes = utf8.encode('old content');
+        final newLocalBytes = utf8.encode('new local content');
+        final newRemoteBytes = utf8.encode('new remote content');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final service = serviceWith(
+          remoteBytes: newRemoteBytes,
+          etag: '"etag-2"',
+          lastModifiedRaw: remoteLastModifiedRaw,
+        );
+        final result = await service.reconcile(
+          localBytes: newLocalBytes,
+          allowAutoPush: true,
+          localLastModified: remoteLastModified.subtract(const Duration(minutes: 5)),
+        );
+        expect(result.action, SyncAction.pullRemote);
+        expect(result.pulledBytes, newRemoteBytes);
+      });
+
+      test('an exact tie pulls remote rather than pushing local', () async {
+        final oldBytes = utf8.encode('old content');
+        final newLocalBytes = utf8.encode('new local content');
+        final newRemoteBytes = utf8.encode('new remote content');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final service = serviceWith(
+          remoteBytes: newRemoteBytes,
+          etag: '"etag-2"',
+          lastModifiedRaw: remoteLastModifiedRaw,
+        );
+        final result = await service.reconcile(
+          localBytes: newLocalBytes,
+          allowAutoPush: true,
+          localLastModified: remoteLastModified,
+        );
+        expect(result.action, SyncAction.pullRemote);
+      });
+
+      test('no localLastModified given - falls back to a manual conflict, unchanged behavior',
+          () async {
+        final oldBytes = utf8.encode('old content');
+        final newLocalBytes = utf8.encode('new local content');
+        final newRemoteBytes = utf8.encode('new remote content');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final service = serviceWith(
+          remoteBytes: newRemoteBytes,
+          etag: '"etag-2"',
+          lastModifiedRaw: remoteLastModifiedRaw,
+        );
+        final result = await service.reconcile(localBytes: newLocalBytes, allowAutoPush: true);
+        expect(result.action, SyncAction.conflict);
+      });
+
+      test('remote sends no Last-Modified header - falls back to a manual conflict', () async {
+        final oldBytes = utf8.encode('old content');
+        final newLocalBytes = utf8.encode('new local content');
+        final newRemoteBytes = utf8.encode('new remote content');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final service = serviceWith(remoteBytes: newRemoteBytes, etag: '"etag-2"');
+        final result = await service.reconcile(
+          localBytes: newLocalBytes,
+          allowAutoPush: true,
+          localLastModified: DateTime.now(),
+        );
+        expect(result.action, SyncAction.conflict);
+      });
+
+      test('allowAutoPush: false never auto-resolves by timestamp either, even with both '
+          'timestamps available', () async {
+        final oldBytes = utf8.encode('old content');
+        final unrelatedLocalBytes = utf8.encode('completely different file');
+        await store.saveMarker(
+          contentHash: contentHashOf(oldBytes),
+          remoteIdentity: '"etag-1"',
+          syncedAt: DateTime.now(),
+        );
+        final service = serviceWith(
+          remoteBytes: oldBytes,
+          etag: '"etag-1"',
+          lastModifiedRaw: remoteLastModifiedRaw,
+        );
+        final result = await service.reconcile(
+          localBytes: unrelatedLocalBytes,
+          allowAutoPush: false,
+          localLastModified: remoteLastModified.add(const Duration(days: 1)),
+        );
+        expect(result.action, SyncAction.conflict);
+      });
     });
 
     test('a network failure surfaces as errorMessage, never throws', () async {
