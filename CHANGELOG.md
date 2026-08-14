@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.68] - 2026-08-14
+
+- fix(voice): parse X euros Y spoken cents as X,Y€, not X,00€
+
 ## [1.0.67] - 2026-08-13
 
 - ci(android): bump Gradle to 8.14.2 and AGP to 8.11.1
