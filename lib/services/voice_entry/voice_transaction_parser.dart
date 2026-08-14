@@ -183,6 +183,22 @@ int? _bestAccountWordMatch(String text, List<Account> accounts) {
 DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
 
 double? _extractAmount(String text) {
+  // "12 euros 35" ("35" said as a separate trailing number, optionally
+  // "et 35"/"35 centimes") - the natural spoken form of 12,35€, distinct
+  // from "12,35 euros"/"12.35€" (a single written-looking number the
+  // recognizer would already hand back with the comma/point in place, and
+  // which the plain [withCurrency] pattern below already handles). Found
+  // 2026-08-13: without this, "12 euros 35" only ever matched the leading
+  // "12" (the trailing "35" wasn't attached to any number pattern at all)
+  // and silently dropped the cents, landing on 12,00€. Checked first since
+  // it's the more specific pattern of the two currency forms.
+  final withSpokenCents = RegExp(r'(\d+)\s*(?:€|euros?)\s+(?:et\s+)?(\d{1,2})\b(?:\s*centimes?\b)?')
+      .firstMatch(text);
+  if (withSpokenCents != null) {
+    final euros = int.parse(withSpokenCents.group(1)!);
+    final cents = int.parse(withSpokenCents.group(2)!);
+    return euros + cents / 100;
+  }
   // A number immediately followed by "euro(s)"/"€" wins over any other
   // number in the sentence - otherwise a spoken day-of-month ("le 15
   // janvier") could get mistaken for the amount.

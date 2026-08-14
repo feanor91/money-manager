@@ -100,6 +100,29 @@ void main() {
     expect(draft.amount, 35.5);
   });
 
+  test(
+      '"12 euros 35" (cents spoken as a separate trailing number) is parsed as 12,35€ - '
+      'regression test for the 2026-08-13 report of it landing on 12,00€', () {
+    final draft = parse('12 euros 35 chez Carrefour');
+    expect(draft.amount, 12.35);
+  });
+
+  test('"12 euros 35 centimes" (the word "centimes" said explicitly) still parses as 12,35€', () {
+    final draft = parse('12 euros 35 centimes chez Carrefour');
+    expect(draft.amount, 12.35);
+  });
+
+  test('"12 euros et 35" ("et" said between the two numbers) still parses as 12,35€', () {
+    final draft = parse('12 euros et 35 chez Carrefour');
+    expect(draft.amount, 12.35);
+  });
+
+  test('a single spoken cents digit is treated as centimes, not tenths - "12 euros 5" is 12,05€, '
+      'not 12,50€', () {
+    final draft = parse('12 euros 5 chez Carrefour');
+    expect(draft.amount, 12.05);
+  });
+
   test('a euro sign is recognized the same as the word "euros"', () {
     final draft = parse('20€ chez Carrefour');
     expect(draft.amount, 20);
