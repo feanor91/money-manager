@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.69] - 2026-08-18
+
+- fix(forecast): stop folding postdated transactions into today's balance
+
 ## [1.0.68] - 2026-08-14
 
 - fix(voice): parse X euros Y spoken cents as X,Y€, not X,00€
