@@ -406,8 +406,9 @@ void main() {
       expect(answer.forecastCrossesNegativeOn, isNull);
     });
 
-    test('an already-recorded future transaction lands in the total but is not '
-        'attributed to any category - it is not a recurring bill', () {
+    test('an already-recorded future transaction lands in the forecast (not '
+        "today's total) and is not attributed to any category - it is not a "
+        'recurring bill', () {
       final freshId = repo.insertAccount(
           name: 'Fresh 4', type: 'Checking', initialBalance: 100, currencyId: 2);
       repo.insertTransaction(
@@ -423,11 +424,13 @@ void main() {
         repo,
         now: now,
       );
-      // accountBalance() already includes the postdated transaction (see
-      // MmexRepository.accountBalance's own doc comment) - the outlook's
-      // total/forecast must too, but the breakdown can only ever explain
-      // *recurring* bills, so it stays empty here.
-      expect(answer.total, -50);
+      // `total` is the real balance as of today (asOf: today) - it must
+      // *not* count the postdated transaction yet, since it hasn't
+      // happened as of "now" (2026-08-03) - but `forecastTotal` (period end
+      // is after the transaction's own date) must, via futureDailyNet. The
+      // breakdown can only ever explain *recurring* bills, so it stays
+      // empty here regardless.
+      expect(answer.total, 100);
       expect(answer.forecastTotal, -50);
       expect(answer.categoryBreakdown, isEmpty);
     });

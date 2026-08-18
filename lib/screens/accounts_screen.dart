@@ -27,6 +27,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
         accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
     final hidden =
         accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
+    // asOf: today - see dashboard_screen.dart's balances map for why (a
+    // postdated transaction shouldn't count against "solde" before its own
+    // date).
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
 
     return Scaffold(
       appBar: AppBar(
@@ -58,7 +63,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _AccountRow(
                           account: account,
-                          balance: repo.accountBalance(account.id),
+                          balance: repo.accountBalance(account.id, asOf: today),
                           currency: currency,
                           hidden: false,
                           onTap: () => openAccountEditor(context, repo,
@@ -77,7 +82,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _AccountRow(
                           account: account,
-                          balance: repo.accountBalance(account.id),
+                          balance: repo.accountBalance(account.id, asOf: today),
                           currency: currency,
                           hidden: true,
                           onTap: () => openAccountEditor(context, repo,

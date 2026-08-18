@@ -44,8 +44,17 @@ class DashboardScreen extends StatelessWidget {
         .toList();
     final accounts =
         dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    // asOf: today, not the plain all-transactions total - the latter
+    // includes any transaction already recorded with a future date (e.g. a
+    // bill paid ahead of its due date), which made "Solde actuel" show an
+    // account as already overdrawn before that transaction's own date
+    // (found 2026-08-18, same bug as ForecastChart's "today" point - see
+    // its doc comment). Those entries still show up in full, on their own
+    // date, in the forecast chart/"Prév." figures below.
     final balances = {
-      for (final a in accounts) a.id: repo.accountBalance(a.id)
+      for (final a in accounts) a.id: repo.accountBalance(a.id, asOf: today)
     };
 
     if (accounts.isEmpty) {
@@ -105,7 +114,6 @@ class DashboardScreen extends StatelessWidget {
             : accounts.first.id;
     final scopedBalance = balances[selectedAccountId] ?? 0;
 
-    final now = DateTime.now();
     final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
     final forecastDateLabel =
         'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';

@@ -1069,33 +1069,41 @@ class MmexRepository {
   }
 
   /// Projects [accountId]'s balance forward from today to [targetDate]
-  /// using only known recurring transactions (see [recurringDailyNet]) -
-  /// the same mechanical projection the forecast chart uses, collapsed to a
-  /// single final figure. Returns the plain current balance if [targetDate]
-  /// isn't in the future.
+  /// using known recurring transactions ([recurringDailyNet]) plus any real
+  /// transaction already recorded with a future date on or before
+  /// [targetDate] ([futureDailyNet]) - the same mechanical projection the
+  /// forecast chart uses ([ForecastChart._buildPoints]), collapsed to a
+  /// single final figure. Returns the real balance as of today ([today]'s
+  /// asOf) if [targetDate] isn't in the future.
   ///
-  /// Starts from the same all-transactions total [accountBalance] returns
-  /// with no [accountBalance.asOf] - deliberately including anything already
-  /// entered with a future date - not a same-day cap: recording a recurring
-  /// bill's occurrence always advances its own next-occurrence date past
-  /// it (see [recordBillOccurrence]/[catchUpBillDeposit]), so an
-  /// already-recorded postdated entry can never also get re-projected here.
+  /// Starts from the real balance *as of today* ([accountBalance] with
+  /// `asOf: today`), not the all-transactions total with no `asOf` - the
+  /// latter includes postdated entries regardless of date, which used to
+  /// make this projection overshoot before an already-recorded future
+  /// transaction's own date (found 2026-08-18, same bug as
+  /// [ForecastChart._buildPoints]'s "today" point - see its doc comment).
+  /// Never double-counts a postdated entry: recording a recurring bill's
+  /// occurrence always advances its own next-occurrence date past it (see
+  /// [recordBillOccurrence]/[catchUpBillDeposit]), so [recurringDailyNet]
+  /// can't also re-project something [futureDailyNet] already counts as a
+  /// real transaction.
   double forecastAccountBalance(int accountId, DateTime targetDate) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final target = DateTime(targetDate.year, targetDate.month, targetDate.day);
-    final balance = accountBalance(accountId);
-    if (!target.isAfter(today)) return balance;
+    final todayBalance = accountBalance(accountId, asOf: today);
+    if (!target.isAfter(today)) return todayBalance;
 
     final recurring = recurringDailyNet(
       anchor: target,
       days: _daysBetween(today, target) + 1,
       accountId: accountId,
     );
-    var total = balance;
+    final futureReal = futureDailyNet(after: today, end: target, accountId: accountId);
+    var total = todayBalance;
     var cursor = _addDays(today, 1);
     while (!cursor.isAfter(target)) {
-      total += recurring[cursor] ?? 0.0;
+      total += (recurring[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
       cursor = _addDays(cursor, 1);
     }
     return total;

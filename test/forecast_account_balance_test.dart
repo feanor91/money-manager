@@ -6,10 +6,13 @@ import 'package:money_manager/models/transaction.dart';
 
 import 'test_helpers.dart';
 
-/// forecastAccountBalance's anchor is deliberately the same all-transactions
-/// total accountBalance() (no asOf) returns - not capped at today - so an
-/// already-recorded transaction with a future date is reflected in the
-/// forecast rather than silently dropped (2026-08-03 fix: see
+/// forecastAccountBalance's anchor is the real balance as of *today*
+/// (accountBalance(asOf: today)), and an already-recorded transaction with
+/// a future date is added back in on its own actual date via
+/// futureDailyNet - reflected in the forecast once the target date reaches
+/// it, but never pulled forward into an earlier target (2026-08-18 fix: an
+/// all-transactions total with no asOf, used previously, made a target
+/// date *before* such a postdated entry overshoot - see
 /// mmex_repository.dart's accountBalance/forecastAccountBalance doc
 /// comments and forecast_chart.dart's ForecastChart._buildPoints).
 void main() {
@@ -60,7 +63,8 @@ void main() {
     expect(repo.accountBalance(accountId), 950);
   });
 
-  test('a target date not in the future returns the plain current balance', () {
+  test('a target date not in the future returns the real balance as of today, '
+      'not counting a still-later postdated transaction', () {
     repo.insertTransaction(
       accountId: accountId,
       payeeId: payeeId,
@@ -68,6 +72,18 @@ void main() {
       amount: 50,
       date: today().add(const Duration(days: 10)),
     );
-    expect(repo.forecastAccountBalance(accountId, today()), 950);
+    expect(repo.forecastAccountBalance(accountId, today()), 1000);
+  });
+
+  test('a target date between today and a postdated transaction excludes it', () {
+    repo.insertTransaction(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 50,
+      date: today().add(const Duration(days: 10)),
+    );
+    final target = today().add(const Duration(days: 5));
+    expect(repo.forecastAccountBalance(accountId, target), 1000);
   });
 }

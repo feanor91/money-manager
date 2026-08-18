@@ -251,7 +251,12 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
       // actual last day, same convention the rule-based parser already
       // uses for QueryKind.balance's asOf.
       final targetEnd = intent.period.end.subtract(const Duration(days: 1));
-      final current = repo.accountBalance(accountId);
+      // asOf: today, not the plain all-transactions total - the latter
+      // includes any transaction already recorded with a future date, which
+      // used to make this projection overshoot before that transaction's
+      // own date (same bug as ForecastChart's "today" point/
+      // forecastAccountBalance - see their doc comments).
+      final current = repo.accountBalance(accountId, asOf: today);
 
       if (!targetEnd.isAfter(today)) {
         // The asked-about period is already over (or ends today) - nothing
@@ -266,12 +271,17 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
         days: daysAhead + 1,
         accountId: accountId,
       );
+      // Real transactions already recorded with a future date on or before
+      // targetEnd - merged in alongside the recurring-bill projection so
+      // they land on their own actual date instead of being pulled into
+      // "today" via accountBalance() with no asOf.
+      final futureReal = repo.futureDailyNet(after: today, end: targetEnd, accountId: accountId);
       var cumulative = current;
       DateTime? crossesNegativeOn;
       var cursor = windowStart;
       while (!cursor.isAfter(targetEnd)) {
         final wasNonNegative = cumulative >= 0;
-        cumulative += recurring[cursor] ?? 0.0;
+        cumulative += (recurring[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
         if (wasNonNegative && cumulative < 0 && crossesNegativeOn == null) {
           crossesNegativeOn = cursor;
         }
