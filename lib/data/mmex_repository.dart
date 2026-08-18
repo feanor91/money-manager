@@ -982,6 +982,29 @@ class MmexRepository {
     return result;
   }
 
+  /// Net signed totals bucketed by calendar day for transactions already
+  /// recorded with a date *after* [after], through [end] (both inclusive
+  /// of the bucketed range) - the future-dated counterpart to
+  /// [dailyNetTotals], reusing its exact same query/filtering (just a
+  /// different day window) since a postdated real transaction (e.g. a bill
+  /// paid a few days ahead of its due date) is stored identically to any
+  /// other. Used by the forecast chart so that kind of entry shows up on
+  /// its own real date instead of being folded entirely into "today"'s
+  /// balance - which used to make an account with any postdated entry look
+  /// already overdrawn today, before its actual due date, even though the
+  /// balance as of today was fine (found 2026-08-18 on a real account with
+  /// two postdated withdrawals ~2 weeks out).
+  Map<DateTime, double> futureDailyNet({
+    required DateTime after,
+    required DateTime end,
+    int? accountId,
+  }) {
+    final start = _addDays(after, 1);
+    if (start.isAfter(end)) return {};
+    final days = _daysBetween(start, end) + 1;
+    return dailyNetTotals(anchor: end, days: days, accountId: accountId);
+  }
+
   /// Mechanical projection of recurring transactions bucketed by calendar
   /// day (see [recurringMonthlyNet] for the rationale).
   Map<DateTime, double> recurringDailyNet({

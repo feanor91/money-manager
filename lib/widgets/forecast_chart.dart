@@ -94,13 +94,11 @@ class _Point {
 class ForecastChart extends StatefulWidget {
   final MmexRepository repository;
   final CurrencyFormat? currency;
-  final double startingBalance;
   final int? accountId;
 
   const ForecastChart({
     super.key,
     required this.repository,
-    required this.startingBalance,
     this.currency,
     this.accountId,
   });
@@ -507,20 +505,32 @@ class _ForecastChartState extends State<ForecastChart> {
   /// reaches that far back, then the mechanical recurring-transaction
   /// projection for every day after it.
   ///
-  /// Today itself always starts from [ForecastChart.startingBalance] (the
-  /// same all-transactions total "Solde actuel" shows - deliberately
-  /// including any transaction already entered with a future date, e.g. a
-  /// bill recorded ahead of schedule) rather than the day-bucketed queries
-  /// used for its neighbours - but only actually appears as a point when
-  /// it's inside [windowStart]..windowEnd; it's always still used to seed
-  /// the projection math below even when scrolled out of view, so a
-  /// window entirely in the future doesn't silently start from zero.
-  /// Never double-counts a postdated entry against that projection:
-  /// recording a recurring bill's occurrence (on time, late, or ahead of
-  /// schedule - see MmexRepository.recordBillOccurrence/catchUpBillDeposit)
-  /// always advances that bill's own next-occurrence date past it, so the
-  /// projection can never re-project something already recorded as a real
-  /// transaction.
+  /// Today itself always starts from the real balance *as of today*
+  /// ([_realBalanceAsOf], excluding anything dated after today) rather than
+  /// the day-bucketed queries used for its neighbours - but only actually
+  /// appears as a point when it's inside [windowStart]..windowEnd; it's
+  /// always still used to seed the projection math below even when
+  /// scrolled out of view, so a window entirely in the future doesn't
+  /// silently start from zero.
+  ///
+  /// Deliberately *not* [MmexRepository.accountBalance] with no `asOf`
+  /// (which includes postdated entries regardless of date, e.g. a bill
+  /// recorded a couple of weeks ahead of its due date): folding those
+  /// straight into "today" made an account with any such entry look
+  /// already overdrawn *today*, before the postdated transaction's own
+  /// date, even though the real balance as of today was fine (found
+  /// 2026-08-18). Those entries aren't dropped, only moved to where they
+  /// belong - see the projection loop below, which adds
+  /// [MmexRepository.futureDailyNet] (real, already-recorded future
+  /// transactions) alongside the usual recurring-bill projection, so a
+  /// postdated entry still shows up, on its own actual date, in full.
+  /// Never double-counts a postdated entry against the recurring-bill
+  /// side of that projection: recording a recurring bill's occurrence (on
+  /// time, late, or ahead of schedule - see
+  /// MmexRepository.recordBillOccurrence/catchUpBillDeposit) always
+  /// advances that bill's own next-occurrence date past it, so the
+  /// template can never also re-project something already recorded as a
+  /// real transaction.
   List<_Point> _buildPoints(DateTime today, DateTime windowStart) {
     final windowEnd = _addMonths(windowStart, _duration.months);
     final points = <_Point>[];
@@ -550,8 +560,10 @@ class _ForecastChartState extends State<ForecastChart> {
       }
     }
 
+    final todayBalance = _realBalanceAsOf(today);
+
     if (!today.isBefore(windowStart) && !today.isAfter(windowEnd)) {
-      points.add(_Point(today, 0, widget.startingBalance, false));
+      points.add(_Point(today, 0, todayBalance, false));
     }
 
     if (windowEnd.isAfter(today)) {
@@ -562,10 +574,19 @@ class _ForecastChartState extends State<ForecastChart> {
         days: projDays,
         accountId: widget.accountId,
       );
-      var cumulative = widget.startingBalance;
+      // Real transactions already recorded with a future date (e.g. a bill
+      // paid ahead of its due date) - merged in alongside the recurring-bill
+      // projection above so they land on their own actual date instead of
+      // being pulled into "today" (see the doc comment above).
+      final futureReal = widget.repository.futureDailyNet(
+        after: today,
+        end: windowEnd,
+        accountId: widget.accountId,
+      );
+      var cumulative = todayBalance;
       var cursor = projStart;
       for (var i = 0; i < projDays; i++) {
-        final net = recurring[cursor] ?? 0.0;
+        final net = (recurring[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
         cumulative += net;
         // Still walked even before windowStart (when the whole window is
         // scrolled into the future) to keep `cumulative` correct - only

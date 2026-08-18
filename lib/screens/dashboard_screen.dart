@@ -519,7 +519,6 @@ class _DashboardChartSectionState extends State<_DashboardChartSection> {
                   )
                 : ForecastChart(
                     repository: widget.repository,
-                    startingBalance: widget.scopedBalance,
                     currency: widget.currency,
                     accountId: widget.selectedAccountId,
                   ),
