@@ -150,7 +150,12 @@ bool Win32Window::Create(const std::wstring& title,
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  // Maximized rather than the 1280x720 default from main.cpp - the user
+  // asked for the desktop app to open filling the screen rather than
+  // needing a manual maximize every launch. The un-maximized 1280x720 size
+  // still applies underneath (visible via the restore/"un-maximize" button),
+  // it's just not what's shown first.
+  return ShowWindow(window_handle_, SW_SHOWMAXIMIZED);
 }
 
 // static

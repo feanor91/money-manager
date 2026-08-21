@@ -23,6 +23,13 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
   final ValueChanged<T?> onSelected;
   final Future<T?> Function(String text)? onCreate;
 
+  /// Fired on every keystroke with the raw typed text, separately from
+  /// [onSelected] - lets a caller resolve/auto-create an entry at save
+  /// time from whatever was last typed, even if the user never picked a
+  /// match from the dropdown or tapped [onCreate]'s button explicitly
+  /// (see TransactionEditorSheet/RecurringEditorSheet's "Tiers" field).
+  final ValueChanged<String>? onTextChanged;
+
   /// Adds a microphone button (Android only - see [_isAndroidPlatform])
   /// that dictates into the search text, reusing the exact same
   /// type-to-filter path as typing does - the user still taps their
@@ -42,6 +49,7 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
     required this.onSelected,
     this.initialValue,
     this.onCreate,
+    this.onTextChanged,
     this.enableVoiceInput = false,
   });
 
@@ -122,6 +130,7 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
             displayStringForOption: widget.labelOf,
             optionsBuilder: (textEditingValue) {
               _pendingTextHolder.text = textEditingValue.text;
+              widget.onTextChanged?.call(textEditingValue.text);
               final query = textEditingValue.text.trim().toLowerCase();
               if (query.isEmpty) return widget.options;
               return widget.options.where((o) => widget.labelOf(o).toLowerCase().contains(query));

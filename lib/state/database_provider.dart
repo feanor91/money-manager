@@ -235,6 +235,32 @@ class DatabaseProvider extends ChangeNotifier {
         _prefsKeyAccountOrder, orderedIds.map((id) => id.toString()).toList());
   }
 
+  /// Grand livre (transactions_screen.dart's `_LedgerTable`) column display
+  /// order - a list of `LedgerColumnId.name` strings, left to right. A
+  /// column id not present here (new one added in a later app version)
+  /// falls back to appearing after every saved one, in its declared enum
+  /// order - same "unlisted = appended at the end" convention as
+  /// [accountOrder].
+  List<String> ledgerColumnOrder = [];
+
+  /// Which grand livre columns are hidden, by `LedgerColumnId.name` - the
+  /// leading "pointée" checkbox column is never in either list, it's
+  /// always shown fixed-first.
+  Set<String> ledgerHiddenColumns = {};
+
+  Future<void> setLedgerColumns({
+    required List<String> order,
+    required Set<String> hidden,
+  }) async {
+    ledgerColumnOrder = order;
+    ledgerHiddenColumns = hidden;
+    notifyListeners();
+    final prefs = companionSettings;
+    if (prefs == null) return;
+    await prefs.setStringList(_prefsKeyLedgerColumnOrder, order);
+    await prefs.setStringList(_prefsKeyLedgerHiddenColumns, hidden.toList());
+  }
+
   /// Day of month for the extra "solde previsionnel" figure shown on each
   /// account card (e.g. 24, the day before a salary lands on the 25th) -
   /// configurable since that date is different for everyone.
@@ -817,6 +843,9 @@ class DatabaseProvider extends ChangeNotifier {
           .map((s) => int.tryParse(s))
           .whereType<int>()
           .toList();
+      ledgerColumnOrder = prefs.getStringList(_prefsKeyLedgerColumnOrder) ?? [];
+      ledgerHiddenColumns =
+          (prefs.getStringList(_prefsKeyLedgerHiddenColumns) ?? []).toSet();
       forecastDay = prefs.getInt(_prefsKeyForecastDay) ?? 24;
       palette = AppPalette.values.firstWhere(
         (p) => p.name == prefs.getString(_prefsKeyPalette),
@@ -833,6 +862,8 @@ class DatabaseProvider extends ChangeNotifier {
       selectedAccountId = null;
       hiddenAccountIds = {};
       accountOrder = [];
+      ledgerColumnOrder = [];
+      ledgerHiddenColumns = {};
       forecastDay = 24;
       palette = AppPalette.indigo;
       themeMode = ThemeMode.system;
@@ -1152,3 +1183,5 @@ const _prefsKeyAccountOrder = 'mmex_account_order';
 const _prefsKeyForecastDay = 'mmex_forecast_day';
 const _prefsKeyPalette = 'mmex_app_palette';
 const _prefsKeyThemeMode = 'mmex_app_theme_mode';
+const _prefsKeyLedgerColumnOrder = 'mmex_ledger_column_order';
+const _prefsKeyLedgerHiddenColumns = 'mmex_ledger_hidden_columns';

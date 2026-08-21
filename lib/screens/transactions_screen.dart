@@ -40,6 +40,115 @@ bool get _showFullLedger => !kIsWeb;
 bool get _isAndroidPlatform =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+/// The grand livre's customizable columns (desktop-style `_LedgerTable`
+/// only - the narrow-screen `_LedgerCards` layout isn't column-based, same
+/// reasoning as the account carousel's "narrow follows the saved order but
+/// isn't itself draggable"). The leading "pointée" checkbox is deliberately
+/// not a member of this enum - it's an action control, not a data column,
+/// and always renders fixed-first regardless of customization. Declaration
+/// order here is also the default display order (see
+/// DatabaseProvider.ledgerColumnOrder's doc comment).
+enum LedgerColumnId { date, tiers, statut, categorie, montant, solde, remarques }
+
+String _ledgerColumnLabel(LedgerColumnId id) {
+  switch (id) {
+    case LedgerColumnId.date:
+      return 'Date';
+    case LedgerColumnId.tiers:
+      return 'Tiers';
+    case LedgerColumnId.statut:
+      return 'Statut';
+    case LedgerColumnId.categorie:
+      return 'Catégorie';
+    case LedgerColumnId.montant:
+      return 'Débit / Crédit';
+    case LedgerColumnId.solde:
+      return 'Solde';
+    case LedgerColumnId.remarques:
+      return 'Remarques';
+  }
+}
+
+/// The full set of known columns, in [dbProvider]'s saved custom order -
+/// including hidden ones, so the column-settings sheet can still show and
+/// reorder them. A column id saved from an older/newer app version that no
+/// longer exists is silently dropped; one never yet saved (new in this
+/// version) is appended at the end in its declared enum order - same
+/// "unlisted = appended at the end" convention as `sortByAccountOrder`.
+List<LedgerColumnId> _allLedgerColumnsInOrder(DatabaseProvider dbProvider) {
+  final byName = {for (final c in LedgerColumnId.values) c.name: c};
+  final saved = dbProvider.ledgerColumnOrder
+      .map((s) => byName[s])
+      .whereType<LedgerColumnId>()
+      .toList();
+  final missing = LedgerColumnId.values.where((c) => !saved.contains(c));
+  return [...saved, ...missing];
+}
+
+/// [_allLedgerColumnsInOrder] filtered down to what should actually render
+/// in `_LedgerTable`.
+List<LedgerColumnId> _visibleLedgerColumns(DatabaseProvider dbProvider) {
+  return _allLedgerColumnsInOrder(dbProvider)
+      .where((c) => !dbProvider.ledgerHiddenColumns.contains(c.name))
+      .toList();
+}
+
+/// Same tiers/catégorie label rules [_LedgerTable]/[_LedgerCards] already
+/// render inline - factored out here purely for [_compareLedgerRows] to
+/// reuse, without touching either widget's own rendering code.
+String _ledgerTiersLabel(
+    MoneyTransaction tx, Map<int, Account> accountsById, Map<int, Payee> payeesById) {
+  return tx.transCode == TransCode.transfer
+      ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
+      : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
+}
+
+String _ledgerCategorieLabel(MoneyTransaction tx, Map<int, Category> categoriesById) {
+  final label = categoryFullPath(tx.categoryId, categoriesById);
+  return tx.transCode == TransCode.transfer && label.isEmpty ? 'Virement' : label;
+}
+
+/// Sort key for [LedgerColumnId.statut]: paused ranks after reconciled
+/// ranks after neither, matching the column's own "V"/"R"/"" display order.
+int _ledgerStatutRank(MoneyTransaction tx) {
+  if (tx.isVoid) return 2;
+  if (tx.isReconciled) return 1;
+  return 0;
+}
+
+int _compareLedgerRows(
+  TransactionWithBalance a,
+  TransactionWithBalance b,
+  LedgerColumnId column,
+  int accountId,
+  Map<int, Account> accountsById,
+  Map<int, Category> categoriesById,
+  Map<int, Payee> payeesById,
+) {
+  final txA = a.transaction;
+  final txB = b.transaction;
+  switch (column) {
+    case LedgerColumnId.date:
+      return txA.date.compareTo(txB.date);
+    case LedgerColumnId.tiers:
+      return _ledgerTiersLabel(txA, accountsById, payeesById)
+          .toLowerCase()
+          .compareTo(_ledgerTiersLabel(txB, accountsById, payeesById).toLowerCase());
+    case LedgerColumnId.statut:
+      return _ledgerStatutRank(txA).compareTo(_ledgerStatutRank(txB));
+    case LedgerColumnId.categorie:
+      return _ledgerCategorieLabel(txA, categoriesById)
+          .toLowerCase()
+          .compareTo(_ledgerCategorieLabel(txB, categoriesById).toLowerCase());
+    case LedgerColumnId.montant:
+      return txA.signedAmountFor(accountId).compareTo(txB.signedAmountFor(accountId));
+    case LedgerColumnId.solde:
+      return a.balanceAfter.compareTo(b.balanceAfter);
+    case LedgerColumnId.remarques:
+      return (txA.notes ?? '').toLowerCase().compareTo((txB.notes ?? '').toLowerCase());
+  }
+}
+
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
 
@@ -50,6 +159,25 @@ class TransactionsScreen extends StatefulWidget {
 class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchController = TextEditingController();
   String _search = '';
+
+  // Column-header sort - deliberately session-only, unlike column order/
+  // visibility below (which persist to the companion settings file): this
+  // is closer to the search box than to a real preference, reset on every
+  // fresh visit to the screen rather than remembered. Null means the
+  // natural order the repository already returns (most recent date first).
+  LedgerColumnId? _sortColumn;
+  bool _sortAscending = true;
+
+  void _toggleSort(LedgerColumnId column) {
+    setState(() {
+      if (_sortColumn == column) {
+        _sortAscending = !_sortAscending;
+      } else {
+        _sortColumn = column;
+        _sortAscending = true;
+      }
+    });
+  }
 
   /// Always the 1st of some month - the anchor/latest month of the visible
   /// window. On web (![_showFullLedger]) the ledger shows this month plus
@@ -139,7 +267,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     ];
 
     final query = foldDiacritics(_search.trim());
-    final rows = query.isEmpty
+    var rows = query.isEmpty
         ? allRows
         : allRows.where((row) {
             final tx = row.transaction;
@@ -160,6 +288,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             return haystack.contains(query);
           }).toList();
 
+    // Column-header sort (see _sortColumn's doc comment) - a pure display
+    // reorder. row.balanceAfter stays whatever the repository already
+    // computed in real chronological order; sorting by another column just
+    // changes which order the (unchanged) rows are shown in, same as
+    // re-sorting a spreadsheet by a different column never recomputes a
+    // running-total column underneath it.
+    if (_sortColumn != null && accountId != null) {
+      final column = _sortColumn!;
+      rows = [...rows]..sort((a, b) {
+          final cmp = _compareLedgerRows(a, b, column, accountId, accountsById, categories, payees);
+          return _sortAscending ? cmp : -cmp;
+        });
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -172,6 +314,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               for (final a in visibleAccounts)
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.view_column_outlined),
+            tooltip: 'Colonnes du grand livre',
+            onPressed: () => _openColumnSettings(context, dbProvider),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -311,6 +458,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   currency: currency,
                   recurringTxIds: recurringTxIds,
                   recurringOccurrences: recurringOccurrences,
+                  columns: _visibleLedgerColumns(dbProvider),
+                  sortColumn: _sortColumn,
+                  sortAscending: _sortAscending,
+                  onSort: _toggleSort,
                   onTapRow: (tx) => openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
@@ -404,6 +555,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
     dbProvider.touch();
   }
+
+  /// Shows/reorders the desktop-style ledger table's columns - changes
+  /// apply immediately (persisted to the companion settings file via
+  /// DatabaseProvider.setLedgerColumns) rather than needing an explicit
+  /// "save", same as the dashboard's account-order drag-and-drop.
+  Future<void> _openColumnSettings(BuildContext context, DatabaseProvider dbProvider) {
+    return showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _LedgerColumnSettingsSheet(dbProvider: dbProvider),
+    );
+  }
 }
 
 /// MMEX-style ledger grid: Date / Tiers / Statut / Categorie / Debit /
@@ -420,21 +583,28 @@ class _LedgerTable extends StatelessWidget {
   static const _colSolde = 100.0;
   static const _colRemarques = 200.0;
   static const _colGap = 12.0;
-  static const _columnCount =
-      9; // check, date, tiers, statut, categorie, debit, credit, solde, remarques
-  // +24 for the 12px horizontal padding on each side of every row (header
-  // and data rows both wrap their Row in EdgeInsets.symmetric(horizontal:
-  // 12)), which isn't otherwise accounted for in the fixed column widths.
-  static const _totalWidth = _colCheck +
-      _colDate +
-      _colTiers +
-      _colStatut +
-      _colCategorie +
-      _colMontant * 2 +
-      _colSolde +
-      _colRemarques +
-      _colGap * (_columnCount - 1) +
-      24;
+
+  static double _renderedWidth(LedgerColumnId col) {
+    switch (col) {
+      case LedgerColumnId.date:
+        return _colDate;
+      case LedgerColumnId.tiers:
+        return _colTiers;
+      case LedgerColumnId.statut:
+        return _colStatut;
+      case LedgerColumnId.categorie:
+        return _colCategorie;
+      // Two sub-cells (Débit/Crédit) side by side with a gap between - kept
+      // as a single customizable unit (see LedgerColumnId.montant's doc
+      // comment) rather than two independently hideable/orderable columns.
+      case LedgerColumnId.montant:
+        return _colMontant * 2 + _colGap;
+      case LedgerColumnId.solde:
+        return _colSolde;
+      case LedgerColumnId.remarques:
+        return _colRemarques;
+    }
+  }
 
   final List<TransactionWithBalance> rows;
   final int accountId;
@@ -449,6 +619,15 @@ class _LedgerTable extends StatelessWidget {
   final Set<int> recurringTxIds;
   final Map<int, ({int index, int total})> recurringOccurrences;
 
+  /// Visible columns, left to right - see
+  /// transactions_screen.dart's `_visibleLedgerColumns`. The leading
+  /// "pointée" checkbox is never part of this list, it always renders
+  /// fixed-first.
+  final List<LedgerColumnId> columns;
+  final LedgerColumnId? sortColumn;
+  final bool sortAscending;
+  final ValueChanged<LedgerColumnId> onSort;
+
   const _LedgerTable({
     required this.rows,
     required this.accountId,
@@ -461,8 +640,22 @@ class _LedgerTable extends StatelessWidget {
     required this.onEditAmount,
     required this.recurringTxIds,
     required this.recurringOccurrences,
+    required this.columns,
+    required this.sortColumn,
+    required this.sortAscending,
+    required this.onSort,
     this.currency,
   });
+
+  // +24 for the 12px horizontal padding on each side of every row (header
+  // and data rows both wrap their Row in EdgeInsets.symmetric(horizontal:
+  // 12)), which isn't otherwise accounted for by the column widths below.
+  // Not a static const any more (like the old fixed-column-set version)
+  // since it now depends on which/how many columns are actually visible.
+  double get _totalWidth =>
+      _colCheck +
+      24 +
+      columns.fold<double>(0, (sum, c) => sum + _colGap + _renderedWidth(c));
 
   @override
   Widget build(BuildContext context) {
@@ -487,38 +680,84 @@ class _LedgerTable extends StatelessWidget {
     );
   }
 
-  Widget _headerRow(BuildContext context) {
-    final onSurface = Theme.of(context).colorScheme.onSurface;
-    Widget h(double width, String label, {TextAlign align = TextAlign.left}) =>
-        SizedBox(
-          width: width,
-          child: Text(
-            label,
-            textAlign: align,
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: onSurface),
+  /// A single header cell - tappable (toggling sort on [sortKey]) when one
+  /// is given, plain otherwise (none of the current columns opt out, but
+  /// kept general rather than assuming every future column is sortable).
+  Widget _headerCell(
+    BuildContext context,
+    double width,
+    String label, {
+    TextAlign align = TextAlign.left,
+    LedgerColumnId? sortKey,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final active = sortKey != null && sortKey == sortColumn;
+    final color = active ? scheme.primary : scheme.onSurface;
+    final icon = active
+        ? Icon(sortAscending ? Icons.arrow_upward : Icons.arrow_downward,
+            size: 12, color: scheme.primary)
+        : null;
+    final mainAxisAlignment = switch (align) {
+      TextAlign.right => MainAxisAlignment.end,
+      TextAlign.center => MainAxisAlignment.center,
+      _ => MainAxisAlignment.start,
+    };
+    final content = SizedBox(
+      width: width,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: mainAxisAlignment,
+        children: [
+          if (align == TextAlign.right && icon != null) ...[icon, const SizedBox(width: 2)],
+          Flexible(
+            child: Text(
+              label,
+              textAlign: align,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color),
+            ),
           ),
-        );
+          if (align != TextAlign.right && icon != null) ...[const SizedBox(width: 2), icon],
+        ],
+      ),
+    );
+    if (sortKey == null) return content;
+    return InkWell(onTap: () => onSort(sortKey), child: content);
+  }
+
+  List<Widget> _headerCellsFor(BuildContext context, LedgerColumnId col) {
+    switch (col) {
+      case LedgerColumnId.date:
+        return [_headerCell(context, _colDate, 'Date', sortKey: col)];
+      case LedgerColumnId.tiers:
+        return [_headerCell(context, _colTiers, 'Tiers', sortKey: col)];
+      case LedgerColumnId.statut:
+        return [_headerCell(context, _colStatut, 'Statut', align: TextAlign.center, sortKey: col)];
+      case LedgerColumnId.categorie:
+        return [_headerCell(context, _colCategorie, 'Catégorie', sortKey: col)];
+      case LedgerColumnId.montant:
+        return [
+          _headerCell(context, _colMontant, 'Débit', align: TextAlign.right, sortKey: col),
+          const SizedBox(width: _colGap),
+          _headerCell(context, _colMontant, 'Crédit', align: TextAlign.right, sortKey: col),
+        ];
+      case LedgerColumnId.solde:
+        return [_headerCell(context, _colSolde, 'Solde', align: TextAlign.right, sortKey: col)];
+      case LedgerColumnId.remarques:
+        return [_headerCell(context, _colRemarques, 'Remarques', sortKey: col)];
+    }
+  }
+
+  Widget _headerRow(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Row(
         children: [
           const SizedBox(width: _colCheck),
-          const SizedBox(width: _colGap),
-          h(_colDate, 'Date'),
-          const SizedBox(width: _colGap),
-          h(_colTiers, 'Tiers'),
-          const SizedBox(width: _colGap),
-          h(_colStatut, 'Statut'),
-          const SizedBox(width: _colGap),
-          h(_colCategorie, 'Catégorie'),
-          const SizedBox(width: _colGap),
-          h(_colMontant, 'Débit', align: TextAlign.right),
-          const SizedBox(width: _colGap),
-          h(_colMontant, 'Crédit', align: TextAlign.right),
-          const SizedBox(width: _colGap),
-          h(_colSolde, 'Solde', align: TextAlign.right),
-          const SizedBox(width: _colGap),
-          h(_colRemarques, 'Remarques'),
+          for (final col in columns) ...[
+            const SizedBox(width: _colGap),
+            ..._headerCellsFor(context, col),
+          ],
         ],
       ),
     );
@@ -594,11 +833,8 @@ class _LedgerTable extends StatelessWidget {
     final isFuture =
         tx.date.isAfter(DateTime(today.year, today.month, today.day));
 
-    final tiers = isTransfer
-        ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
-        : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
-    final categoryLabel = categoryFullPath(tx.categoryId, categoriesById);
-    final categorie = isTransfer && categoryLabel.isEmpty ? 'Virement' : categoryLabel;
+    final tiers = _ledgerTiersLabel(tx, accountsById, payeesById);
+    final categorie = _ledgerCategorieLabel(tx, categoriesById);
 
     Widget cell(double width, String text,
         {TextAlign align = TextAlign.left, Color? color, FontWeight? weight}) {
@@ -623,6 +859,117 @@ class _LedgerTable extends StatelessWidget {
     }
 
     final scheme = Theme.of(context).colorScheme;
+
+    List<Widget> cellsFor(LedgerColumnId col) {
+      switch (col) {
+        case LedgerColumnId.date:
+          return [
+            InkWell(
+              onTap: () => _editDate(context, tx),
+              child: cell(_colDate, DateFormat('dd/MM/yy').format(tx.date)),
+            ),
+          ];
+        case LedgerColumnId.tiers:
+          return [
+            SizedBox(
+              width: _colTiers,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (paused) ...[
+                    Tooltip(
+                      message: 'En pause - exclue du solde et des rapports',
+                      child: Icon(Icons.pause_circle_outline, size: 13, color: scheme.error),
+                    ),
+                    const SizedBox(width: 3),
+                  ],
+                  if (recurringTxIds.contains(tx.id)) ...[
+                    Tooltip(
+                      message: recurringOccurrences[tx.id] != null
+                          ? 'Générée par une opération récurrente '
+                              '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
+                          : 'Générée par une opération récurrente',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.autorenew, size: 13, color: scheme.primary),
+                          if (recurringOccurrences[tx.id] != null)
+                            Text(
+                              ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
+                              style: TextStyle(fontSize: 10, color: scheme.primary),
+                            ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 3),
+                  ],
+                  Expanded(
+                    child: Text(
+                      tiers,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontStyle: isFuture ? FontStyle.italic : FontStyle.normal,
+                        fontWeight: isFuture
+                            ? FontWeight.normal
+                            : (reconciled ? FontWeight.normal : FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ];
+        case LedgerColumnId.statut:
+          return [cell(_colStatut, paused ? 'V' : (reconciled ? 'R' : ''), align: TextAlign.center)];
+        case LedgerColumnId.categorie:
+          return [cell(_colCategorie, categorie)];
+        case LedgerColumnId.montant:
+          return [
+            InkWell(
+              onTap: isTransfer ? null : () => _editAmount(context, tx),
+              child: cell(
+                _colMontant,
+                debit == null
+                    ? ''
+                    : (currency?.format(debit) ?? debit.toStringAsFixed(2)),
+                align: TextAlign.right,
+                color: debit == null ? null : AppTheme.negative,
+              ),
+            ),
+            const SizedBox(width: _colGap),
+            InkWell(
+              onTap: isTransfer ? null : () => _editAmount(context, tx),
+              child: cell(
+                _colMontant,
+                credit == null
+                    ? ''
+                    : (currency?.format(credit) ?? credit.toStringAsFixed(2)),
+                align: TextAlign.right,
+                color: credit == null ? null : AppTheme.positive,
+              ),
+            ),
+          ];
+        case LedgerColumnId.solde:
+          return [
+            cell(
+              _colSolde,
+              currency?.format(row.balanceAfter) ??
+                  row.balanceAfter.toStringAsFixed(2),
+              align: TextAlign.right,
+              weight: FontWeight.w700,
+              color: row.balanceAfter < 0 ? AppTheme.negative : null,
+            ),
+          ];
+        case LedgerColumnId.remarques:
+          return [
+            cell(_colRemarques, tx.notes ?? '',
+                weight: FontWeight.normal, color: Colors.grey[700]),
+          ];
+      }
+    }
+
     return Opacity(
       opacity: paused ? 0.55 : 1,
       child: Material(
@@ -652,105 +999,130 @@ class _LedgerTable extends StatelessWidget {
                   onPressed: () => onToggleReconciled(tx, !reconciled),
                 ),
               ),
-              const SizedBox(width: _colGap),
-              InkWell(
-                onTap: () => _editDate(context, tx),
-                child: cell(_colDate, DateFormat('dd/MM/yy').format(tx.date)),
-              ),
-              const SizedBox(width: _colGap),
-              SizedBox(
-                width: _colTiers,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (paused) ...[
-                      Tooltip(
-                        message: 'En pause - exclue du solde et des rapports',
-                        child: Icon(Icons.pause_circle_outline, size: 13, color: scheme.error),
-                      ),
-                      const SizedBox(width: 3),
-                    ],
-                    if (recurringTxIds.contains(tx.id)) ...[
-                      Tooltip(
-                        message: recurringOccurrences[tx.id] != null
-                            ? 'Générée par une opération récurrente '
-                                '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
-                            : 'Générée par une opération récurrente',
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.autorenew, size: 13, color: scheme.primary),
-                            if (recurringOccurrences[tx.id] != null)
-                              Text(
-                                ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
-                                style: TextStyle(fontSize: 10, color: scheme.primary),
-                              ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 3),
-                    ],
-                    Expanded(
-                      child: Text(
-                        tiers,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontStyle: isFuture ? FontStyle.italic : FontStyle.normal,
-                          fontWeight: isFuture
-                              ? FontWeight.normal
-                              : (reconciled ? FontWeight.normal : FontWeight.w700),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: _colGap),
-              cell(_colStatut, paused ? 'V' : (reconciled ? 'R' : ''), align: TextAlign.center),
-              const SizedBox(width: _colGap),
-              cell(_colCategorie, categorie),
-              const SizedBox(width: _colGap),
-              InkWell(
-                onTap: isTransfer ? null : () => _editAmount(context, tx),
-                child: cell(
-                  _colMontant,
-                  debit == null
-                      ? ''
-                      : (currency?.format(debit) ?? debit.toStringAsFixed(2)),
-                  align: TextAlign.right,
-                  color: debit == null ? null : AppTheme.negative,
-                ),
-              ),
-              const SizedBox(width: _colGap),
-              InkWell(
-                onTap: isTransfer ? null : () => _editAmount(context, tx),
-                child: cell(
-                  _colMontant,
-                  credit == null
-                      ? ''
-                      : (currency?.format(credit) ?? credit.toStringAsFixed(2)),
-                  align: TextAlign.right,
-                  color: credit == null ? null : AppTheme.positive,
-                ),
-              ),
-              const SizedBox(width: _colGap),
-              cell(
-                _colSolde,
-                currency?.format(row.balanceAfter) ??
-                    row.balanceAfter.toStringAsFixed(2),
-                align: TextAlign.right,
-                weight: FontWeight.w700,
-                color: row.balanceAfter < 0 ? AppTheme.negative : null,
-              ),
-              const SizedBox(width: _colGap),
-              cell(_colRemarques, tx.notes ?? '',
-                  weight: FontWeight.normal, color: Colors.grey[700]),
+              for (final col in columns) ...[
+                const SizedBox(width: _colGap),
+                ...cellsFor(col),
+              ],
             ],
           ),
         ),
       ),
+      ),
+    );
+  }
+}
+
+/// Bottom sheet letting the user hide/show and reorder [_LedgerTable]'s
+/// columns (see LedgerColumnId) - every column stays listed here even when
+/// hidden, so it can be dragged back into view. Every change applies (and
+/// persists via DatabaseProvider.setLedgerColumns) immediately, same
+/// convention as the dashboard's drag-and-drop account order - there's
+/// nothing to explicitly "save", so the sheet has no Enregistrer button,
+/// only a Fermer.
+class _LedgerColumnSettingsSheet extends StatefulWidget {
+  final DatabaseProvider dbProvider;
+
+  const _LedgerColumnSettingsSheet({required this.dbProvider});
+
+  @override
+  State<_LedgerColumnSettingsSheet> createState() => _LedgerColumnSettingsSheetState();
+}
+
+class _LedgerColumnSettingsSheetState extends State<_LedgerColumnSettingsSheet> {
+  late List<LedgerColumnId> _order;
+  late Set<LedgerColumnId> _hidden;
+
+  @override
+  void initState() {
+    super.initState();
+    _order = _allLedgerColumnsInOrder(widget.dbProvider);
+    _hidden = widget.dbProvider.ledgerHiddenColumns
+        .map((s) => LedgerColumnId.values.where((c) => c.name == s))
+        .expand((matches) => matches)
+        .toSet();
+  }
+
+  void _persist() {
+    widget.dbProvider.setLedgerColumns(
+      order: _order.map((c) => c.name).toList(),
+      hidden: _hidden.map((c) => c.name).toSet(),
+    );
+  }
+
+  void _toggle(LedgerColumnId col, bool? value) {
+    // At least one column must stay visible - an entirely empty grand
+    // livre table would just look broken, with no way back to a settings
+    // screen from an empty grid.
+    if (value == false && _hidden.length >= _order.length - 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Au moins une colonne doit rester visible.')),
+      );
+      return;
+    }
+    setState(() {
+      if (value == false) {
+        _hidden.add(col);
+      } else {
+        _hidden.remove(col);
+      }
+    });
+    _persist();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Colonnes du grand livre', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              'Cochez pour afficher/masquer, glissez la poignée pour réordonner.',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: ReorderableListView.builder(
+                shrinkWrap: true,
+                buildDefaultDragHandles: false,
+                itemCount: _order.length,
+                onReorderItem: (oldIndex, newIndex) {
+                  setState(() {
+                    final moved = _order.removeAt(oldIndex);
+                    _order.insert(newIndex, moved);
+                  });
+                  _persist();
+                },
+                itemBuilder: (context, index) {
+                  final col = _order[index];
+                  return CheckboxListTile(
+                    key: ValueKey(col),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: !_hidden.contains(col),
+                    onChanged: (v) => _toggle(col, v),
+                    title: Text(_ledgerColumnLabel(col)),
+                    secondary: ReorderableDragStartListener(
+                      index: index,
+                      child: const Icon(Icons.drag_handle),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Fermer'),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1069,6 +1441,11 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   late int? _toAccountId;
   late int? _categoryId;
   late int? _payeeId;
+  // Mirrors the Tiers field's raw typed text, kept in sync via
+  // SearchableSelectField.onTextChanged - lets _save() resolve/auto-create
+  // a payee from whatever was last typed even if the user never picked a
+  // match from the dropdown or tapped its own "create" button (see _save).
+  String _payeeText = '';
   late TransCode _transCode;
   late DateTime _date;
   late bool _reconciled;
@@ -1228,6 +1605,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
                 onSelected: (c) => setState(() => _categoryId = c?.id),
+                enableVoiceInput: true,
                 onCreate: (text) async {
                   final id = widget.repo.insertCategory(name: text);
                   context.read<DatabaseProvider>().touch();
@@ -1243,13 +1621,8 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
+                  onTextChanged: (text) => _payeeText = text,
                   enableVoiceInput: true,
-                  onCreate: (text) async {
-                    final id = widget.repo
-                        .insertPayee(name: text, categoryId: _categoryId);
-                    setState(() {});
-                    return Payee(id: id, name: text, active: true);
-                  },
                 ),
               ],
               const SizedBox(height: 12),
@@ -1300,11 +1673,42 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                         final confirmed = await confirmDelete(
                           context,
                           title: 'Supprimer cette opération',
-                          message: 'Supprimer définitivement cette opération du grand livre ?',
+                          message: 'Supprimer cette opération du grand livre '
+                              '? Vous pourrez annuler juste après.',
                         );
                         if (!confirmed || !context.mounted) return;
-                        widget.repo.deleteTransaction(widget.existing!.id);
-                        context.read<DatabaseProvider>().touch();
+                        // Everything needed to recreate this exact
+                        // transaction has to be captured *before* deleting -
+                        // deleteTransaction also wipes the recurring-bill
+                        // link and paused-tracking rows it depends on (see
+                        // MmexRepository.restoreTransaction's doc comment).
+                        final tx = widget.existing!;
+                        final billId = widget.repo.billIdForTransaction(tx.id);
+                        final occurrence =
+                            widget.repo.recurringTransactionOccurrences()[tx.id];
+                        final wasReconciledBeforePause =
+                            tx.isVoid ? widget.repo.wasReconciledBeforePause(tx.id) : null;
+                        widget.repo.deleteTransaction(tx.id);
+                        final dbProvider = context.read<DatabaseProvider>();
+                        dbProvider.touch();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text('Opération supprimée.'),
+                            action: SnackBarAction(
+                              label: 'Annuler',
+                              onPressed: () {
+                                widget.repo.restoreTransaction(
+                                  tx,
+                                  billId: billId,
+                                  occurrenceIndex: occurrence?.index,
+                                  occurrenceTotal: occurrence?.total,
+                                  wasReconciledBeforePause: wasReconciledBeforePause,
+                                );
+                                dbProvider.touch();
+                              },
+                            ),
+                          ),
+                        );
                         Navigator.of(context).pop();
                       },
                       child: const Text('Supprimer'),
@@ -1342,7 +1746,18 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     setState(() => _saving = true);
     final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
-    final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
+    // Resolves whatever was typed into Tiers even if never explicitly
+    // selected/created (see SearchableSelectField.onTextChanged above) -
+    // reuses a matching existing payee case-insensitively, or creates one,
+    // rather than silently dropping it in favor of "Tiers inconnu".
+    final typedPayeeText = _payeeText.trim();
+    final payeeId = isTransfer
+        ? -1
+        : (_payeeId ??
+            (typedPayeeText.isEmpty
+                ? -1
+                : widget.repo.resolveOrCreatePayee(
+                    name: typedPayeeText, categoryId: _categoryId)));
     CategoryChange? categoryChange;
     BillAmountChange? billAmountChange;
     if (widget.existing == null) {

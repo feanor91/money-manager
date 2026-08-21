@@ -454,9 +454,6 @@ this happened for real before the fix.
   user explicitly rejected the extra "OK" step `showDatePicker` requires.
 - No mouse-wheel horizontal scroll on the budget gauges - explicit
   arrow buttons instead (wheel = page scroll, not intuitive per the user).
-- **Pending:** the budget simulator's period selector (BudgetScreen,
-  "Simulation" mode) only offers 3/6/12 mois - add a "1 mois" option,
-  ordered *before* "3 mois".
 - Before implementing a design choice with real ambiguity (e.g. a new UI
   interaction, a "what should count as X" judgment call), ask first
   rather than guessing - several past features changed shape once the

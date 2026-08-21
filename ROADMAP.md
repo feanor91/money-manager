@@ -14,16 +14,11 @@ courses, pas des engagements.
 - **Déverrouillage biométrique** (empreinte/visage) en plus ou à la place
   du code PIN, sur Android - `local_auth` package, s'intègre proprement à
   côté du `PinLockProvider` existant.
-- **Bouton "Annuler la suppression"** pour une transaction (la suppression
-  demande maintenant confirmation - voir Récemment fait - mais reste
-  définitive une fois confirmée, pas de filet de rattrapage au-delà des
-  sauvegardes automatiques).
-- **Tri/personnalisation des colonnes** du grand livre des transactions.
 - Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie ?...)
 - Export csv des différents budgets
-- **Maximiser la fenêtre au démarrage** (desktop) - ouvrir la version
-  Windows agrandie aux dimensions de l'écran plutôt qu'à sa taille par
-  défaut.
+- **"1 mois" dans le sélecteur de période du simulateur de budget**
+  (écran Budget, mode "Simulation") - n'offre actuellement que 3/6/12
+  mois ; ajouter "1 mois", ordonné *avant* "3 mois".
 
 ## Priorité basse
 
@@ -40,6 +35,47 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Maximiser la fenêtre au démarrage (desktop)~~ - **fait (2026-08-21)**.
+  `windows/runner/win32_window.cpp`'s `Show()` : `SW_SHOWNORMAL` →
+  `SW_SHOWMAXIMIZED`. La taille 1280x720 codée dans `main.cpp` reste la
+  taille "restaurée" (visible via le bouton pour désagrandir), seul l'état
+  initial change.
+- ~~Bouton "Annuler la suppression" d'une transaction~~ - **fait
+  (2026-08-21)**. Supprimer une opération affiche maintenant un SnackBar
+  ("Opération supprimée.") avec une action "Annuler" - la recrée avec
+  toutes ses valeurs d'origine (montant, date, compte, tiers, catégorie,
+  notes, statut pointée/en pause, lien vers une récurrente si elle en
+  provenait). Reste un filet de rattrapage immédiat, pas un historique :
+  une fois le SnackBar disparu (ou une autre action effectuée), plus
+  moyen de revenir en arrière autrement que par les sauvegardes
+  automatiques - inchangé sur ce point. Nouvelle méthode
+  `MmexRepository.restoreTransaction` (tout ce dont elle a besoin doit
+  être capturé par l'appelant *avant* `deleteTransaction`, qui efface
+  aussi les tables `APP_TRANSACTION_BILL_LINKS`/`APP_PAUSED_TRANSACTIONS`
+  dont elle dépend) - un nouveau TRANSID est inévitable, MMEX n'offre
+  aucun moyen de réutiliser celui d'une ligne supprimée. 3 nouveaux tests
+  (`test/restore_transaction_test.dart`).
+- ~~Tri/personnalisation des colonnes du grand livre~~ - **fait
+  (2026-08-21)**. Nouveau bouton icône "Colonnes" dans la barre du haut
+  de l'écran Transactions (vue tableau desktop/large écran uniquement -
+  la vue "cartes" mobile n'est pas construite par colonnes) :
+  - **Tri** : cliquer un en-tête (Date/Tiers/Statut/Catégorie/Débit-
+    Crédit/Solde/Remarques) trie les lignes, un second clic inverse le
+    sens (flèche affichée) - un pur réordonnancement d'affichage, ne
+    recalcule jamais le Solde qui reste celui déjà calculé en ordre
+    chronologique réel. Volontairement non persisté (contrairement à
+    l'ordre/visibilité des colonnes ci-dessous) - repart de l'ordre
+    naturel (date, plus récent en premier) à chaque nouvelle visite de
+    l'écran.
+  - **Masquer/afficher et réordonner** les colonnes via une feuille
+    dédiée (case à cocher + poignée glisser-déposer), appliqué
+    immédiatement, persisté dans le fichier de paramètres compagnon
+    (`DatabaseProvider.ledgerColumnOrder`/`ledgerHiddenColumns`, même
+    convention que `accountOrder`/`hiddenAccountIds`) - donc partagé
+    entre tous les appareils ouvrant ce fichier. Toujours au moins une
+    colonne visible (refus silencieux + SnackBar sinon). Débit/Crédit
+    reste une seule unité personnalisable (masquer/déplacer l'un déplace
+    l'autre), pas deux colonnes indépendantes.
 - ~~Dupliquer une opération du grand livre~~ - **fait (2026-08-21)**.
   Bouton "Dupliquer" dans la fiche d'édition d'une transaction existante
   (à côté de "Supprimer"), pour repartir d'une opération similaire sans

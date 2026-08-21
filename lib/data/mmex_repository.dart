@@ -426,6 +426,22 @@ class MmexRepository {
     );
   }
 
+  /// Finds an existing payee matching [name] case-insensitively (trimmed),
+  /// or creates a new one if none exists - lets the ledger/recurring
+  /// editors' "Tiers" field resolve newly-typed text at save time even
+  /// when the user never explicitly tapped the field's own "create"
+  /// button (see TransactionEditorSheet._save/RecurringEditorSheet._save),
+  /// instead of that text being silently discarded.
+  int resolveOrCreatePayee({required String name, int? categoryId}) {
+    final trimmed = name.trim();
+    final existing = db.query(
+      'SELECT PAYEEID FROM PAYEE_V1 WHERE PAYEENAME = ? COLLATE NOCASE LIMIT 1',
+      [trimmed],
+    );
+    if (existing.isNotEmpty) return existing.first['PAYEEID'] as int;
+    return insertPayee(name: trimmed, categoryId: categoryId);
+  }
+
   // ---- Transactions ----------------------------------------------------
 
   List<MoneyTransaction> getTransactions({
@@ -619,6 +635,49 @@ class MmexRepository {
     db.execute('DELETE FROM CHECKINGACCOUNT_V1 WHERE TRANSID = ?', [transId]);
     db.execute('DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
     db.execute('DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
+  }
+
+  /// Recreates [tx] as a brand-new transaction with the same field values,
+  /// reconciled/paused status, and recurring-bill link (if any) it had
+  /// right before being deleted - powers "Annuler" on
+  /// TransactionEditorSheet's post-delete SnackBar. A fresh TRANSID is
+  /// unavoidable (MMEX has no way to reuse a deleted one), so the caller
+  /// must capture everything ([tx] itself, plus [billId]/[occurrenceIndex]/
+  /// [occurrenceTotal]/[wasReconciledBeforePause]) *before* calling
+  /// [deleteTransaction] - all of it (including the
+  /// APP_TRANSACTION_BILL_LINKS/APP_PAUSED_TRANSACTIONS rows) is gone
+  /// afterward. Returns the new transaction's id.
+  int restoreTransaction(
+    MoneyTransaction tx, {
+    int? billId,
+    int? occurrenceIndex,
+    int? occurrenceTotal,
+    bool? wasReconciledBeforePause,
+  }) {
+    final newId = insertTransaction(
+      accountId: tx.accountId,
+      payeeId: tx.payeeId,
+      transCode: tx.transCode,
+      amount: tx.amount,
+      date: tx.date,
+      categoryId: tx.categoryId,
+      toAccountId: tx.toAccountId,
+      toAmount: tx.toAmount,
+      notes: tx.notes,
+      reconciled: tx.isReconciled,
+    );
+    // insertTransaction only knows 'R'/'' (via the reconciled bool) - void
+    // ('V', "en pause") needs a direct follow-up write, same as
+    // TransactionEditorSheet._save's own status handling.
+    if (tx.isVoid) {
+      db.execute('UPDATE CHECKINGACCOUNT_V1 SET STATUS = ? WHERE TRANSID = ?', ['V', newId]);
+      syncPausedTracking(newId, paused: true, reconciled: wasReconciledBeforePause ?? false);
+    }
+    if (billId != null) {
+      _linkTransactionToBill(newId, billId,
+          occurrenceIndex: occurrenceIndex, occurrenceTotal: occurrenceTotal);
+    }
+    return newId;
   }
 
   /// Whether [transId] was reconciled right before being paused - only

@@ -375,6 +375,11 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
   late int? _toAccountId;
   late int? _categoryId;
   late int? _payeeId;
+  // Mirrors the Tiers field's raw typed text - see
+  // TransactionEditorSheet._payeeText for why this exists (_save resolves/
+  // auto-creates a payee from it if the user never picked a match or
+  // tapped the field's own "create" button).
+  String _payeeText = '';
   late TransCode _transCode;
   late DateTime _nextOccurrence;
   late RecurrencePeriod _period;
@@ -520,6 +525,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                 labelOf: (c) => categoryFullPath(c.id, categoriesById),
                 initialValue: findById(categories, _categoryId, (c) => c.id),
                 onSelected: (c) => setState(() => _categoryId = c?.id),
+                enableVoiceInput: true,
                 onCreate: (text) async {
                   final id = widget.repo.insertCategory(name: text);
                   context.read<DatabaseProvider>().touch();
@@ -534,12 +540,8 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
+                  onTextChanged: (text) => _payeeText = text,
                   enableVoiceInput: true,
-                  onCreate: (text) async {
-                    final id = widget.repo
-                        .insertPayee(name: text, categoryId: _categoryId);
-                    return Payee(id: id, name: text, active: true);
-                  },
                 ),
               ],
               const SizedBox(height: 12),
@@ -683,7 +685,18 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
-    final payeeId = isTransfer ? -1 : (_payeeId ?? -1);
+    // See TransactionEditorSheet._save's identical resolution for why -
+    // reuses a matching existing payee case-insensitively, or creates one,
+    // instead of silently dropping newly-typed text that was never
+    // explicitly selected/created.
+    final typedPayeeText = _payeeText.trim();
+    final payeeId = isTransfer
+        ? -1
+        : (_payeeId ??
+            (typedPayeeText.isEmpty
+                ? -1
+                : widget.repo.resolveOrCreatePayee(
+                    name: typedPayeeText, categoryId: _categoryId)));
     final numOccurrences = periodUsesXParam(_period)
         ? int.parse(_occurrencesController.text)
         : (_limitedOccurrences ? int.parse(_occurrencesController.text) : -1);
