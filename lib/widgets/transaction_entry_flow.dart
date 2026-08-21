@@ -23,6 +23,7 @@ Future<void> openTransactionEditor(
   MoneyTransaction? existing,
   int? defaultAccountId,
   VoiceTransactionDraft? voicePrefill,
+  MoneyTransaction? duplicateFrom,
 }) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
@@ -34,6 +35,7 @@ Future<void> openTransactionEditor(
       repo: repo,
       defaultAccountId: defaultAccountId,
       voicePrefill: voicePrefill,
+      duplicateFrom: duplicateFrom,
     ),
   );
   dbProvider.touch();
@@ -51,6 +53,17 @@ Future<void> openTransactionEditor(
       repo: repo,
       dbProvider: dbProvider,
       change: result!.billAmountChange!,
+    );
+  }
+  // "Dupliquer" was tapped - reopen a fresh "Nouvelle transaction" sheet
+  // seeded from the source transaction, only once this one has fully
+  // closed (same deferred-to-after-close convention as the two follow-ups
+  // above).
+  if (result?.duplicateFrom != null && context.mounted) {
+    await openTransactionEditor(
+      context,
+      defaultAccountId: defaultAccountId,
+      duplicateFrom: result!.duplicateFrom,
     );
   }
 }

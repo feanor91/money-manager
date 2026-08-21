@@ -1021,6 +1021,11 @@ class _LedgerCards extends StatelessWidget {
 typedef TransactionEditorResult = ({
   CategoryChange? categoryChange,
   BillAmountChange? billAmountChange,
+  /// Set only when "Dupliquer" was tapped - the source transaction to seed
+  /// a fresh "Nouvelle transaction" sheet from (see openTransactionEditor,
+  /// which reopens itself with this as [TransactionEditorSheet.duplicateFrom]
+  /// once this sheet has actually closed).
+  MoneyTransaction? duplicateFrom,
 });
 
 /// The full transaction edit form, as a modal bottom sheet - shared between
@@ -1038,12 +1043,19 @@ class TransactionEditorSheet extends StatefulWidget {
   /// edit always wins over a stale draft). See voice_transaction_sheet.dart.
   final VoiceTransactionDraft? voicePrefill;
 
+  /// Seeds every field a duplicated transaction should copy - everything
+  /// except amount and date, which "Dupliquer" deliberately leaves blank/
+  /// today's date rather than copying (see the button's own doc comment).
+  /// Ignored when [existing] is set, same as [voicePrefill].
+  final MoneyTransaction? duplicateFrom;
+
   const TransactionEditorSheet({
     super.key,
     this.existing,
     required this.repo,
     this.defaultAccountId,
     this.voicePrefill,
+    this.duplicateFrom,
   });
 
   @override
@@ -1078,11 +1090,16 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     super.initState();
     final tx = widget.existing;
     final draft = tx == null ? widget.voicePrefill : null;
-    _accountId = tx?.accountId ?? draft?.accountId ?? widget.defaultAccountId;
-    _toAccountId = tx?.toAccountId;
-    _categoryId = tx?.categoryId ?? draft?.categoryId;
-    _payeeId = tx?.payeeId ?? draft?.payeeId;
-    _transCode = tx?.transCode ?? draft?.transCode ?? TransCode.withdrawal;
+    // Ignored the same way [draft] is when editing a real transaction - a
+    // duplicate only ever seeds a brand-new one.
+    final dup = tx == null ? widget.duplicateFrom : null;
+    _accountId = tx?.accountId ?? draft?.accountId ?? dup?.accountId ?? widget.defaultAccountId;
+    _toAccountId = tx?.toAccountId ?? dup?.toAccountId;
+    _categoryId = tx?.categoryId ?? draft?.categoryId ?? dup?.categoryId;
+    _payeeId = tx?.payeeId ?? draft?.payeeId ?? dup?.payeeId;
+    _transCode = tx?.transCode ?? draft?.transCode ?? dup?.transCode ?? TransCode.withdrawal;
+    // [dup]'s own date is never read here - "Dupliquer" always lands on
+    // today's date, same as this falling through to DateTime.now() below.
     _date = tx?.date ?? draft?.date ?? DateTime.now();
     _paused = tx?.isVoid ?? false;
     // A paused transaction's *live* status is 'V', not 'R' - tx.isReconciled
@@ -1091,9 +1108,11 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // MmexRepository.wasReconciledBeforePause).
     _reconciled =
         tx == null ? false : (_paused ? widget.repo.wasReconciledBeforePause(tx.id) : tx.isReconciled);
+    // [dup]'s amount is never read here either - the whole point of
+    // "Dupliquer" is a fresh amount the user types in themselves.
     _amountController.text =
         tx != null ? tx.amount.toStringAsFixed(2) : (draft?.amount?.toStringAsFixed(2) ?? '');
-    _notesController.text = tx?.notes ?? draft?.notes ?? '';
+    _notesController.text = tx?.notes ?? draft?.notes ?? dup?.notes ?? '';
   }
 
   @override
@@ -1290,6 +1309,19 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                       },
                       child: const Text('Supprimer'),
                     ),
+                  // Closes this sheet with the source transaction attached -
+                  // openTransactionEditor reopens a fresh "Nouvelle
+                  // transaction" sheet from it once this one has actually
+                  // closed, rather than trying to swap forms in place.
+                  if (widget.existing != null)
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop((
+                        categoryChange: null,
+                        billAmountChange: null,
+                        duplicateFrom: widget.existing,
+                      )),
+                      child: const Text('Dupliquer'),
+                    ),
                   const Spacer(),
                   FilledButton(
                     onPressed: _saving ? null : _save,
@@ -1382,7 +1414,10 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
       }
     }
     context.read<DatabaseProvider>().touch();
-    Navigator.of(context)
-        .pop((categoryChange: categoryChange, billAmountChange: billAmountChange));
+    Navigator.of(context).pop((
+      categoryChange: categoryChange,
+      billAmountChange: billAmountChange,
+      duplicateFrom: null,
+    ));
   }
 }

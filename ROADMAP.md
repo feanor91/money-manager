@@ -37,6 +37,23 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~Dupliquer une opération du grand livre~~ - **fait (2026-08-21)**.
+  Bouton "Dupliquer" dans la fiche d'édition d'une transaction existante
+  (à côté de "Supprimer"), pour repartir d'une opération similaire sans
+  tout ressaisir. Ferme la fiche courante et en rouvre une nouvelle
+  ("Nouvelle transaction") préremplie avec compte, tiers, catégorie, type
+  (dépense/revenu/virement), compte destination si virement, et notes de
+  l'opération source - **montant et date volontairement pas repris**
+  (montant vide à saisir, date sur aujourd'hui), ainsi que "Pointée"/
+  "En pause" qui repartent à leurs valeurs par défaut, une opération
+  dupliquée n'étant pas encore pointée par la banque. Implémenté via un
+  nouveau champ `TransactionEditorSheet.duplicateFrom` (même principe que
+  `voicePrefill`) et un nouveau champ `duplicateFrom` sur
+  `TransactionEditorResult`, géré par `openTransactionEditor`
+  (`lib/widgets/transaction_entry_flow.dart`) qui se rappelle lui-même une
+  fois la fiche fermée - même convention déjà utilisée pour la
+  réaffectation de catégorie en masse et la synchro de montant vers une
+  récurrente. `flutter analyze`/`flutter test` propres.
 - ~~Délai de grâce avant redemander le code PIN (Android)~~ - **fait
   (2026-08-08)**. Auparavant, dès que l'appli passait en arrière-plan ne
   serait-ce qu'un instant, revenir dessus redemandait systématiquement le
