@@ -21,6 +21,9 @@ courses, pas des engagements.
 - **Tri/personnalisation des colonnes** du grand livre des transactions.
 - Ne pas mettre toutes les fonctionnalité dans l'application Andoid, certaines ne sont pas nécessaire (budget, dépnses par catégorie ?...)
 - Export csv des différents budgets
+- **Maximiser la fenêtre au démarrage** (desktop) - ouvrir la version
+  Windows agrandie aux dimensions de l'écran plutôt qu'à sa taille par
+  défaut.
 
 ## Priorité basse
 
