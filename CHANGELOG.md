@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.71] - 2026-08-21
+
+- feat(transactions): add Dupliquer to duplicate a ledger transaction
+
 ## [1.0.70] - 2026-08-18
 
 - fix(balance): stop counting postdated transactions in solde actuel and outlook queries
