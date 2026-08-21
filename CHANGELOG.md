@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.72] - 2026-08-21
+
+- feat(transactions): auto-create payees, sortable/customizable ledger columns, undo delete
+- docs(roadmap): add idea to maximize the desktop window on startup
+
 ## [1.0.71] - 2026-08-21
 
 - feat(transactions): add Dupliquer to duplicate a ledger transaction
