@@ -429,10 +429,12 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
 /// own throwaway read-only connection to [dbPath] (same guarantee as
 /// [openReadOnlyAdHocRepository], disposed here rather than left to the
 /// caller since this function owns its whole lifetime), loads the
-/// user-editable system prompt from Settings, and runs the two-call
-/// SQL-generate-then-answer flow. Null (never throws) under the same
-/// conditions as every other local-AI entry point here - unsupported,
-/// disabled, not ready, or any failure at any step.
+/// user-editable system prompt from Settings, appends the real vocabulary
+/// of the currently-open database to it (see
+/// sql_engine.buildEffectiveSqlSystemPrompt - computed fresh here, never
+/// persisted), and runs the SQL-generate-then-answer flow. Null (never
+/// throws) under the same conditions as every other local-AI entry point
+/// here - unsupported, disabled, not ready, or any failure at any step.
 Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) async {
   if (!Platform.isWindows) return null;
   if (!await isLocalLlmEnabled()) return null;
@@ -441,7 +443,13 @@ Future<String?> askLocalLlmWithFullDataAccess(String question, {required String 
   final readOnlyRepo = await openReadOnlyAdHocRepository(dbPath);
   if (readOnlyRepo == null) return null;
   try {
-    final systemPrompt = await localLlmSqlSystemPrompt();
+    final basePrompt = await localLlmSqlSystemPrompt();
+    final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
+      basePrompt,
+      accounts: readOnlyRepo.getAccounts(),
+      categories: readOnlyRepo.getCategories(onlyActive: false),
+      payees: readOnlyRepo.getPayees(onlyActive: false),
+    );
     return await sql_engine.answerViaFullSqlAccess(
       question: question,
       readOnlyRepo: readOnlyRepo,

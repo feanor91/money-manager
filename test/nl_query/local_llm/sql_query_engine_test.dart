@@ -1,4 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:money_manager/data/mmex_database.dart';
+import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager/models/account.dart';
+import 'package:money_manager/models/category.dart';
+import 'package:money_manager/models/payee.dart';
+import 'package:money_manager/services/nl_query/local_llm/llama_server_client.dart';
 import 'package:money_manager/services/nl_query/local_llm/sql_query_engine.dart';
 
 /// The real safety boundary against a write is the OS/SQLite-enforced
@@ -98,4 +106,436 @@ void main() {
     expect(defaultSqlSystemPrompt, contains('ACCOUNTLIST_V1'));
     expect(defaultSqlSystemPrompt, contains('BILLSDEPOSITS_V1'));
   });
+
+  test('defaultSqlSystemPrompt documents the multi-step, thematic and '
+      'aggregation rules', () {
+    expect(defaultSqlSystemPrompt, contains('"steps"'));
+    expect(defaultSqlSystemPrompt, contains('C.CATEGNAME'));
+    expect(defaultSqlSystemPrompt, contains('jamais par le texte des NOTES'));
+    expect(defaultSqlSystemPrompt, contains('AGREGUE en SQL'));
+    expect(defaultSqlSystemPrompt, contains('GROUP BY'));
+    expect(defaultSqlSystemPrompt, contains('vocabulaire réel'));
+  });
+
+  group('extractValidatedSqlPlan', () {
+    test('accepts the single-sql form as one unlabeled step', () {
+      final plan =
+          extractValidatedSqlPlan('{"sql":"SELECT * FROM CATEGORY_V1"}');
+      expect(plan, hasLength(1));
+      expect(plan!.first.objectif, isEmpty);
+      expect(plan.first.sql, 'SELECT * FROM CATEGORY_V1');
+    });
+
+    test('accepts a multi-step plan, preserving order and labels', () {
+      final plan = extractValidatedSqlPlan(
+          '{"steps":[{"objectif":"total","sql":"SELECT 1"},'
+          '{"objectif":"détail","sql":"SELECT 2"}]}');
+      expect(plan, hasLength(2));
+      expect(plan!.first.objectif, 'total');
+      expect(plan.first.sql, 'SELECT 1');
+      expect(plan[1].objectif, 'détail');
+      expect(plan[1].sql, 'SELECT 2');
+    });
+
+    test('a missing objectif is tolerated and filled in', () {
+      final plan =
+          extractValidatedSqlPlan('{"steps":[{"sql":"SELECT 1"}]}');
+      expect(plan, hasLength(1));
+      expect(plan!.first.objectif, 'résultat');
+    });
+
+    test('rejects a response with neither sql nor steps', () {
+      expect(extractValidatedSqlPlan('{"raison":"non"}'), isNull);
+    });
+
+    test('rejects an empty steps array', () {
+      expect(extractValidatedSqlPlan('{"steps":[]}'), isNull);
+    });
+
+    test('rejects a step whose sql is not a SELECT', () {
+      expect(
+        extractValidatedSqlPlan(
+            '{"steps":[{"objectif":"a","sql":"Voici la réponse : 42"}]}'),
+        isNull,
+      );
+    });
+
+    test('rejects a step containing a write keyword', () {
+      expect(
+        extractValidatedSqlPlan(
+            '{"steps":[{"objectif":"a","sql":"DELETE FROM CATEGORY_V1"}]}'),
+        isNull,
+      );
+    });
+
+    test('rejects a step with an empty sql string', () {
+      expect(
+        extractValidatedSqlPlan('{"steps":[{"sql":""}]}'),
+        isNull,
+      );
+    });
+
+    test('rejects invalid JSON entirely', () {
+      expect(extractValidatedSqlPlan('pas du json du tout'), isNull);
+    });
+
+    test('rejects a plan with more than the maximum number of steps', () {
+      final steps = List.generate(
+        5,
+        (i) => '{"objectif":"a$i","sql":"SELECT $i"}',
+      ).join(',');
+      expect(extractValidatedSqlPlan('{"steps":[$steps]}'), isNull);
+    });
+
+    test('accepts a plan at exactly the maximum number of steps', () {
+      final steps = List.generate(
+        4,
+        (i) => '{"objectif":"a$i","sql":"SELECT $i"}',
+      ).join(',');
+      final plan = extractValidatedSqlPlan('{"steps":[$steps]}');
+      expect(plan, hasLength(4));
+    });
+  });
+
+  group('buildEffectiveSqlSystemPrompt', () {
+    test('appends the real account, category path and payee names', () {
+      final prompt = buildEffectiveSqlSystemPrompt(
+        'Prompt de base.',
+        accounts: const [
+          Account(
+              id: 1,
+              name: 'Compte Courant',
+              type: 'Checking',
+              status: 'Open',
+              initialBalance: 0,
+              currencyId: 1,
+              favorite: false)
+        ],
+        categories: const [
+          Category(id: 1, name: 'Alimentation', parentId: null, active: true),
+          Category(id: 2, name: 'Restaurant', parentId: 1, active: true),
+        ],
+        payees: const [
+          Payee(id: 1, name: 'Carrefour', active: true)
+        ],
+      );
+      expect(prompt, startsWith('Prompt de base.'));
+      expect(prompt, contains('Compte Courant'));
+      expect(prompt, contains('Alimentation:Restaurant'));
+      expect(prompt, contains('Carrefour'));
+    });
+
+    test('is a pure function: the base prompt text is never mutated', () {
+      const base = 'Prompt de base.';
+      buildEffectiveSqlSystemPrompt(
+        base,
+        accounts: const [],
+        categories: const [],
+      );
+      expect(base, 'Prompt de base.');
+    });
+  });
+
+  group('buildAnswerFormattingPrompt', () {
+    final oneResult = [
+      const StepResult(
+        objectif: '',
+        rowsJson: '[{"total": 100}]',
+        rowCount: 1,
+        truncated: false,
+      )
+    ];
+
+    test('a simple question gets the short-answer instruction, no truncation notice',
+        () {
+      final prompt = buildAnswerFormattingPrompt(
+        'combien ai-je dépensé ?',
+        oneResult,
+        truncated: false,
+      );
+      expect(prompt, contains('une ou deux phrases'));
+      expect(prompt, isNot(contains('tronqué')));
+    });
+
+    test('an analysis-style question gets the structured report instruction',
+        () {
+      final prompt = buildAnswerFormattingPrompt(
+        'analyse mes dépenses sur 3 mois',
+        oneResult,
+        truncated: false,
+      );
+      expect(prompt, contains('rapport'));
+      expect(prompt, contains('sections'));
+      expect(prompt, isNot(contains('une ou deux phrases')));
+    });
+
+    test('a truncated result is explicitly announced to the model', () {
+      final prompt = buildAnswerFormattingPrompt(
+        'analyse mes dépenses sur 3 mois',
+        oneResult,
+        truncated: true,
+      );
+      expect(prompt, contains('partiel'));
+    });
+
+    test('the per-step flag marks which specific result is partial', () {
+      final results = [
+        const StepResult(
+          objectif: 'total',
+          rowsJson: '[{"total": 100}]',
+          rowCount: 1,
+          truncated: false,
+        ),
+        const StepResult(
+          objectif: 'détail',
+          rowsJson: '[{"categorie": "Loisirs"}]',
+          rowCount: 1,
+          truncated: true,
+        ),
+      ];
+      final prompt = buildAnswerFormattingPrompt(
+        'analyse mes dépenses',
+        results,
+        truncated: true,
+      );
+      // The notice is attached to the truncated step's result, right after
+      // its JSON, not the complete one's.
+      expect(
+        prompt.indexOf('Ce résultat est partiel'),
+        greaterThan(prompt.indexOf('« détail »')),
+      );
+      expect(
+        prompt.indexOf('Ce résultat est partiel'),
+        greaterThan(prompt.indexOf('Loisirs')),
+      );
+      expect(
+        prompt.indexOf('Ce résultat est partiel'),
+        greaterThan(prompt.indexOf('« total »')),
+      );
+    });
+  });
+
+  group('answerViaFullSqlAccess', () {
+    test('runs every step in order and grounds the answer in all results',
+        () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 100}],
+        [{'categorie': 'Loisirs', 'total': 60}],
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"steps":[{"objectif":"total","sql":"SELECT 1"},{"objectif":"détail","sql":"SELECT 2"}]}',
+        'Réponse finale.',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'analyse mes dépenses',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, 'Réponse finale.');
+      expect(repo.executed, [
+        'SELECT * FROM (SELECT 1) LIMIT 5000',
+        'SELECT * FROM (SELECT 2) LIMIT 5000',
+      ]);
+      // engine.prompts holds the SQL-generation call AND the answer
+      // formatting call - the formatting one is the last.
+      final formattingPrompt = engine.prompts.last;
+      expect(formattingPrompt, contains('total'));
+      expect(formattingPrompt, contains('détail'));
+      expect(formattingPrompt, contains('100'));
+      expect(formattingPrompt, contains('Loisirs'));
+      expect(formattingPrompt, contains('rapport'));
+    });
+
+    test('still supports the single-sql form', () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 42}]
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'combien ?',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, 'Réponse finale.');
+      expect(repo.executed, ['SELECT * FROM (SELECT 1) LIMIT 5000']);
+    });
+
+    test('an invalid plan fails closed without touching the database',
+        () async {
+      final repo = _FakeRepo(perStepResults: []);
+      final engine = _FakeEngine(responses: [
+        '{"raison":"non"}',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'x',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, isNull);
+      expect(repo.executed, isEmpty);
+      expect(engine.systemPrompts, hasLength(1));
+      // Only the SQL-generation call happened - no answer-formatting call.
+      expect(engine.prompts, hasLength(1));
+    });
+
+    test('a query that errors fails closed, never throws', () async {
+      final repo = _FakeRepo(perStepResults: [], failOnQuery: true);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'x',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, isNull);
+      // Only the SQL-generation call happened - no answer-formatting call.
+      expect(engine.prompts, hasLength(1));
+    });
+
+    test('an oversized result is truncated and the notice reaches the model',
+        () async {
+      final bigRows = List.generate(
+          2000,
+          (i) => {
+                'id': i,
+                'notes': 'x' * 50,
+              });
+      final repo = _FakeRepo(perStepResults: [bigRows]);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'analyse mes dépenses',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, 'Réponse finale.');
+      // The answer-formatting call is the last one recorded.
+      final formattingPrompt = engine.prompts.last;
+      expect(formattingPrompt, contains('partiel'));
+      expect(formattingPrompt, contains('retirées'));
+      // The model must still receive *valid* JSON - the truncation drops
+      // whole rows from the end, never cuts mid-string/mid-number.
+      final jsonStart = formattingPrompt.indexOf('[{');
+      final jsonEnd = formattingPrompt.indexOf(']', jsonStart);
+      expect(jsonStart, isNot(-1));
+      expect(jsonEnd, isNot(-1));
+      expect(
+        () => jsonDecode(formattingPrompt.substring(jsonStart, jsonEnd + 1)),
+        returnsNormally,
+      );
+    });
+
+    test('the effective system prompt (vocabulary appended) is used as-is',
+        () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 1}]
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      await answerViaFullSqlAccess(
+        question: 'combien ?',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.\n\nVocabulaire réel : Compte Courant',
+        engine: engine,
+      );
+      expect(engine.systemPrompts.single,
+          contains('Vocabulaire réel : Compte Courant'));
+    });
+  });
+}
+
+class _FakeEngine extends LlamaServerClient {
+  final List<String> responses;
+  final List<String> prompts = [];
+  final List<String> systemPrompts = [];
+  int _call = 0;
+  _FakeEngine({required this.responses}) : super(1);
+
+  @override
+  Future<String> askWithSystemPrompt(String systemPrompt, String question) async {
+    systemPrompts.add(systemPrompt);
+    final sep = String.fromCharCode(0);
+    prompts.add('$systemPrompt$sep$question');
+    return responses[_call++];
+  }
+
+  @override
+  Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+    final sep = String.fromCharCode(0);
+    prompts.add('$systemPrompt$sep$question');
+    return responses[_call++];
+  }
+}
+
+class _FakeRepo implements MmexRepository {
+  final _FakeDb _db;
+  _FakeRepo({
+    required List<List<Map<String, Object?>>> perStepResults,
+    bool failOnQuery = false,
+  }) : _db = _FakeDb(
+            results: perStepResults,
+            failOnQuery: failOnQuery,
+          );
+
+  List<String> get executed => _db.executed;
+
+  @override
+  MmexDatabase get db => _db;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw UnimplementedError('non nécessaire pour ce test');
+}
+
+class _FakeDb implements MmexDatabase {
+  final List<List<Map<String, Object?>>> results;
+  final List<String> executed = [];
+  final bool failOnQuery;
+  int _call = 0;
+  _FakeDb({
+    required this.results,
+    required this.failOnQuery,
+  });
+
+  @override
+  String get label => 'fake';
+
+  @override
+  bool get isDirectlyPersisted => false;
+
+  @override
+  List<Map<String, Object?>> query(String sql, [List<Object?> params = const []]) {
+    executed.add(sql);
+    if (failOnQuery) throw StateError('erreur simulée');
+    final result = results[_call % results.length];
+    _call++;
+    return result;
+  }
+
+  @override
+  int execute(String sql, [List<Object?> params = const []]) =>
+      throw UnsupportedError('non applicable');
+
+  @override
+  void transaction(void Function() action) =>
+      throw UnsupportedError('non applicable');
+
+  @override
+  List<int> exportBytes() => throw UnsupportedError('non applicable');
+
+  @override
+  void dispose() {}
 }

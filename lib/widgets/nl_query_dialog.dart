@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../data/mmex_repository.dart';
 import '../models/account.dart';
@@ -321,6 +322,29 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     }
   }
 
+  // The AI-answered text (both the free-form and the SQL-grounded modes)
+  // is Markdown on purpose: report mode (see sql_query_engine.dart's
+  // buildAnswerFormattingPrompt) asks the model for sections, bullets and
+  // bold headings, which would be an unreadable wall of plain text if
+  // rendered as a single [Text]. Computed (deterministic formatter)
+  // answers and errors are plain text and are left as-is.
+  Widget _buildAnswerText(BuildContext context) {
+    final text = _error ?? _answer ?? '';
+    if (_error != null || (!_isAiFreeform && !_isAiSqlGrounded)) {
+      return Text(text);
+    }
+    return MarkdownBody(
+      data: text,
+      styleSheet: MarkdownStyleSheet(
+        p: Theme.of(context).textTheme.bodyMedium,
+        strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+      selectable: true,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // A bare Dialog doesn't reliably pick up the app's dark surface color on
@@ -459,7 +483,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                                     ],
                                   ),
                                 ),
-                              Text(_error ?? _answer ?? ''),
+                              _buildAnswerText(context),
                             ],
                           ),
                         ),

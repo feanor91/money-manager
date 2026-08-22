@@ -193,6 +193,7 @@ void main() {
       expect(capturedBody!['grammar'], isNotEmpty);
       expect(capturedBody!['prompt'], contains('Un prompt sur mesure.'));
       expect(capturedBody!['prompt'], contains('combien ?'));
+      expect(capturedBody!['n_predict'], 1024);
       client.close();
     });
 
@@ -223,6 +224,7 @@ void main() {
       expect(capturedBody!.containsKey('grammar'), isFalse);
       expect(capturedBody!['prompt'], contains('Formule la réponse.'));
       expect(capturedBody!['prompt'], contains('résultat: 42'));
+      expect(capturedBody!['n_predict'], 2048);
       client.close();
     });
   });

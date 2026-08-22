@@ -1,6 +1,9 @@
 import 'dart:convert';
 
 import '../../../data/mmex_repository.dart';
+import '../../../models/account.dart';
+import '../../../models/category.dart';
+import '../../../models/payee.dart';
 import 'llama_server_client.dart';
 
 /// Default value for Settings' editable "Prompt IA (accès complet aux
@@ -20,20 +23,50 @@ import 'llama_server_client.dart';
 const defaultSqlSystemPrompt = '''
 Tu es un générateur de requêtes SQL (SQLite) en lecture seule pour une base
 de finances personnelles (format MMEX). Tu ne réponds JAMAIS toi-même à la
-question : tu écris UNE SEULE requête SQL SELECT qui, une fois exécutée,
-donnera les données nécessaires pour y répondre. Une autre étape se charge
-ensuite de formuler la réponse à partir du résultat réel de ta requête -
-n'invente donc jamais de chiffre ici, seule la requête compte.
+question : tu écris la ou les requêtes SQL SELECT qui, une fois exécutées,
+donneront les données nécessaires pour y répondre. Une autre étape se charge
+ensuite de formuler la réponse à partir des résultats réels de tes requêtes -
+n'invente donc jamais de chiffre ici, seules les requêtes comptent.
 
-Réponds UNIQUEMENT avec un objet JSON de la forme :
+Réponds UNIQUEMENT avec un objet JSON de l'une de ces formes :
 {"sql": "SELECT ..."}
+pour une seule requête, ou :
+{"steps": [{"objectif": "ce que cette requête doit donner", "sql": "SELECT ..."}, ...]}
+pour plusieurs requêtes (1 à N) - utile quand la question demande à la fois
+un total ET un détail, ou plusieurs angles sur les mêmes données. Chaque
+"objectif" est une courte étiquette en français décrivant ce que la requête
+fournit ; chaque "sql" est une requête SELECT distincte, exécutée l'une
+après l'autre.
 ou, si la question ne peut pas être répondue avec ce schéma :
 {"sql": null, "raison": "..."}
 
 Règles strictes :
-- Dialecte SQLite uniquement. Une seule instruction SELECT (ou WITH ... SELECT),
-  jamais de point-virgule, jamais plusieurs requêtes, jamais d'instruction
-  d'écriture (INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/PRAGMA/ATTACH...).
+- Dialecte SQLite uniquement. Chaque requête est UNE seule instruction
+  SELECT (ou WITH ... SELECT), jamais de point-virgule, jamais
+  d'instruction d'écriture (INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/
+  PRAGMA/ATTACH...).
+- Pour un rapport exhaustif ou une analyse (répartition, bilan, détail sur
+  plusieurs mois/années), AGREGUE en SQL (GROUP BY année, GROUP BY
+  catégorie, top N via ORDER BY ... LIMIT) plutôt que de renvoyer des
+  milliers de lignes brutes : les résultats sont passés tels quels à
+  l'étape de réponse, et un résultat trop volumineux serait tronqué.
+- Question thématique ("vacances", "travaux", "cadeaux"...) : cherche
+  d'abord le thème dans les NOMS DE CATÉGORIE (C.CATEGNAME LIKE '%mot%'
+  sur CATEGORY_V1, jointe par CATEGID), jamais par le texte des NOTES -
+  les notes sont trop imprévisibles pour servir de base. Si aucune
+  catégorie existante ne correspond au thème, réponds
+  {"sql": null, "raison": "aucune catégorie ne correspond"} plutôt que
+  de deviner. Exemple : "analyse mes dépenses vacances sur 3 mois" ->
+  SELECT C.CATEGNAME, SUM(T.TRANSAMOUNT) AS total
+  FROM CHECKINGACCOUNT_V1 T JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID
+  WHERE C.CATEGNAME LIKE '%vacance%' AND T.TRANSCODE = 'Withdrawal'
+    AND T.DELETEDTIME = '' AND T.STATUS != 'V'
+    AND T.TRANSDATE >= date('now', '-3 months')
+  GROUP BY C.CATEGNAME ORDER BY total DESC.
+- Le vocabulaire réel de la base de l'utilisateur (comptes, catégories,
+  tiers) est joint en bas de ce prompt : utilise EXACTEMENT ces noms
+  (catégories en chemin complet "Parent:Enfant") quand la question en
+  cite un, plutôt que de deviner un nom proche.
 - N'utilise QUE les tables et colonnes listées ci-dessous. N'invente jamais
   un nom de table ou de colonne absent de cette liste.
 - Les montants (TRANSAMOUNT, TOTRANSAMOUNT, INITIALBAL...) sont toujours des
@@ -104,11 +137,122 @@ d'avant mise en pause)
 /// faithfully paraphrasing data it's handed, nothing about the schema or
 /// query strategy to tune here.
 const _answerFormattingSystemPrompt = '''
-Tu formules une réponse en français à partir d'un résultat de requête déjà
-exécuté sur les données financières réelles de l'utilisateur - tu ne
+Tu formules une réponse en français à partir des résultats de requêtes déjà
+exécutés sur les données financières réelles de l'utilisateur - tu ne
 calcules rien toi-même, tu ne fais que lire et reformuler ces données.
-N'invente jamais un nombre absent du résultat fourni.
+N'invente jamais un nombre absent des résultats fournis.
 ''';
+
+/// One executed step of a multi-step plan, ready to be handed to the
+/// answer-formatting call (see [buildAnswerFormattingPrompt]).
+class StepResult {
+  final String objectif;
+  final String rowsJson;
+  final int rowCount;
+  final bool truncated;
+
+  const StepResult({
+    required this.objectif,
+    required this.rowsJson,
+    required this.rowCount,
+    required this.truncated,
+  });
+}
+
+/// How much of the query results' JSON may reach the answer-formatting
+/// model in total before individual results get truncated (with an
+/// explicit notice, see [buildAnswerFormattingPrompt]) - a few hundred
+/// aggregated rows fit comfortably in the model's context, thousands of
+/// raw rows would not, and the SQL prompt already instructs aggregation
+/// precisely to avoid hitting this.
+const _resultBudgetChars = 60000;
+
+/// Truncates [rows] to a whole number of rows whose JSON encoding fits
+/// under [budget] - dropping rows from the end until it does, so the
+/// model always receives *valid* JSON (never a mid-string/mid-number cut
+/// that a model attempting to parse it literally would choke on). Returns
+/// the (possibly shorter) row list and the total that was dropped.
+({List<Map<String, Object?>> rows, int dropped}) _fitRowsToBudget(
+  List<Map<String, Object?>> rows,
+  int budget,
+) {
+  if (jsonEncode(rows).length <= budget) return (rows: rows, dropped: 0);
+  int low = 0, high = rows.length;
+  while (low < high) {
+    final mid = (low + high + 1) >> 1;
+    if (jsonEncode(rows.sublist(0, mid)).length <= budget) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return (rows: rows.sublist(0, low), dropped: rows.length - low);
+}
+
+/// Builds the second call's user-facing prompt: the question plus every
+/// step's real result, labeled by its objectif, plus adaptive formatting
+/// instructions - a plain, short answer for a simple question, or a
+/// structured, exhaustive report (sections, bullets, per-category/per-
+/// year detail, biggest items first) when the question asks for an
+/// analysis/summary/breakdown. A truncated result is always announced
+/// explicitly so the model knows its data is partial rather than
+/// silently answering as if it were complete.
+String buildAnswerFormattingPrompt(
+  String question,
+  List<StepResult> results, {
+  required bool truncated,
+}) {
+  final isReport = RegExp(
+    r'analyse|rapport|bilan|compte[- ]rendu|répartition|répartir|détail|évolutions?',
+    caseSensitive: false,
+  ).hasMatch(question);
+
+  final buffer = StringBuffer()
+    ..write('Question de l\'utilisateur : "$question"\n\n');
+  for (final result in results) {
+    buffer
+      ..write(result.objectif.isEmpty
+          ? 'Résultat exact de la requête SQL exécutée sur ses données '
+            '(JSON, ${result.rowCount} ligne(s)) :\n'
+          : 'Résultat de l\'étape « ${result.objectif} » (JSON, '
+            '${result.rowCount} ligne(s)) :\n')
+      ..write(result.rowsJson)
+      ..write(result.truncated
+          ? '\n(Ce résultat est partiel : des lignes supplémentaires ont '
+            'été retirées pour rester dans la limite de place - ne réponds '
+            'pas comme si ces lignes manquaient.)\n'
+          : '')
+      ..write('\n');
+  }
+  if (truncated) {
+    buffer.write(
+        'ATTENTION : au moins un des résultats ci-dessus a été '
+        'tronqué par manque de place - tes données sont donc partielles, '
+        'dis-le clairement dans ta réponse plutôt que de répondre comme '
+        'si elles étaient complètes.\n\n');
+  }
+  if (isReport) {
+    buffer.write(
+        'Réponds à la question sous forme de rapport structuré en '
+        'français, en te basant EXCLUSIVEMENT sur ces données : '
+        'organise la réponse en sections avec titres et puces, donne le '
+        'détail par catégorie et par année/mois quand les données le '
+        'permettent, mets en évidence les plus gros postes, et termine '
+        'par un total général quand il est calculable à partir des '
+        'données fournies. Formate les montants avec 2 décimales et le '
+        'symbole €. N\'invente aucun nombre absent des résultats '
+        'fournis ; si un résultat est vide, dis-le clairement plutôt que '
+        'de deviner.');
+  } else {
+    buffer.write(
+        'Réponds à la question en une ou deux phrases claires, en '
+        'français, en te basant EXCLUSIVEMENT sur ces données. Formate '
+        'les montants avec 2 décimales et le symbole €. N\'invente aucun '
+        'nombre absent des résultats fournis. Si un résultat est vide, '
+        'dis-le clairement plutôt que de deviner une réponse.');
+  }
+  return buffer.toString();
+}
 
 /// Extracts and lightly sanity-checks the SQL from the model's JSON
 /// response (see [defaultSqlSystemPrompt]'s output contract). The real
@@ -121,22 +265,27 @@ N'invente jamais un nombre absent du résultat fourni.
 /// write keyword the model wrote despite instructions, prose instead of
 /// SQL) fails closed with a clear "didn't understand" instead of a
 /// confusing raw SQLite error surfacing to the user.
-String? extractValidatedSql(String rawResponse) {
-  final Map<String, dynamic> json;
+Map<String, dynamic>? _decodeJsonObject(String rawResponse) {
   try {
     final start = rawResponse.indexOf('{');
     final end = rawResponse.lastIndexOf('}');
     if (start == -1 || end == -1 || end < start) return null;
     final decoded = jsonDecode(rawResponse.substring(start, end + 1));
-    if (decoded is! Map<String, dynamic>) return null;
-    json = decoded;
+    return decoded is Map<String, dynamic> ? decoded : null;
   } catch (_) {
     return null;
   }
-  final sql = (json['sql'] as String?)?.trim();
-  if (sql == null || sql.isEmpty) return null;
-  if (sql.contains(';')) return null; // no stacked/multiple statements
-  final upper = sql.toUpperCase();
+}
+
+/// The shared SELECT-only safety check used by both [extractValidatedSql]
+/// and [extractValidatedSqlPlan] - see [extractValidatedSql]'s own doc
+/// for why this is quality control on top of the OS-enforced read-only
+/// connection, not the real safety boundary.
+String? _validateSqlText(String? sql) {
+  final trimmed = sql?.trim();
+  if (trimmed == null || trimmed.isEmpty) return null;
+  if (trimmed.contains(';')) return null; // no stacked/multiple statements
+  final upper = trimmed.toUpperCase();
   if (!RegExp(r'^\s*(SELECT|WITH)\b').hasMatch(upper)) return null;
   const forbidden = [
     'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE',
@@ -146,27 +295,84 @@ String? extractValidatedSql(String rawResponse) {
   for (final word in forbidden) {
     if (RegExp('\\b$word\\b').hasMatch(upper)) return null;
   }
-  return sql;
+  return trimmed;
+}
+
+String? extractValidatedSql(String rawResponse) {
+  final json = _decodeJsonObject(rawResponse);
+  if (json == null) return null;
+  return _validateSqlText(json['sql'] as String?);
+}
+
+/// One validated step of a multi-step plan (see
+/// [extractValidatedSqlPlan]'s doc for the full contract).
+class SqlQueryStep {
+  final String objectif;
+  final String sql;
+
+  const SqlQueryStep({required this.objectif, required this.sql});
+}
+
+/// Same as [extractValidatedSql], but accepts both of
+/// [defaultSqlSystemPrompt]'s accepted response shapes:
+/// `{"sql": "..."}` (wrapped as a single, unlabeled step) or
+/// `{"steps": [{"objectif": "...", "sql": "..."}, ...]}` (1 to N steps,
+/// order preserved). Every step's SQL goes through the exact same
+/// SELECT-only validation as [extractValidatedSql] - a single bad step
+/// fails the whole plan closed with null, never a partial execution.
+/// A plan with more steps than this is rejected outright rather than
+/// truncated: each step is a separate sequential database query, so an
+/// unbounded count would let one question turn into an arbitrarily long
+/// chain of queries with no way for the user to tell "still working" from
+/// "hung". Four is plenty for the realistic "total + per-category +
+/// per-month" shape this feature exists for.
+const _maxSqlPlanSteps = 4;
+
+List<SqlQueryStep>? extractValidatedSqlPlan(String rawResponse) {
+  final json = _decodeJsonObject(rawResponse);
+  if (json == null) return null;
+
+  if (json.containsKey('steps')) {
+    final rawSteps = json['steps'];
+    if (rawSteps is! List || rawSteps.isEmpty) return null;
+    if (rawSteps.length > _maxSqlPlanSteps) return null;
+    final steps = <SqlQueryStep>[];
+    for (final raw in rawSteps) {
+      if (raw is! Map<String, dynamic>) return null;
+      final sql = _validateSqlText(raw['sql'] as String?);
+      if (sql == null) return null;
+      final objectif = (raw['objectif'] as String?)?.trim() ?? '';
+      steps.add(SqlQueryStep(
+          objectif: objectif.isEmpty ? 'résultat' : objectif, sql: sql));
+    }
+    return steps;
+  }
+
+  final sql = _validateSqlText(json['sql'] as String?);
+  if (sql == null) return null;
+  return [SqlQueryStep(objectif: '', sql: sql)];
 }
 
 /// Two-call flow, the "full data access" alternative to the closed
 /// QueryKind.adHoc vocabulary: (1) ask the model to write SQL against
-/// [systemPrompt]'s schema, validate it, run it - wrapped as a subquery,
-/// which both caps the row count and forces the whole thing to parse as a
-/// single SELECT expression - against [readOnlyRepo] (always an
+/// [systemPrompt]'s schema - either one query or a multi-step plan (see
+/// [extractValidatedSqlPlan]) - validate every step, then run each one in
+/// order, wrapped as a subquery (which forces the whole thing to parse as
+/// a single SELECT expression) against [readOnlyRepo] (always an
 /// OS-enforced read-only connection, never the app's own read-write repo -
 /// see local_llm_manager_io.dart's `openReadOnlyAdHocRepository`); (2) ask
-/// the model again, this time grounded in the *exact* returned rows, to
-/// phrase the final French answer. A second, separate call rather than
-/// reusing the SQL-writing response on purpose - the model is never in a
-/// position to "answer" before real data exists, only to paraphrase what's
-/// actually there, which is the whole anti-hallucination point.
+/// the model again, this time grounded in the *exact* returned rows of
+/// every step, to phrase the final French answer. A second, separate call
+/// rather than reusing the SQL-writing response on purpose - the model is
+/// never in a position to "answer" before real data exists, only to
+/// paraphrase what's actually there, which is the whole anti-hallucination
+/// point.
 ///
 /// Returns null (never throws) on any failure at either step - invalid/
-/// missing SQL, a query that errors against the real schema, an empty
-/// model response - same never-throws contract as every other local-AI
-/// entry point here, so the caller (nl_query_dialog.dart) always has a
-/// safe fallback.
+/// missing SQL in any step, a query that errors against the real schema,
+/// an empty model response - same never-throws contract as every other
+/// local-AI entry point here, so the caller (nl_query_dialog.dart) always
+/// has a safe fallback.
 Future<String?> answerViaFullSqlAccess({
   required String question,
   required MmexRepository readOnlyRepo,
@@ -174,21 +380,31 @@ Future<String?> answerViaFullSqlAccess({
   required LlamaServerClient engine,
 }) async {
   try {
-    final rawSql = await engine.askWithSystemPrompt(systemPrompt, question);
-    final sql = extractValidatedSql(rawSql);
-    if (sql == null) return null;
+    final rawPlan = await engine.askWithSystemPrompt(systemPrompt, question);
+    final plan = extractValidatedSqlPlan(rawPlan);
+    if (plan == null) return null;
 
-    final rows = readOnlyRepo.db.query('SELECT * FROM ($sql) LIMIT 500');
-    final rowsJson = jsonEncode(rows);
+    final results = <StepResult>[];
+    var anyTruncated = false;
+    for (final step in plan) {
+      final rawRows = readOnlyRepo.db
+          .query('SELECT * FROM (${step.sql}) LIMIT 5000');
+      final fit = _fitRowsToBudget(rawRows, _resultBudgetChars);
+      final truncated = fit.dropped > 0;
+      if (truncated) anyTruncated = true;
+      results.add(StepResult(
+        objectif: step.objectif,
+        rowsJson: jsonEncode(fit.rows),
+        rowCount: fit.rows.length,
+        truncated: truncated,
+      ));
+    }
 
-    final formattingPrompt = 'Question de l\'utilisateur : "$question"\n\n'
-        'Résultat exact de la requête SQL exécutée sur ses données (JSON, '
-        '${rows.length} ligne(s)) :\n$rowsJson\n\n'
-        'Réponds à la question en une ou deux phrases claires, en français, '
-        'en te basant EXCLUSIVEMENT sur ces données. Formate les montants '
-        'avec 2 décimales et le symbole €. N\'invente aucun nombre absent de '
-        'ce résultat. Si le résultat est vide, dis-le clairement plutôt que '
-        'de deviner une réponse.';
+    final formattingPrompt = buildAnswerFormattingPrompt(
+      question,
+      results,
+      truncated: anyTruncated,
+    );
     final answer = await engine.askFreeformWithSystemPrompt(
       _answerFormattingSystemPrompt,
       formattingPrompt,
@@ -198,4 +414,68 @@ Future<String?> answerViaFullSqlAccess({
   } catch (_) {
     return null;
   }
+}
+
+/// How many payee names at most make it into the vocabulary appendix -
+/// a database with hundreds of payees would otherwise bloat the system
+/// prompt (and every HTTP request carrying it) with a line that's mostly
+/// noise the model will never use, since a question names at most one or
+/// two of them. Accounts and categories are small enough to keep whole.
+const _maxPayeesInVocabulary = 150;
+
+/// Formats the real, currently-open database's vocabulary (accounts,
+/// category full paths "Parent:Enfant", payees) as a short appendix for
+/// the SQL system prompt - see [buildEffectiveSqlSystemPrompt].
+String _formatRealVocabulary({
+  required List<Account> accounts,
+  required List<Category> categories,
+  List<Payee> payees = const [],
+}) {
+  final buffer = StringBuffer();
+  if (accounts.isNotEmpty) {
+    buffer
+      ..write('\n\nVocabulaire réel de la base de l\'utilisateur '
+          '(utilise EXACTEMENT ces noms) :')
+      ..write('\nComptes : ${accounts.map((a) => a.name).join(', ')}');
+  }
+  if (categories.isNotEmpty) {
+    final byId = {for (final c in categories) c.id: c};
+    final paths = categories
+        .map((c) => categoryFullPath(c.id, byId))
+        .where((p) => p.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    buffer.write('\nCatégories (chemin complet) : ${paths.join(', ')}');
+  }
+  if (payees.isNotEmpty) {
+    final names = payees.map((p) => p.name).toSet().toList()..sort();
+    final shown = names.length > _maxPayeesInVocabulary
+        ? '${names.take(_maxPayeesInVocabulary).join(', ')} '
+            '... (${names.length - _maxPayeesInVocabulary} autres, '
+            'recherche-les via PAYEE_V1)'
+        : names.join(', ');
+    buffer.write('\nTiers : $shown');
+  }
+  return buffer.toString();
+}
+
+/// [defaultSqlSystemPrompt] (or the user's own edited version from
+/// Settings) plus the real vocabulary of the currently-open database
+/// appended at the bottom - a pure function of its inputs, computed fresh
+/// at question time and never persisted, so "Réinitialiser" in Settings
+/// still restores exactly [defaultSqlSystemPrompt] and this appendix can
+/// never go stale or leak into AppPreferences.
+String buildEffectiveSqlSystemPrompt(
+  String basePrompt, {
+  required List<Account> accounts,
+  required List<Category> categories,
+  List<Payee> payees = const [],
+}) {
+  final vocabulary = _formatRealVocabulary(
+    accounts: accounts,
+    categories: categories,
+    payees: payees,
+  );
+  return vocabulary.isEmpty ? basePrompt : '$basePrompt$vocabulary';
 }

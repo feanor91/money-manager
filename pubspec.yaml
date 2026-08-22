@@ -56,7 +56,9 @@ dependencies:
   # lib/services/nl_query/local_llm/. N'utilise plus llama_cpp_dart depuis
   # le 2026-08-03 (aucun binaire Windows pret a l'emploi, voir ROADMAP.md) -
   # parle desormais en HTTP a un llama-server.exe lance en sous-processus,
-  # via le paquet http ci-dessus. Aucune dependance supplementaire requise.
+  # via le paquet http ci-dessus.
+  markdown: ^7.3.1
+  flutter_markdown: ^0.7.7+1
 
 dev_dependencies:
   flutter_test:

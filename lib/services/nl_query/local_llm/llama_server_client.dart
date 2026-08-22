@@ -222,7 +222,8 @@ class LlamaServerClient {
   /// (sql_query_engine.dart's `answerViaFullSqlAccess`), whose system
   /// prompt is a user-editable Settings value, not a constant this class
   /// can hardcode. Higher [n_predict] than [ask]: a SQL query with several
-  /// JOINs/CASE expressions genuinely needs more tokens than a short
+  /// JOINs/CASE expressions - or a whole multi-step plan object with
+  /// several such queries - genuinely needs more tokens than a short
   /// intent JSON object does.
   Future<String> askWithSystemPrompt(String systemPrompt, String question) async {
     final response = await _client.post(
@@ -232,7 +233,7 @@ class LlamaServerClient {
         'prompt': chatMlPromptWithSystem(systemPrompt, question),
         'grammar': jsonGrammar,
         'temperature': 0.1,
-        'n_predict': 768,
+        'n_predict': 1024,
         'stop': ['<|im_end|>'],
         'stream': false,
       }),
@@ -250,7 +251,11 @@ class LlamaServerClient {
   /// answer in the query's real result rows (see
   /// sql_query_engine.dart's `answerViaFullSqlAccess`). Lower temperature
   /// than [askFreeform] on purpose: this is meant to faithfully paraphrase
-  /// real data, not converse freely.
+  /// real data, not converse freely. Higher [n_predict] than the old
+  /// fixed "one or two sentences" answer: in report mode (see
+  /// sql_query_engine.dart's `buildAnswerFormattingPrompt`) the answer is
+  /// a structured, multi-section breakdown that a few hundred tokens
+  /// would cut off mid-sentence.
   Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
@@ -258,7 +263,7 @@ class LlamaServerClient {
       body: jsonEncode({
         'prompt': chatMlPromptWithSystem(systemPrompt, question),
         'temperature': 0.2,
-        'n_predict': 400,
+        'n_predict': 2048,
         'stop': ['<|im_end|>'],
         'stream': false,
       }),

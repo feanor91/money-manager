@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:money_manager/data/mmex_database_io.dart' as io_db;
 import 'package:money_manager/services/nl_query/local_llm/local_llm_manager_io.dart';
+import 'package:money_manager/services/nl_query/local_llm/sql_query_engine.dart'
+    as sql_engine;
 
 /// Real-temp-file pattern (same as test/mmex_database_open_test.dart) rather
 /// than `:memory:` - openReadOnlyAdHocRepository reopens the .mmb by real
@@ -48,6 +50,44 @@ void main() {
     expect(File(path).existsSync(), isFalse);
     final readOnlyRepo = await openReadOnlyAdHocRepository(path);
     expect(readOnlyRepo, isNull);
+  }, skip: _skipReason);
+
+  test('the effective SQL system prompt appends the real vocabulary of the open database',
+      () async {
+    final path = '${tempDir.path}/Vocab.mmb';
+    final seed = await io_db.openFromPath(path, createIfMissing: true);
+    seed.execute(
+        'CREATE TABLE ACCOUNTLIST_V1 (ACCOUNTID INTEGER, ACCOUNTNAME TEXT, '
+        'ACCOUNTTYPE TEXT, STATUS TEXT, INITIALBAL REAL, CURRENCYID INTEGER, '
+        'FAVORITEACCT TEXT)');
+    seed.execute(
+        'CREATE TABLE CATEGORY_V1 (CATEGID INTEGER, CATEGNAME TEXT, '
+        'PARENTID INTEGER, ACTIVE INTEGER)');
+    seed.execute(
+        'CREATE TABLE PAYEE_V1 (PAYEEID INTEGER, PAYEENAME TEXT, '
+        'CATEGID INTEGER, ACTIVE INTEGER)');
+    seed.execute(
+        'INSERT INTO ACCOUNTLIST_V1 VALUES (1, \'Compte Courant\', '
+        '\'Checking\', \'Open\', 0, 1, \'FALSE\')');
+    seed.execute(
+        'INSERT INTO CATEGORY_V1 VALUES (1, \'Alimentation\', -1, 1), '
+        '(2, \'Restaurant\', 1, 1)');
+    seed.execute('INSERT INTO PAYEE_V1 VALUES (1, \'Carrefour\', 2, 1)');
+    seed.dispose();
+
+    final readOnlyRepo = await openReadOnlyAdHocRepository(path);
+    expect(readOnlyRepo, isNotNull);
+    final prompt = sql_engine.buildEffectiveSqlSystemPrompt(
+      'Prompt de base.',
+      accounts: readOnlyRepo!.getAccounts(),
+      categories: readOnlyRepo.getCategories(onlyActive: false),
+      payees: readOnlyRepo.getPayees(onlyActive: false),
+    );
+    readOnlyRepo.db.dispose();
+    expect(prompt, startsWith('Prompt de base.'));
+    expect(prompt, contains('Compte Courant'));
+    expect(prompt, contains('Alimentation:Restaurant'));
+    expect(prompt, contains('Carrefour'));
   }, skip: _skipReason);
 
   test('a write attempt through the wrapped connection is refused', () async {

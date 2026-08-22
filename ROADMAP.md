@@ -35,6 +35,99 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~IA locale : durcissement post-revue du mode "accès complet aux
+  données"~~ - **fait (2026-08-22)**. Revue de code du travail ci-dessous,
+  six durcissements (`lib/services/nl_query/local_llm/sql_query_engine.dart`
+  et `lib/widgets/nl_query_dialog.dart`) : (1) **réponse rendue en
+  Markdown** - le mode rapport demande des sections/titres/puces, ce qui
+  était illisible en bloc de texte brut : les réponses IA (libre et
+  SQL-grounded) passent par `MarkdownBody` (paquet `flutter_markdown`),
+  les réponses calculées et erreurs restent du `Text` simple ;
+  (2) **plafond de 4 étapes par plan SQL** (`extractValidatedSqlPlan`
+  rejette au-delà, échec fermé) - chaque étape est une requête séquentielle,
+  un plan sans borne aurait pu faire tourner le dialogue indéfiniment ;
+  (3) **plafond de 150 tiers dans le vocabulaire injecté** - une base avec
+  des centaines de tiers gonflait le prompt (et chaque requête HTTP) d'une
+  ligne quasi inutile, triée et tronquée avec un marqueur "... (N autres)" ;
+  (4) **troncature sur frontière de ligne** - la troncature par budget de
+  60 000 caractères retire des lignes entières de la fin (recherche
+  binaire) au lieu de couper le JSON en plein caractère : le modèle reçoit
+  toujours du JSON valide ; (5) **flag de troncature calculé une seule fois**
+  (avant troncature, réutilisé pour le flag global ET le flag par étape) et
+  **utilisé par étape** - l'étape de réponse dit maintenant *quel* résultat
+  précis est partiel, en plus du paragraphe ATTENTION global ;
+  (6) **exemple SQL cassé retiré du prompt par défaut** - un fragment
+  `SELECT strftime(...), (SELECT categoryFullPath FROM ...) ...` mélangeait
+  un nom de helper Dart et des `...` non exécutables que le modèle pouvait
+  imiter ; seule la version complète et correcte reste. ~6 nouveaux tests
+  (`sql_query_engine_test.dart`).
+- ~~IA locale : vraies réponses d'analyse (rapports, pas juste un
+  chiffre)~~ - **fait (2026-08-22)**. Suite directe de la correction
+  ci-dessous : le mode "accès complet aux données" (desktop) savait
+  répondre à un "combien ?" mais pas à une vraie question d'analyse
+  ("analyse mes dépenses liées aux vacances sur les 3 derniers mois") -
+  une seule requête SQL, 500 lignes max jetées dans le prompt, et une
+  consigne de réponse "en 1-2 phrases" qui écrasait tout le reste.
+  Quatre améliorations (`lib/services/nl_query/local_llm/`) :
+  (1) **plan SQL multi-étapes** - le modèle peut maintenant répondre
+  `{"steps": [{"objectif": "...", "sql": "SELECT ..."}, ...]}` (1 à N
+  requêtes, exécutées l'une après l'autre sur la même connexion en
+  lecture seule, chaque résultat étiqueté par son "objectif" et passé à
+  l'étape de réponse) ; `extractValidatedSqlPlan` valide chaque étape
+  avec exactement les mêmes règles SELECT-only que
+  `extractValidatedSql` (un plan invalide échoue fermé, jamais
+  partiellement exécuté) ;
+  (2) **vocabulaire réel injecté dans le prompt** - à chaque question,
+  les noms réels des comptes, catégories (chemin complet
+  "Parent:Enfant") et tiers de la base ouverte sont ajoutés en bas du
+  prompt SQL (`buildEffectiveSqlSystemPrompt`, fonction pure calculée à
+  la volée, jamais persistée - le bouton "Réinitialiser" de Paramètres
+  restaure toujours exactement le prompt par défaut) ; le prompt par
+  défaut documente ces deux points et dit au modèle d'utiliser
+  EXACTEMENT ces noms ;
+  (3) **budget de taille au lieu du plafond de 500 lignes** - les
+  résultats sont encodés en JSON avec un budget total d'environ
+  60 000 caractères ; au-delà, la troncature est annoncée explicitement
+  au modèle ("tes données sont donc partielles, dis-le clairement")
+  plutôt que de tronquer silencieusement ; le prompt SQL enjoint de
+  préférence d'AGRÉGER en SQL (GROUP BY année/catégorie, top N) plutôt
+  que de renvoyer des milliers de lignes brutes ;
+  (4) **réponse adaptative** - la consigne de la seconde passe de
+  génération dépend de la question : question simple → une ou deux
+  phrases ; question d'analyse/rapport/bilan/répartition → rapport
+  structuré (sections avec titres et puces, détail par catégorie et par
+  année/mois, plus gros postes mis en évidence, total général, 2
+  décimales et €), `n_predict` de cette passe passe de 400 à 2048
+  tokens pour laisser la place à un vrai rapport. Sécurité inchangée :
+  même connexion `OpenMode.readOnly`, même validation SELECT-only,
+  même contrat "ne jette jamais d'exception" (null en cas d'échec à
+  n'importe quelle étape). ~40 nouveaux tests
+  (`sql_query_engine_test.dart`, `local_llm_manager_io_test.dart`,
+  `llama_server_client_test.dart`).
+- ~~Questions thématiques de l'IA locale ("mes dépenses liées aux
+  vacances")~~ - **fait (2026-08-22)**. Le mode "accès complet aux données"
+  (IA locale, desktop) savait écrire du SQL pour les questions nommant une
+  catégorie, un compte ou un tiers - mais une question désignant un *thème*
+  ("vacances", "courses", "carburant") n'avait aucun moyen de l'exprimer :
+  ni le prompt par défaut ni le vocabulaire fermé de la première passe ne
+  savaient y faire correspondre quoi que ce soit. Deux corrections
+  (`lib/services/nl_query/local_llm/`) : (1) le prompt SQL par défaut
+  (éditable dans Paramètres, bouton "Réinitialiser" inchangé) explique
+  maintenant au modèle qu'un thème/mot-clé se cherche **uniquement dans les
+  noms de catégorie** (`C.CATEGNAME LIKE '%mot%'`) - jamais dans
+  `CHECKINGACCOUNT_V1.NOTES`, les notes libres étant trop vagues pour servir
+  de base de recherche - et que, si aucun nom de catégorie ne correspond, il
+  doit répondre `sql: null` plutôt que de deviner ; avec un exemple concret
+  de requête de type "analyse" (total + répartition par catégorie et par
+  mois via `substr(TRANSDATE, 1, 7)` et `date('now', '-3 months')`) ;
+  (2) `n_predict` de l'appel de génération SQL passe de 768 à 1024 tokens -
+  une requête avec JOINs + GROUP BY échappé dans du JSON dépassait
+  facilement l'ancienne limite. 2 nouveaux tests
+  (`sql_query_engine_test.dart`, `llama_server_client_test.dart`).
+  Conséquence : une question thématique n'a de réponse que si une catégorie
+  existe dont le nom contient le mot - "vacances" ne trouve rien si la
+  catégorie s'appelle "Loisirs" (le modèle doit alors le dire clairement
+  plutôt qu'inventer).
 - ~~Maximiser la fenêtre au démarrage (desktop)~~ - **fait (2026-08-21)**.
   `windows/runner/win32_window.cpp`'s `Show()` : `SW_SHOWNORMAL` →
   `SW_SHOWMAXIMIZED`. La taille 1280x720 codée dans `main.cpp` reste la
