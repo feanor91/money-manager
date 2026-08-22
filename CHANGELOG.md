@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.73] - 2026-08-22
+
+- feat(nl-query): local AI full-data access with SQL query engine
+
 ## [1.0.72] - 2026-08-21
 
 - feat(transactions): auto-create payees, sortable/customizable ledger columns, undo delete
