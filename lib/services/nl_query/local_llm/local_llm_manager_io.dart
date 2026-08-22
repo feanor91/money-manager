@@ -106,6 +106,20 @@ Future<void> setLocalLlmGpuLayers(int value) async {
   await _disposeEngine(); // GPU offload is only applied at model load time
 }
 
+Future<bool> isLocalLlmServerReachable() async {
+  if (!Platform.isWindows) return false;
+  final host = await localLlmServerHost();
+  final port = await localLlmServerPort();
+  final client = LlamaServerClient(port, host: host);
+  try {
+    return await client.healthCheck();
+  } catch (_) {
+    return false;
+  } finally {
+    client.close();
+  }
+}
+
 /// The editable system prompt behind the full-database-access SQL query
 /// mode (see sql_query_engine.dart) - device-local like every other local-AI
 /// setting here, not the database companion file: it's about tuning this
@@ -435,8 +449,13 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
 /// persisted), and runs the SQL-generate-then-answer flow. Null (never
 /// throws) under the same conditions as every other local-AI entry point
 /// here - unsupported, disabled, not ready, or any failure at any step.
-Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) async {
+Future<String?> askLocalLlmWithFullDataAccess(
+  String question, {
+  String? dbPath,
+  MmexRepository? repo,
+}) async {
   if (!Platform.isWindows) return null;
+  if (dbPath == null) return null;
   if (!await isLocalLlmEnabled()) return null;
   final engine = await _ensureEngine();
   if (engine == null) return null;

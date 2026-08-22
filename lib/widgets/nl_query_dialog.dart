@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -192,7 +193,12 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // adHoc vocabulary if that's what was recognized, or the rule-based
     // parser).
     if (isLocalLlmSupported && (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
-      final sqlAnswer = await askLocalLlmWithFullDataAccess(question, dbPath: repo.db.label);
+      // dbPath (desktop: the real file path, reopened read-only by the
+      // implementation) vs repo (web: the in-memory database itself -
+      // there is no file to reopen there, see local_llm_manager_web.dart).
+      final sqlAnswer = kIsWeb
+          ? await askLocalLlmWithFullDataAccess(question, repo: repo)
+          : await askLocalLlmWithFullDataAccess(question, dbPath: repo.db.label);
       if (sqlAnswer != null) {
         setState(() {
           _loading = false;

@@ -5,7 +5,9 @@ import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
 
-import 'local_llm_manager_stub.dart' if (dart.library.io) 'local_llm_manager_io.dart' as impl;
+import 'local_llm_manager_stub.dart'
+    if (dart.library.js_interop) 'local_llm_manager_web.dart'
+    if (dart.library.io) 'local_llm_manager_io.dart' as impl;
 
 /// Whether the user has switched local AI on - independent of whether it's
 /// actually usable right now (see [isLocalLlmRuntimeAvailable] and
@@ -45,6 +47,12 @@ Future<int> localLlmContextSize() => impl.localLlmContextSize();
 Future<void> setLocalLlmContextSize(int value) => impl.setLocalLlmContextSize(value);
 Future<int> localLlmGpuLayers() => impl.localLlmGpuLayers();
 Future<void> setLocalLlmGpuLayers(int value) => impl.setLocalLlmGpuLayers(value);
+
+/// One-shot, never-polling health check against the configured server
+/// address - backs Settings' "Tester la connexion" button. On desktop
+/// this checks the app's own spawned server; on web it checks the
+/// externally-run server the user pointed at via host/port.
+Future<bool> isLocalLlmServerReachable() => impl.isLocalLlmServerReachable();
 
 /// Call once at app startup (see main.dart) so a still-running
 /// `llama-server.exe` never outlives the app itself - a no-op on any
@@ -99,10 +107,29 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) => impl.setLocalLlmSqlSyst
 
 /// Full-database-access alternative to [extractIntentWithLocalLlm]'s closed
 /// vocabulary - the model writes real SQL against the schema described in
-/// [localLlmSqlSystemPrompt], run through the same OS-enforced read-only
-/// connection [openReadOnlyAdHocRepository] uses, then a second grounded
-/// call phrases the answer from the real result rows (see
+/// [localLlmSqlSystemPrompt], run against the database, then a second
+/// grounded call phrases the answer from the real result rows (see
 /// sql_query_engine.dart). Null (never throws) under the same conditions as
 /// every other local-AI entry point here.
-Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) =>
-    impl.askLocalLlmWithFullDataAccess(question, dbPath: dbPath);
+///
+/// [dbPath] is the native (desktop) way to point at the data - the
+/// implementation reopens that file with its own OS/SQLite-enforced
+/// read-only connection. On web there is no file path to reopen (the
+/// database is in-memory, loaded from a picked file), so [repo] - the
+/// currently-open, live repository - is passed instead and used directly.
+/// Exactly one of the two is required; the other must be omitted.
+Future<String?> askLocalLlmWithFullDataAccess(
+  String question, {
+  String? dbPath,
+  MmexRepository? repo,
+}) {
+  if (dbPath == null && repo == null) {
+    throw ArgumentError.value(
+        null, 'dbPath', 'Passe dbPath (natif) ou repo (web), pas les deux à null.');
+  }
+  return impl.askLocalLlmWithFullDataAccess(
+    question,
+    dbPath: dbPath,
+    repo: repo,
+  );
+}

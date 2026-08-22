@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../services/nl_query/local_llm/local_llm_manager.dart';
@@ -7,14 +8,13 @@ import '../services/nl_query/local_llm/local_llm_support.dart';
 import '../services/nl_query/local_llm/model_catalog.dart';
 import '../services/nl_query/local_llm/sql_query_engine.dart' show defaultSqlSystemPrompt;
 
-/// Settings card for the optional, Windows-only local-AI layer behind
-/// "Poser une question" - hidden entirely (returns nothing) on any other
-/// platform. Two separate readiness steps, shown explicitly rather than
-/// collapsed into one toggle, because they really are independent and a
-/// user stuck on one needs to see which: downloading the model (automatic,
-/// this card does it) and placing a compatible native runtime (manual -
-/// see local_llm_manager_io.dart's doc comment for why that step can't be
-/// automated today).
+/// Settings card for the optional local-AI layer behind "Poser une
+/// question". On desktop (Windows) it shows the full setup: model
+/// download, runtime placement, server launch parameters. On web it
+/// shows a slimmer variant: the browser talks HTTP to a llama.cpp server
+/// the user runs themselves on their PC, so there is no model download,
+/// no runtime folder, and no process management - just host/port, a
+/// "test connection" button, and the SQL system prompt.
 class LocalLlmSettingsCard extends StatefulWidget {
   const LocalLlmSettingsCard({super.key});
 
@@ -41,6 +41,11 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
 
   final _sqlPromptController = TextEditingController();
 
+  bool _testingConnection = false;
+  bool? _connectionOk;
+
+  bool get _isWeb => kIsWeb;
+
   @override
   void initState() {
     super.initState();
@@ -58,19 +63,33 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     super.dispose();
   }
 
-  LocalLlmModel get _selectedModel => localLlmModelById(_selectedModelId) ?? localLlmModels.first;
+  LocalLlmModel get _selectedModel =>
+      localLlmModelById(_selectedModelId) ?? localLlmModels.first;
 
   Future<void> _load() async {
     final enabled = await isLocalLlmEnabled();
-    final modelId = await selectedLocalLlmModelId() ?? localLlmModels.first.id;
-    final downloaded = await isLocalLlmModelDownloaded(localLlmModelById(modelId) ?? localLlmModels.first);
-    final runtimeAvailable = await isLocalLlmRuntimeAvailable();
-    final runtimePath = await localLlmRuntimeFolderPath();
     final host = await localLlmServerHost();
     final port = await localLlmServerPort();
+    final sqlPrompt = await localLlmSqlSystemPrompt();
+    if (_isWeb) {
+      if (!mounted) return;
+      setState(() {
+        _enabled = enabled;
+        _hostController.text = host;
+        _portController.text = '$port';
+        _sqlPromptController.text = sqlPrompt;
+        _loading = false;
+      });
+      return;
+    }
+    final modelId =
+        await selectedLocalLlmModelId() ?? localLlmModels.first.id;
+    final downloaded = await isLocalLlmModelDownloaded(
+        localLlmModelById(modelId) ?? localLlmModels.first);
+    final runtimeAvailable = await isLocalLlmRuntimeAvailable();
+    final runtimePath = await localLlmRuntimeFolderPath();
     final contextSize = await localLlmContextSize();
     final gpuLayers = await localLlmGpuLayers();
-    final sqlPrompt = await localLlmSqlSystemPrompt();
     if (!mounted) return;
     setState(() {
       _enabled = enabled;
@@ -95,7 +114,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
 
   Future<void> _selectModel(String id) async {
     await setSelectedLocalLlmModelId(id);
-    final downloaded = await isLocalLlmModelDownloaded(localLlmModelById(id) ?? localLlmModels.first);
+    final downloaded = await isLocalLlmModelDownloaded(
+        localLlmModelById(id) ?? localLlmModels.first);
     if (!mounted) return;
     setState(() {
       _selectedModelId = id;
@@ -144,21 +164,55 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     setState(() => _runtimeAvailable = available);
   }
 
-  /// Validates and saves all four server launch settings together, rather
-  /// than as each field changes - a half-typed port number is not a value
-  /// worth persisting (or restarting the running server over) on every
-  /// keystroke.
+  Future<void> _testConnection() async {
+    setState(() {
+      _testingConnection = true;
+      _connectionOk = null;
+    });
+    final ok = await isLocalLlmServerReachable();
+    if (!mounted) return;
+    setState(() {
+      _testingConnection = false;
+      _connectionOk = ok;
+    });
+  }
+
   Future<void> _applyServerSettings() async {
+    if (_isWeb) {
+      final host = _hostController.text.trim();
+      final port = int.tryParse(_portController.text.trim());
+      if (host.isEmpty || port == null || port <= 0 || port > 65535) {
+        setState(() {
+          _serverSettingsError =
+              'Vérifie les valeurs : hôte non vide, port entre 1 et 65535.';
+        });
+        return;
+      }
+      await setLocalLlmServerHost(host);
+      await setLocalLlmServerPort(port);
+      if (!mounted) return;
+      setState(() => _serverSettingsError = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
+      );
+      return;
+    }
     final host = _hostController.text.trim();
     final port = int.tryParse(_portController.text.trim());
     final contextSize = int.tryParse(_contextSizeController.text.trim());
     final gpuLayers = int.tryParse(_gpuLayersController.text.trim());
     if (host.isEmpty ||
-        port == null || port <= 0 || port > 65535 ||
-        contextSize == null || contextSize <= 0 ||
-        gpuLayers == null || gpuLayers < 0) {
+        port == null ||
+        port <= 0 ||
+        port > 65535 ||
+        contextSize == null ||
+        contextSize <= 0 ||
+        gpuLayers == null ||
+        gpuLayers < 0) {
       setState(() {
-        _serverSettingsError = 'Vérifie les valeurs : hôte non vide, port entre 1 et 65535, '
+        _serverSettingsError =
+            'Vérifie les valeurs : hôte non vide, port entre 1 et 65535, '
             'taille de contexte et couches GPU positives.';
       });
       return;
@@ -170,7 +224,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     if (!mounted) return;
     setState(() => _serverSettingsError = null);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
+      const SnackBar(
+          content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
     );
   }
 
@@ -178,7 +233,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     await setLocalLlmSqlSystemPrompt(_sqlPromptController.text);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Prompt enregistré - appliqué à la prochaine question.')),
+      const SnackBar(
+          content: Text('Prompt enregistré - appliqué à la prochaine question.')),
     );
   }
 
@@ -191,9 +247,12 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     if (!isLocalLlmSupported) return const SizedBox.shrink();
     if (_loading) {
       return const Card(
-        child: Padding(padding: EdgeInsets.all(16), child: LinearProgressIndicator()),
+        child: Padding(
+            padding: EdgeInsets.all(16), child: LinearProgressIndicator()),
       );
     }
+
+    if (_isWeb) return _buildWebCard(context);
 
     return Card(
       child: Padding(
@@ -228,7 +287,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               ),
             const SizedBox(height: 8),
             if (_downloadProgress != null) ...[
-              LinearProgressIndicator(value: _downloadProgress == 0 ? null : _downloadProgress),
+              LinearProgressIndicator(
+                  value: _downloadProgress == 0 ? null : _downloadProgress),
               const SizedBox(height: 8),
             ],
             if (_downloadError != null) ...[
@@ -248,10 +308,12 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               FilledButton.icon(
                 onPressed: _downloadProgress != null ? null : _startDownload,
                 icon: const Icon(Icons.download_outlined),
-                label: Text('Télécharger (~${_approxSizeLabel(_selectedModel.approxSizeBytes)})'),
+                label: Text(
+                    'Télécharger (~${_approxSizeLabel(_selectedModel.approxSizeBytes)})'),
               ),
             const Divider(height: 32),
-            Text('Serveur llama.cpp', style: Theme.of(context).textTheme.labelLarge),
+            Text('Serveur llama.cpp',
+                style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 8),
             Text(
               _runtimeAvailable
@@ -265,7 +327,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
             ),
             if (!_runtimeAvailable) ...[
               const SizedBox(height: 8),
-              SelectableText(_runtimePath, style: const TextStyle(fontFamily: 'monospace')),
+              SelectableText(_runtimePath,
+                  style: const TextStyle(fontFamily: 'monospace')),
             ],
             const SizedBox(height: 8),
             OutlinedButton.icon(
@@ -274,7 +337,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               label: const Text('Vérifier à nouveau'),
             ),
             const Divider(height: 32),
-            Text('Paramètres du serveur', style: Theme.of(context).textTheme.labelLarge),
+            Text('Paramètres du serveur',
+                style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 4),
             Text(
               "Un changement redémarre le serveur local à la prochaine question, pas "
@@ -287,14 +351,16 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
                 Expanded(
                   child: TextField(
                     controller: _hostController,
-                    decoration: const InputDecoration(labelText: 'Hôte', isDense: true),
+                    decoration:
+                        const InputDecoration(labelText: 'Hôte', isDense: true),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     controller: _portController,
-                    decoration: const InputDecoration(labelText: 'Port', isDense: true),
+                    decoration:
+                        const InputDecoration(labelText: 'Port', isDense: true),
                     keyboardType: TextInputType.number,
                   ),
                 ),
@@ -306,8 +372,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
                 Expanded(
                   child: TextField(
                     controller: _contextSizeController,
-                    decoration:
-                        const InputDecoration(labelText: 'Taille de contexte', isDense: true),
+                    decoration: const InputDecoration(
+                        labelText: 'Taille de contexte', isDense: true),
                     keyboardType: TextInputType.number,
                   ),
                 ),
@@ -340,7 +406,156 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               ),
             ),
             const Divider(height: 32),
-            Text('Prompt IA (accès complet aux données)', style: Theme.of(context).textTheme.labelLarge),
+            Text('Prompt IA (accès complet aux données)',
+                style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 4),
+            const Text(
+              "Utilisé quand la question posée dans \"Poser une question\" ne correspond à aucun "
+              "des cas déjà prévus (solde, revenus/dépenses, prévision...) : l'IA écrit elle-même "
+              'une requête sur le schéma de la base, en lecture seule, puis formule la réponse à '
+              'partir du résultat réel - jamais de chiffre inventé. Modifie ce texte seulement si '
+              "tu comprends ce que tu fais : c'est ce qui empêche l'IA de dévier de ce cadre.",
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _sqlPromptController,
+              maxLines: 14,
+              minLines: 6,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _resetSqlSystemPrompt,
+                  icon: const Icon(Icons.restart_alt),
+                  label: const Text('Réinitialiser'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: _saveSqlSystemPrompt,
+                  child: const Text('Enregistrer'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWebCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('IA locale pour "Poser une question"'),
+              subtitle: const Text(
+                'Comprend des formulations plus libres que l\'analyseur intégré. '
+                'Le calcul est fait par un serveur IA que tu lances sur ton ordinateur - '
+                'rien n\'est envoyé en ligne.',
+              ),
+              value: _enabled,
+              onChanged: _toggleEnabled,
+            ),
+            const SizedBox(height: 8),
+            Text('Serveur IA', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 4),
+            Text(
+              'Lance le serveur IA sur ton ordinateur avec une commande du type :\n'
+              'llama-server.exe -m mon_modele.gguf --host 0.0.0.0 --port 8792\n\n'
+              'Puis renseigne l\'adresse ci-dessous. Si la page web est ouverte sur le '
+              'même ordinateur que le serveur, « 127.0.0.1 » suffit. Si elle est ouverte '
+              'depuis un autre appareil (téléphone, autre PC), utilise l\'adresse IP de '
+              'cet ordinateur sur le réseau local.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _hostController,
+                    decoration:
+                        const InputDecoration(labelText: 'Hôte', isDense: true),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _portController,
+                    decoration:
+                        const InputDecoration(labelText: 'Port', isDense: true),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+              ],
+            ),
+            if (_serverSettingsError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _serverSettingsError!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                FilledButton(
+                  onPressed: _applyServerSettings,
+                  child: const Text('Appliquer'),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _testingConnection ? null : _testConnection,
+                  icon: _testingConnection
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.network_check),
+                  label: const Text('Tester la connexion'),
+                ),
+              ],
+            ),
+            if (_connectionOk != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    _connectionOk! ? Icons.check_circle : Icons.error,
+                    color: _connectionOk!
+                        ? Colors.green
+                        : Theme.of(context).colorScheme.error,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _connectionOk!
+                        ? 'Connexion réussie - le serveur IA répond.'
+                        : 'Connexion impossible - vérifie que le serveur est bien lancé et que l\'adresse est correcte.',
+                    style: TextStyle(
+                      color: _connectionOk!
+                          ? Colors.green
+                          : Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const Divider(height: 32),
+            Text('Prompt IA (accès complet aux données)',
+                style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 4),
             const Text(
               "Utilisé quand la question posée dans \"Poser une question\" ne correspond à aucun "

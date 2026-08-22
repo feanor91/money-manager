@@ -31,6 +31,7 @@ Future<int> localLlmContextSize() async => 32768;
 Future<void> setLocalLlmContextSize(int value) async {}
 Future<int> localLlmGpuLayers() async => 999;
 Future<void> setLocalLlmGpuLayers(int value) async {}
+Future<bool> isLocalLlmServerReachable() async => false;
 
 Future<void> shutdownLocalLlmEngine() async {}
 
@@ -52,5 +53,9 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async => null
 Future<String> localLlmSqlSystemPrompt() async => defaultSqlSystemPrompt;
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {}
 
-Future<String?> askLocalLlmWithFullDataAccess(String question, {required String dbPath}) async =>
+Future<String?> askLocalLlmWithFullDataAccess(
+  String question, {
+  String? dbPath,
+  MmexRepository? repo,
+}) async =>
     null;

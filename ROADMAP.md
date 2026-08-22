@@ -35,6 +35,31 @@ courses, pas des engagements.
 
 ## Récemment fait
 
+- ~~IA locale : mode IA sur la version web~~ - **fait (2026-08-22)**.
+  Le mode IA (question-réponse en langage naturel) ne fonctionnait que
+  sur desktop/Android, qui embarquent leur propre moteur llama.cpp. La
+  version web ne peut pas exécuter de modèle dans le navigateur : le
+  navigateur ne fait que parler HTTP à un **serveur llama.cpp que
+  l'utilisateur fait tourner lui-même sur son PC** (`llama-server.exe
+  -m mon_modele.gguf --host 0.0.0.0 --port 8792` - le port 8792 par
+  défaut ne conflictue pas avec le serveur de dev 8791).
+  Implémentation : `lib/services/nl_query/local_llm/local_llm_manager_web.dart`
+  (nouveau) - implémentation web complète : activation, hôte/port du
+  serveur (stockés dans `AppPreferences`, préférences par appareil - le
+  serveur tourne sur la machine de l'utilisateur, pas dans la base),
+  extraction d'intention et questions libres via HTTP vers le serveur,
+  et **accès complet aux données** qui exécute le plan SQL directement
+  sur le `MmexRepository` en mémoire (la version web n'a pas de chemin
+  de fichier - la sécurité repose sur la validation SELECT-only de
+  `sql_query_engine.dart`, pas sur une ouverture en lecture seule).
+  `local_llm_support.dart` passe de binaire (io/stub) à ternaire
+  (io/web/stub). `local_llm_settings_card.dart` gagne une variante web
+  plus légère (pas de téléchargement de modèle ni de réglages GPU - le
+  modèle est géré par le serveur externe) avec un bouton
+  "Tester la connexion" qui ping `/health` du serveur.
+  `nl_query_dialog.dart` passe `repo:` plutôt que `dbPath:` en mode web.
+  ~12 nouveaux tests (`local_llm_manager_web_test.dart`, serveur HTTP
+  factice sur port aléatoire).
 - ~~IA locale : durcissement post-revue du mode "accès complet aux
   données"~~ - **fait (2026-08-22)**. Revue de code du travail ci-dessous,
   six durcissements (`lib/services/nl_query/local_llm/sql_query_engine.dart`

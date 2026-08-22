@@ -133,6 +133,24 @@ class LlamaServerClient {
 
   LlamaServerClient(this.port, {this.host = '127.0.0.1'}) : _client = http.Client();
 
+  /// One-shot, non-polling health check - true only on a 200 from
+  /// `/health`, false on any other status, and false on any connection
+  /// failure (server not running, wrong port, network unreachable). Backs
+  /// Settings' "Tester la connexion" button; the question flow itself
+  /// deliberately does *not* use this - a question is cheap to attempt and
+  /// its own per-request timeout bounds the wait (see
+  /// local_llm_manager_web.dart).
+  Future<bool> healthCheck() async {
+    try {
+      final response = await _client
+          .get(Uri.parse('http://$host:$port/health'))
+          .timeout(const Duration(seconds: 3));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Polls `/health` until it answers 200, or throws once [timeout]
   /// elapses - loading a multi-gigabyte model, especially with layers
   /// offloaded to the GPU for the first time on a cold disk cache, is
