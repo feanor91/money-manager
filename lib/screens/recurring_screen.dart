@@ -540,7 +540,19 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
-                  onTextChanged: (text) => _payeeText = text,
+                  onTextChanged: (text) {
+                    _payeeText = text;
+                    // See transactions_screen.dart's identical fix (same
+                    // 2026-08-14 bug: editing an existing recurring
+                    // operation and retyping a brand-new payee name kept
+                    // saving under the original payee, since _payeeId
+                    // starts pre-filled from bill.payeeId and never got
+                    // cleared).
+                    final selectedName = findById(payees, _payeeId, (p) => p.id)?.name;
+                    if (selectedName != null && selectedName != text) {
+                      _payeeId = null;
+                    }
+                  },
                   enableVoiceInput: true,
                 ),
               ],
@@ -690,10 +702,14 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
     // instead of silently dropping newly-typed text that was never
     // explicitly selected/created.
     final typedPayeeText = _payeeText.trim();
+    // -1 (never a real PAYEEID) means "no payee resolved" here just as much
+    // as null does - see transactions_screen.dart's identical fix.
+    final hasResolvedPayeeId = _payeeId != null && _payeeId != -1;
     final payeeId = isTransfer
         ? -1
-        : (_payeeId ??
-            (typedPayeeText.isEmpty
+        : (hasResolvedPayeeId
+            ? _payeeId!
+            : (typedPayeeText.isEmpty
                 ? -1
                 : widget.repo.resolveOrCreatePayee(
                     name: typedPayeeText, categoryId: _categoryId)));

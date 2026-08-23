@@ -1621,7 +1621,23 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                   labelOf: (p) => p.name,
                   initialValue: findById(payees, _payeeId, (p) => p.id),
                   onSelected: (p) => setState(() => _payeeId = p?.id),
-                  onTextChanged: (text) => _payeeText = text,
+                  onTextChanged: (text) {
+                    _payeeText = text;
+                    // Typing over a previously-selected payee's name (most
+                    // notably: editing an existing transaction, where
+                    // _payeeId starts pre-filled from tx.payeeId) must not
+                    // silently keep pointing at that old payee - found
+                    // 2026-08-14: without this, retyping a brand-new payee
+                    // name while editing saved under the *original* payee
+                    // anyway, since _save()'s `_payeeId ?? resolveOrCreatePayee(...)`
+                    // fallback never ran while _payeeId was still non-null.
+                    // Never showed up creating a *new* transaction, where
+                    // _payeeId starts null already.
+                    final selectedName = findById(payees, _payeeId, (p) => p.id)?.name;
+                    if (selectedName != null && selectedName != text) {
+                      _payeeId = null;
+                    }
+                  },
                   enableVoiceInput: true,
                 ),
               ],
@@ -1751,10 +1767,18 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // reuses a matching existing payee case-insensitively, or creates one,
     // rather than silently dropping it in favor of "Tiers inconnu".
     final typedPayeeText = _payeeText.trim();
+    // -1 (never a real PAYEEID) means "no payee resolved" here just as much
+    // as null does - an existing transaction with no payee assigned
+    // (tx.payeeId == -1, see MoneyTransaction.fromRow) starts _payeeId at
+    // -1 rather than null, and without this check would hit the exact same
+    // "keeps the stale value, never resolves the typed text" bug the
+    // onTextChanged fix above addresses for the more common case.
+    final hasResolvedPayeeId = _payeeId != null && _payeeId != -1;
     final payeeId = isTransfer
         ? -1
-        : (_payeeId ??
-            (typedPayeeText.isEmpty
+        : (hasResolvedPayeeId
+            ? _payeeId!
+            : (typedPayeeText.isEmpty
                 ? -1
                 : widget.repo.resolveOrCreatePayee(
                     name: typedPayeeText, categoryId: _categoryId)));
