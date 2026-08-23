@@ -86,8 +86,8 @@ Tu extrais une intention structurée d'une question posée en français sur une 
 N'invente jamais de montant, de date précise, ou de nom de catégorie/compte/tiers absent de la question : ce sont d'autres calculs qui s'en chargent, pas toi.
 ''';
 
-/// Qwen2.5's own chat format (ChatML) - both catalog models (see
-/// model_catalog.dart) are Qwen2.5 Instruct, so this is hardcoded rather
+/// Qwen2.5's own chat format (ChatML) - every catalog model (see
+/// model_catalog.dart) is Qwen2.5 Instruct, so this is hardcoded rather
 /// than relying on llama-server's own chat-template auto-detection:
 /// predictable, and matches exactly what the previous FFI-based engine's
 /// `ChatMLFormat()` produced. `/completion` is a raw-text endpoint with no
@@ -273,7 +273,11 @@ class LlamaServerClient {
   /// fixed "one or two sentences" answer: in report mode (see
   /// sql_query_engine.dart's `buildAnswerFormattingPrompt`) the answer is
   /// a structured, multi-section breakdown that a few hundred tokens
-  /// would cut off mid-sentence.
+  /// would cut off mid-sentence. Raised again 2026-08-23 (user request: no
+  /// artificial length limit on an exhaustive multi-year analysis) - 4096
+  /// is not literally unlimited, but comfortably past what any real answer
+  /// this app asks for needs, and still leaves headroom in the model's
+  /// context window alongside the prompt/vocabulary/query results.
   Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
@@ -281,7 +285,7 @@ class LlamaServerClient {
       body: jsonEncode({
         'prompt': chatMlPromptWithSystem(systemPrompt, question),
         'temperature': 0.2,
-        'n_predict': 2048,
+        'n_predict': 4096,
         'stop': ['<|im_end|>'],
         'stream': false,
       }),

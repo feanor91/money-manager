@@ -33,10 +33,17 @@ class LocalLlmModel {
   });
 }
 
-/// Two size options, smallest first - both Qwen2.5 Instruct, a model family
-/// chosen for reliable instruction-following (staying on-format for a
-/// JSON-only answer) at small sizes, quantized to Q4_K_M (a common
+/// Three size options, smallest first - all Qwen2.5 Instruct, a model
+/// family chosen for reliable instruction-following (staying on-format for
+/// a JSON-only answer) at small sizes, quantized to Q4_K_M (a common
 /// accuracy/size compromise for CPU inference without a dedicated GPU).
+/// Deliberately staying within the same family for the 14B option added
+/// 2026-08-23 too (rather than switching to some other model's "~15-20B"
+/// class) - llama_server_client.dart hardcodes Qwen2.5's own ChatML prompt
+/// format rather than relying on llama-server's chat-template
+/// auto-detection (see its own doc comment for why), so every catalog
+/// entry needs to actually speak that same format; a different family here
+/// would silently produce malformed prompts.
 const List<LocalLlmModel> localLlmModels = [
   LocalLlmModel(
     id: 'qwen2.5-3b-instruct-q4_k_m',
@@ -55,6 +62,18 @@ const List<LocalLlmModel> localLlmModels = [
         'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true',
     fileName: 'Qwen2.5-7B-Instruct-Q4_K_M.gguf',
     approxSizeBytes: 4700 * 1024 * 1024,
+  ),
+  LocalLlmModel(
+    id: 'qwen2.5-14b-instruct-q4_k_m',
+    label: 'Qwen2.5 14B (le plus capable, ~9 Go)',
+    description: 'Le plus lent et le plus gourmand en mémoire (16 Go de RAM '
+        'recommandés), mais le plus fiable pour une analyse complexe ou une '
+        'question formulée de façon inhabituelle. Un GPU avec assez de VRAM '
+        'accélère nettement les réponses.',
+    downloadUrl:
+        'https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf?download=true',
+    fileName: 'Qwen2.5-14B-Instruct-Q4_K_M.gguf',
+    approxSizeBytes: 9000 * 1024 * 1024,
   ),
 ];
 

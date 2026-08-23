@@ -442,6 +442,30 @@ class MmexRepository {
     return insertPayee(name: trimmed, categoryId: categoryId);
   }
 
+  /// How many real records reference [payeeId] - real ledger transactions
+  /// plus recurring bill templates, the same two sources
+  /// [categoryUsage]/[CategoryUsage] already counts for a category. Used by
+  /// the "Gestion des tiers" settings screen to decide whether a payee can
+  /// be deleted outright (0) or must be kept.
+  int payeeUsageCount(int payeeId) {
+    int count(String sql) => (db.query(sql, [payeeId]).first['n'] as int?) ?? 0;
+    return count('SELECT COUNT(*) AS n FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ?') +
+        count('SELECT COUNT(*) AS n FROM BILLSDEPOSITS_V1 WHERE PAYEEID = ?');
+  }
+
+  void renamePayee(int payeeId, String newName) {
+    db.execute('UPDATE PAYEE_V1 SET PAYEENAME = ? WHERE PAYEEID = ?', [newName, payeeId]);
+  }
+
+  /// Only meant to be called once [payeeUsageCount] is actually 0 - the
+  /// caller (payees_screen.dart) is responsible for that check; this
+  /// itself doesn't re-verify it, same division of responsibility as
+  /// [deleteCategory] (CategoriesScreen enforces [CategoryUsage.canDelete]
+  /// before ever calling it).
+  void deletePayee(int payeeId) {
+    db.execute('DELETE FROM PAYEE_V1 WHERE PAYEEID = ?', [payeeId]);
+  }
+
   // ---- Transactions ----------------------------------------------------
 
   List<MoneyTransaction> getTransactions({

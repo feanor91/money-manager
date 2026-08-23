@@ -224,7 +224,7 @@ void main() {
       expect(capturedBody!.containsKey('grammar'), isFalse);
       expect(capturedBody!['prompt'], contains('Formule la réponse.'));
       expect(capturedBody!['prompt'], contains('résultat: 42'));
-      expect(capturedBody!['n_predict'], 2048);
+      expect(capturedBody!['n_predict'], 4096);
       client.close();
     });
   });

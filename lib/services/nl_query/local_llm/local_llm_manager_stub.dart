@@ -4,7 +4,7 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
-import 'sql_query_engine.dart' show defaultSqlSystemPrompt;
+import 'sql_query_engine.dart' show ChatTurn, defaultSqlSystemPrompt;
 
 Future<bool> isLocalLlmEnabled() async => false;
 Future<void> setLocalLlmEnabled(bool value) async {}
@@ -57,5 +57,6 @@ Future<String?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
+  List<ChatTurn> history = const [],
 }) async =>
     null;

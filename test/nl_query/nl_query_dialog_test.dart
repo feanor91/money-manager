@@ -98,7 +98,7 @@ void main() {
 
     await tester.enterText(
         find.byType(TextField), 'Quelles ont été mes dépenses ce mois-ci ?');
-    await tester.tap(find.widgetWithText(FilledButton, 'Demander'));
+    await tester.tap(find.byKey(const Key('nlQuerySendButton')));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Dépenses totales'), findsOneWidget);
@@ -117,11 +117,45 @@ void main() {
     expect(find.textContaining('Solde de Compte Courant'), findsOneWidget);
   });
 
+  testWidgets(
+      'asking a second question keeps the first exchange visible instead of replacing it - '
+      'regression test for the 2026-08-23 switch to a real multi-turn chat', (tester) async {
+    await pumpDialog(tester);
+
+    await tester.enterText(find.byType(TextField), 'Quel est le solde de mon compte ?');
+    await tester.tap(find.byKey(const Key('nlQuerySendButton')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Solde de Compte Courant'), findsOneWidget);
+    expect(find.text('Quel est le solde de mon compte ?'), findsOneWidget);
+
+    await tester.enterText(
+        find.byType(TextField), 'Quelles ont été mes dépenses ce mois-ci ?');
+    await tester.tap(find.byKey(const Key('nlQuerySendButton')));
+    await tester.pumpAndSettle();
+
+    // Both the first question/answer and the second are still on screen.
+    expect(find.text('Quel est le solde de mon compte ?'), findsOneWidget);
+    expect(find.textContaining('Solde de Compte Courant'), findsOneWidget);
+    expect(find.text('Quelles ont été mes dépenses ce mois-ci ?'), findsOneWidget);
+    expect(find.textContaining('Dépenses totales'), findsOneWidget);
+
+    // "Nouvelle conversation" clears the whole transcript back to the
+    // example chips - "Quel est le solde de mon compte ?" is itself one of
+    // the example chip labels, so it's expected to still be *somewhere* on
+    // screen; what must actually be gone is the real chat exchange (the
+    // computed answer text, never an example chip's own label).
+    await tester.tap(find.byTooltip('Nouvelle conversation'));
+    await tester.pumpAndSettle();
+    expect(find.text('Exemples :'), findsOneWidget);
+    expect(find.textContaining('Solde de Compte Courant'), findsNothing);
+    expect(find.textContaining('Dépenses totales'), findsNothing);
+  });
+
   testWidgets('an unrecognized question shows the "not understood" message', (tester) async {
     await pumpDialog(tester);
 
     await tester.enterText(find.byType(TextField), 'quelle heure est-il ?');
-    await tester.tap(find.widgetWithText(FilledButton, 'Demander'));
+    await tester.tap(find.byKey(const Key('nlQuerySendButton')));
     await tester.pumpAndSettle();
 
     expect(find.textContaining("n'ai pas compris"), findsOneWidget);

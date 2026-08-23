@@ -12,6 +12,7 @@ import '../widgets/webdav_settings_card.dart';
 import 'categories_screen.dart';
 import 'database_diagnostics_screen.dart';
 import 'help_screen.dart';
+import 'payees_screen.dart';
 import 'pin_lock_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -77,6 +78,18 @@ class SettingsScreen extends StatelessWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const CategoriesScreen()),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.people_outline),
+              title: const Text('Tiers'),
+              subtitle: const Text('Renommer ou supprimer (si inutilisé)'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PayeesScreen()),
               ),
             ),
           ),

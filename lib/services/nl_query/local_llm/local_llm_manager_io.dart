@@ -453,6 +453,7 @@ Future<String?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
+  List<sql_engine.ChatTurn> history = const [],
 }) async {
   if (!Platform.isWindows) return null;
   if (dbPath == null) return null;
@@ -474,6 +475,7 @@ Future<String?> askLocalLlmWithFullDataAccess(
       readOnlyRepo: readOnlyRepo,
       systemPrompt: systemPrompt,
       engine: engine,
+      history: history,
     );
   } finally {
     readOnlyRepo.db.dispose();

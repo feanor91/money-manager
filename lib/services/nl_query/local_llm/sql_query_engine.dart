@@ -353,6 +353,52 @@ List<SqlQueryStep>? extractValidatedSqlPlan(String rawResponse) {
   return [SqlQueryStep(objectif: '', sql: sql)];
 }
 
+/// One exchange already shown in the chat transcript (nl_query_dialog.dart)
+/// - the model never sees anything else about earlier turns, no chat-
+/// history feature of llama.cpp's own `/completion` endpoint is used here,
+/// just this app-owned recap prepended to the next question (see
+/// [_formatHistory]). Deliberately excludes any answer that came from the
+/// old fixed-kind pipeline (QueryKind.balance/outlook/incomeVsExpense) or
+/// the plain rule-based parser - those never call into this file at all,
+/// so a follow-up after one of those starts this chat's history fresh.
+class ChatTurn {
+  final String question;
+  final String answer;
+
+  const ChatTurn({required this.question, required this.answer});
+}
+
+/// How many of the most recent [ChatTurn]s are actually included - older
+/// turns are dropped rather than kept forever, so a long-running
+/// conversation can't slowly crowd the SQL-writing prompt's context budget
+/// out from under the schema/vocabulary it actually needs on every turn.
+const _maxHistoryTurns = 6;
+
+/// Recaps the last few turns of the conversation so the model can resolve
+/// a follow-up question ("et sur les 3 dernières années ?", "et pour
+/// Boursorama ?") against what was just discussed - prepended to the new
+/// question before it ever reaches [LlamaServerClient.askWithSystemPrompt].
+/// Only the SQL-writing call gets this: the answer-formatting call already
+/// receives the *current* question's real query results fresh every time,
+/// and doesn't need yesterday's numbers repeated into it too.
+String _formatHistory(List<ChatTurn> history) {
+  if (history.isEmpty) return '';
+  final recent = history.length > _maxHistoryTurns
+      ? history.sublist(history.length - _maxHistoryTurns)
+      : history;
+  final buffer = StringBuffer(
+      'Voici les derniers échanges de la conversation, pour comprendre une '
+      'éventuelle question de suivi (mais ne réponds qu\'à la toute '
+      'dernière question ci-dessous) :\n');
+  for (final turn in recent) {
+    buffer
+      ..write('Utilisateur : ${turn.question}\n')
+      ..write('Toi : ${turn.answer}\n');
+  }
+  buffer.write('\nNouvelle question de l\'utilisateur : ');
+  return buffer.toString();
+}
+
 /// Two-call flow, the "full data access" alternative to the closed
 /// QueryKind.adHoc vocabulary: (1) ask the model to write SQL against
 /// [systemPrompt]'s schema - either one query or a multi-step plan (see
@@ -368,6 +414,11 @@ List<SqlQueryStep>? extractValidatedSqlPlan(String rawResponse) {
 /// paraphrase what's actually there, which is the whole anti-hallucination
 /// point.
 ///
+/// [history] (2026-08-23) lets a follow-up question in the same chat
+/// session ("et l'an dernier ?") be resolved against what was just asked -
+/// see [_formatHistory]. Empty by default: every existing single-question
+/// caller keeps working unchanged.
+///
 /// Returns null (never throws) on any failure at either step - invalid/
 /// missing SQL in any step, a query that errors against the real schema,
 /// an empty model response - same never-throws contract as every other
@@ -378,9 +429,11 @@ Future<String?> answerViaFullSqlAccess({
   required MmexRepository readOnlyRepo,
   required String systemPrompt,
   required LlamaServerClient engine,
+  List<ChatTurn> history = const [],
 }) async {
   try {
-    final rawPlan = await engine.askWithSystemPrompt(systemPrompt, question);
+    final rawPlan = await engine.askWithSystemPrompt(
+        systemPrompt, '${_formatHistory(history)}$question');
     final plan = extractValidatedSqlPlan(rawPlan);
     if (plan == null) return null;
 

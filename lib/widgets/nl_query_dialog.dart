@@ -20,7 +20,7 @@ const _examples = [
   'Mes plus grosses dépenses des 3 derniers mois',
   'Revenus et dépenses de cette année',
   'Pourquoi vais-je finir le mois en négatif ?',
-  "Mes dépenses en Alimentation par mois depuis le début de l'année",
+  'Analyse complète de mes dépenses "Vacances" sur les 3 dernières années',
 ];
 
 /// A flat "not understood" gives no clue how to rephrase - say what *was*
@@ -48,18 +48,57 @@ String _notUnderstoodMessage(String question, {required List<Account> accounts})
       'comme celles ci-dessous.';
 }
 
+/// What kind of answer a [_ChatEntry] holds - drives both the little badge
+/// shown above it and whether it's rendered as Markdown (see
+/// [_NlQueryDialogState._buildEntryText]).
+enum _AnswerKind {
+  /// The deterministic formatter (answer_formatter.dart) - always exact,
+  /// no badge.
+  computed,
+
+  /// The model answering as plain conversation - not grounded in the
+  /// user's real data at all (see the badge's own wording).
+  freeform,
+
+  /// The model wrote and ran real SQL against the user's data, then
+  /// phrased the answer from the actual result rows - grounded, but the
+  /// model's own phrasing rather than answer_formatter.dart's.
+  sqlGrounded,
+
+  /// A genuine failure (network/database error) or "not understood".
+  error,
+}
+
+/// One line of the chat transcript - either the user's own question, or
+/// this app's answer to it (computed, freeform, SQL-grounded, or an
+/// error/"not understood" message - see [_AnswerKind]).
+class _ChatEntry {
+  final bool isUser;
+  final String text;
+  final _AnswerKind kind;
+
+  const _ChatEntry.user(this.text)
+      : isUser = true,
+        kind = _AnswerKind.computed;
+
+  const _ChatEntry.assistant(this.text, this.kind) : isUser = false;
+}
+
 /// Opens the natural-language query tool as a dialog - same shape as
 /// [openCategorySpendAnalyzer] (a read-only research tool, not a record
 /// editor: dialog, not a bottom sheet, per CLAUDE.md's UI-consistency rule).
-/// [defaultAccountId] (e.g. the dashboard's currently selected account) is
-/// the fallback account for every question kind that didn't name one
-/// itself - by design (2026-08-03), a question is never silently answered
-/// "every account combined"; naming an account in the question itself still
-/// always wins over this default. [forecastDay] (Settings' "Jour de
-/// prévision du solde") is where an unqualified [QueryKind.outlook]
-/// question ("pourquoi vais-je finir le mois en négatif") ends its
-/// projection - the same day the dashboard's own forecast figures use,
-/// not the calendar month's end.
+/// Sized close to fullscreen (2026-08-23 user request: "je veux que tu
+/// ouvres complètement le système d'IA" - a proper chat needs real room for
+/// a growing transcript and long, exhaustive answers, not a small fixed
+/// box). [defaultAccountId] (e.g. the dashboard's currently selected
+/// account) is the fallback account for every question kind that didn't
+/// name one itself - by design (2026-08-03), a question is never silently
+/// answered "every account combined"; naming an account in the question
+/// itself still always wins over this default. [forecastDay] (Settings'
+/// "Jour de prévision du solde") is where an unqualified
+/// [QueryKind.outlook] question ("pourquoi vais-je finir le mois en
+/// négatif") ends its projection - the same day the dashboard's own
+/// forecast figures use, not the calendar month's end.
 Future<void> openNlQueryDialog({
   required BuildContext context,
   required MmexRepository repo,
@@ -67,12 +106,12 @@ Future<void> openNlQueryDialog({
   int? defaultAccountId,
 }) {
   final screen = MediaQuery.sizeOf(context);
-  final width = screen.width < 760 ? screen.width * 0.95 : 640.0;
-  final height = screen.height * 0.8;
+  final width = screen.width < 760 ? screen.width * 0.97 : screen.width * 0.9;
+  final height = screen.height * 0.92;
   return showDialog<void>(
     context: context,
     builder: (context) => Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.all(12),
       child: SizedBox(
         width: width,
         height: height,
@@ -104,15 +143,14 @@ class NlQueryDialog extends StatefulWidget {
 
 class _NlQueryDialogState extends State<NlQueryDialog> {
   final _controller = TextEditingController();
+  final _scrollController = ScrollController();
   bool _loading = false;
-  String? _answer;
-  String? _error;
-  bool _isAiFreeform = false;
-  bool _isAiSqlGrounded = false;
+  final List<_ChatEntry> _messages = [];
 
   @override
   void dispose() {
     _controller.dispose();
+    _scrollController.dispose();
     // Kills the (Windows-only) llama-server.exe process and frees its
     // multi-gigabyte model from RAM/VRAM the moment this dialog closes,
     // rather than leaving it resident for the rest of the app session - a
@@ -124,39 +162,63 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     super.dispose();
   }
 
-  /// Also fires for programmatic changes (e.g. the clear button below), not
-  /// just typing - so clearing the question by any means brings back the
-  /// example chips rather than leaving the last answer/error stuck on screen.
-  void _onQuestionChanged(String value) {
-    setState(() {
-      if (value.isEmpty) {
-        _answer = null;
-        _error = null;
-        _isAiFreeform = false;
-        _isAiSqlGrounded = false;
-      }
+  void _scrollToBottom() {
+    // A frame needs to actually pass (the new message just got added to
+    // the list) before there's anything new to scroll to - jumping inside
+    // the same setState call would still see the old scroll extent.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+      );
     });
   }
 
-  void _clearQuestion() {
+  /// Every prior question/answer pair already in the transcript, oldest
+  /// first - handed to the SQL-chat engine (sql_query_engine.dart's
+  /// ChatTurn) so a follow-up question ("et l'an dernier ?") can be
+  /// resolved against what was just discussed. Pairs a user entry with
+  /// whatever assistant entry immediately follows it, regardless of that
+  /// answer's own kind (computed/freeform/SQL-grounded) - a follow-up can
+  /// just as reasonably refer back to an exact computed answer as to an
+  /// AI one.
+  List<ChatTurn> get _history {
+    final turns = <ChatTurn>[];
+    for (var i = 0; i < _messages.length - 1; i++) {
+      final entry = _messages[i];
+      final next = _messages[i + 1];
+      if (entry.isUser && !next.isUser) {
+        turns.add(ChatTurn(question: entry.text, answer: next.text));
+      }
+    }
+    return turns;
+  }
+
+  void _clearConversation() {
     _controller.clear();
-    setState(() {
-      _answer = null;
-      _error = null;
-      _isAiFreeform = false;
-      _isAiSqlGrounded = false;
-    });
+    setState(() => _messages.clear());
   }
 
   Future<void> _ask(String question) async {
-    if (question.trim().isEmpty) return;
+    final trimmed = question.trim();
+    if (trimmed.isEmpty || _loading) return;
+    final history = _history; // captured before this turn's own question
+    _controller.clear();
     setState(() {
       _loading = true;
-      _answer = null;
-      _error = null;
-      _isAiFreeform = false;
-      _isAiSqlGrounded = false;
+      _messages.add(_ChatEntry.user(trimmed));
     });
+    _scrollToBottom();
+
+    void reply(String text, _AnswerKind kind) {
+      setState(() {
+        _loading = false;
+        _messages.add(_ChatEntry.assistant(text, kind));
+      });
+      _scrollToBottom();
+    }
 
     final repo = widget.repo;
     final categories = repo.getCategories(onlyActive: false);
@@ -172,7 +234,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // because local AI happens to be off or unavailable right now.
     var parsed = isLocalLlmSupported
         ? await extractIntentWithLocalLlm(
-            question,
+            trimmed,
             categories: categories,
             accounts: accounts,
             payees: payees,
@@ -180,38 +242,35 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         : (intent: null, periodWasExplicit: false);
 
     // Full-database-access query engine (2026-08-07, "j'en ai marre d'être
-    // limité") - tried whenever the local AI either didn't recognize a
-    // fixed question shape at all, or landed on QueryKind.adHoc (its old
-    // closed metric/type/groupBy vocabulary, now treated purely as an
-    // "open-ended question" signal rather than something still answered
-    // with that vocabulary directly). Runs its own throwaway read-only
-    // connection internally (see askLocalLlmWithFullDataAccess), same
-    // OS-enforced guarantee as QueryKind.adHoc's dedicated connection
-    // below. On any failure - the model couldn't write usable SQL, the
-    // query errored, no local AI available - this changes nothing and
-    // falls straight through to whatever would have run anyway (the old
-    // adHoc vocabulary if that's what was recognized, or the rule-based
-    // parser).
+    // limité"; opened up further 2026-08-23 into an actual multi-turn chat)
+    // - tried whenever the local AI either didn't recognize a fixed
+    // question shape at all, or landed on QueryKind.adHoc (its old closed
+    // metric/type/groupBy vocabulary, now treated purely as an "open-ended
+    // question" signal rather than something still answered with that
+    // vocabulary directly). Runs its own throwaway read-only connection
+    // internally (see askLocalLlmWithFullDataAccess), same OS-enforced
+    // guarantee as QueryKind.adHoc's dedicated connection below. On any
+    // failure - the model couldn't write usable SQL, the query errored, no
+    // local AI available - this changes nothing and falls straight through
+    // to whatever would have run anyway (the old adHoc vocabulary if
+    // that's what was recognized, or the rule-based parser).
     if (isLocalLlmSupported && (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
       // dbPath (desktop: the real file path, reopened read-only by the
       // implementation) vs repo (web: the in-memory database itself -
       // there is no file to reopen there, see local_llm_manager_web.dart).
       final sqlAnswer = kIsWeb
-          ? await askLocalLlmWithFullDataAccess(question, repo: repo)
-          : await askLocalLlmWithFullDataAccess(question, dbPath: repo.db.label);
+          ? await askLocalLlmWithFullDataAccess(trimmed, repo: repo, history: history)
+          : await askLocalLlmWithFullDataAccess(trimmed,
+              dbPath: repo.db.label, history: history);
       if (sqlAnswer != null) {
-        setState(() {
-          _loading = false;
-          _answer = sqlAnswer;
-          _isAiSqlGrounded = true;
-        });
+        reply(sqlAnswer, _AnswerKind.sqlGrounded);
         return;
       }
     }
 
     if (parsed.intent == null) {
       parsed = parseQuestion(
-        question,
+        trimmed,
         categories: categories,
         accounts: accounts,
         payees: payees,
@@ -222,20 +281,16 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // Neither the intent extractor nor the rule-based parser recognized
       // this as a financial question - rather than a flat rejection, let
       // the same local model answer as ordinary conversation instead (see
-      // the badge on the answer container below, which is what keeps this
-      // visually distinct from a real computed-from-your-data answer).
-      // Only attempted when local AI is actually usable; otherwise there
-      // is no model left to ask and the message below is all there is.
-      final freeform = isLocalLlmSupported ? await askLocalLlmFreeform(question) : null;
-      setState(() {
-        _loading = false;
-        if (freeform != null) {
-          _answer = freeform;
-          _isAiFreeform = true;
-        } else {
-          _error = _notUnderstoodMessage(question, accounts: accounts);
-        }
-      });
+      // the badge on the answer bubble, which is what keeps this visually
+      // distinct from a real computed-from-your-data answer). Only
+      // attempted when local AI is actually usable; otherwise there is no
+      // model left to ask and the message below is all there is.
+      final freeform = isLocalLlmSupported ? await askLocalLlmFreeform(trimmed) : null;
+      if (freeform != null) {
+        reply(freeform, _AnswerKind.freeform);
+      } else {
+        reply(_notUnderstoodMessage(trimmed, accounts: accounts), _AnswerKind.error);
+      }
       return;
     }
 
@@ -257,10 +312,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
           widget.defaultAccountId ?? (accounts.length == 1 ? accounts.single.id : null);
       if (fallbackAccountId == null) {
         final example = accounts.isNotEmpty ? accounts.first.name : 'Compte Courant';
-        setState(() {
-          _loading = false;
-          _error = 'Précise le compte dans ta question, par exemple : "sur $example".';
-        });
+        reply('Précise le compte dans ta question, par exemple : "sur $example".',
+            _AnswerKind.error);
         return;
       }
       intent = intent.copyWith(accountId: fallbackAccountId);
@@ -293,10 +346,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       if (intent.kind == QueryKind.adHoc) {
         final readOnlyRepo = await openReadOnlyAdHocRepository(repo.db.label);
         if (readOnlyRepo == null) {
-          setState(() {
-            _loading = false;
-            _error = "Erreur : impossible d'accéder à la base en lecture seule pour cette question.";
-          });
+          reply("Erreur : impossible d'accéder à la base en lecture seule pour cette question.",
+              _AnswerKind.error);
           return;
         }
         try {
@@ -316,15 +367,9 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         payees: payees,
         currency: currency,
       );
-      setState(() {
-        _loading = false;
-        _answer = text;
-      });
+      reply(text, _AnswerKind.computed);
     } catch (e) {
-      setState(() {
-        _loading = false;
-        _error = 'Erreur : $e';
-      });
+      reply('Erreur : $e', _AnswerKind.error);
     }
   }
 
@@ -334,13 +379,12 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   // bold headings, which would be an unreadable wall of plain text if
   // rendered as a single [Text]. Computed (deterministic formatter)
   // answers and errors are plain text and are left as-is.
-  Widget _buildAnswerText(BuildContext context) {
-    final text = _error ?? _answer ?? '';
-    if (_error != null || (!_isAiFreeform && !_isAiSqlGrounded)) {
-      return Text(text);
+  Widget _buildEntryText(BuildContext context, _ChatEntry entry) {
+    if (entry.kind != _AnswerKind.freeform && entry.kind != _AnswerKind.sqlGrounded) {
+      return Text(entry.text);
     }
     return MarkdownBody(
-      data: text,
+      data: entry.text,
       styleSheet: MarkdownStyleSheet(
         p: Theme.of(context).textTheme.bodyMedium,
         strong: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -348,6 +392,64 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
             ),
       ),
       selectable: true,
+    );
+  }
+
+  Widget _buildBubble(BuildContext context, _ChatEntry entry) {
+    final theme = Theme.of(context);
+    if (entry.isUser) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.75),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(entry.text, style: theme.textTheme.bodyMedium),
+          ),
+        ),
+      );
+    }
+    final isError = entry.kind == _AnswerKind.error;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isError
+                ? theme.colorScheme.errorContainer
+                : theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // A computed answer comes straight from the database and is
+              // always exact; this badge is what tells the other two kinds
+              // apart at a glance (see CLAUDE.md - a financial figure must
+              // never look like it could be an invention of the model).
+              if (entry.kind == _AnswerKind.freeform)
+                const _AnswerBadge(
+                  icon: Icons.auto_awesome,
+                  label: "Réponse libre de l'IA, pas un calcul sur tes données",
+                ),
+              if (entry.kind == _AnswerKind.sqlGrounded)
+                const _AnswerBadge(
+                  icon: Icons.travel_explore,
+                  label: "Réponse IA à partir d'une requête sur tes données réelles",
+                ),
+              _buildEntryText(context, entry),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -364,8 +466,15 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text('Poser une question', style: Theme.of(context).textTheme.titleLarge),
+                  child: Text('Discuter avec mes finances',
+                      style: Theme.of(context).textTheme.titleLarge),
                 ),
+                if (_messages.isNotEmpty)
+                  IconButton(
+                    tooltip: 'Nouvelle conversation',
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _loading ? null : _clearConversation,
+                  ),
                 IconButton(
                   icon: const Icon(Icons.close),
                   onPressed: () => Navigator.of(context).pop(),
@@ -375,155 +484,111 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextField(
-                    controller: _controller,
-                    decoration: InputDecoration(
-                      labelText: 'Ta question',
-                      hintText: 'ex : quelles ont été mes dépenses en juillet ?',
-                      border: const OutlineInputBorder(),
-                      suffixIcon: _controller.text.isEmpty
-                          ? null
-                          : IconButton(
-                              icon: const Icon(Icons.clear),
-                              tooltip: 'Effacer',
-                              onPressed: _clearQuestion,
-                            ),
-                    ),
-                    textInputAction: TextInputAction.search,
-                    onChanged: _onQuestionChanged,
-                    onSubmitted: _ask,
-                  ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton.icon(
-                      onPressed: _loading ? null : () => _ask(_controller.text),
-                      icon: _loading
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.send),
-                      label: const Text('Demander'),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  if (_answer != null || _error != null)
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: _error != null
-                                ? Theme.of(context).colorScheme.errorContainer
-                                : Theme.of(context).colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // A computed answer comes straight from the
-                              // database and is always exact; this badge is
-                              // what tells them apart at a glance, since a
-                              // free-form one is the model improvising, not
-                              // a real figure from their data (see CLAUDE.md
-                              // - a financial figure must never look like it
-                              // could be an invention of the model).
-                              if (_isAiFreeform)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.auto_awesome,
-                                        size: 14,
-                                        color: Theme.of(context).colorScheme.primary,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        "Réponse libre de l'IA, pas un calcul sur tes données",
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: Theme.of(context).colorScheme.primary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              // Distinct from both the above (not a real
-                              // figure at all) and a plain unbadged answer
-                              // (the exact deterministic formatter) - this
-                              // one *is* real data, but the IA wrote its own
-                              // query and phrased the answer itself rather
-                              // than going through answer_formatter.dart, so
-                              // it's shown as its own category rather than
-                              // silently passing as an exact computed answer.
-                              if (_isAiSqlGrounded)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 6),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        Icons.travel_explore,
-                                        size: 14,
-                                        color: Theme.of(context).colorScheme.primary,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        "Réponse IA à partir d'une requête sur tes données réelles",
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w600,
-                                          color: Theme.of(context).colorScheme.primary,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              _buildAnswerText(context),
-                            ],
-                          ),
-                        ),
-                      ),
-                    )
-                  else
-                    Expanded(
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+            child: _messages.isEmpty
+                ? SingleChildScrollView(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Exemples :', style: Theme.of(context).textTheme.labelLarge),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
-                            Text('Exemples :', style: Theme.of(context).textTheme.labelLarge),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                for (final example in _examples)
-                                  ActionChip(
-                                    label: Text(example),
-                                    onPressed: _loading
-                                        ? null
-                                        : () {
-                                            _controller.text = example;
-                                            _ask(example);
-                                          },
-                                  ),
-                              ],
-                            ),
+                            for (final example in _examples)
+                              ActionChip(
+                                label: Text(example),
+                                onPressed: _loading ? null : () => _ask(example),
+                              ),
                           ],
                         ),
-                      ),
+                      ],
                     ),
-                ],
+                  )
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(20),
+                    itemCount: _messages.length,
+                    itemBuilder: (context, index) => _buildBubble(context, _messages[index]),
+                  ),
+          ),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+                20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _controller,
+                    decoration: const InputDecoration(
+                      labelText: 'Ta question',
+                      hintText: 'ex : quelles ont été mes dépenses en juillet ?',
+                      border: OutlineInputBorder(),
+                    ),
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.send,
+                    enabled: !_loading,
+                    onSubmitted: _ask,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton.filled(
+                  key: const Key('nlQuerySendButton'),
+                  onPressed: _loading ? null : () => _ask(_controller.text),
+                  icon: _loading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.send),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnswerBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _AnswerBadge({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Theme.of(context).colorScheme.primary),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.primary,
               ),
             ),
           ),

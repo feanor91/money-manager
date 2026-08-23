@@ -4,6 +4,9 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
+import 'sql_query_engine.dart' show ChatTurn;
+
+export 'sql_query_engine.dart' show ChatTurn;
 
 import 'local_llm_manager_stub.dart'
     if (dart.library.js_interop) 'local_llm_manager_web.dart'
@@ -118,10 +121,14 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) => impl.setLocalLlmSqlSyst
 /// database is in-memory, loaded from a picked file), so [repo] - the
 /// currently-open, live repository - is passed instead and used directly.
 /// Exactly one of the two is required; the other must be omitted.
+/// [history] (2026-08-23) - the current chat's prior turns, so a follow-up
+/// question ("et l'an dernier ?") resolves against what was just asked. See
+/// sql_query_engine.dart's ChatTurn/`_formatHistory`.
 Future<String?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
+  List<ChatTurn> history = const [],
 }) {
   if (dbPath == null && repo == null) {
     throw ArgumentError.value(
@@ -131,5 +138,6 @@ Future<String?> askLocalLlmWithFullDataAccess(
     question,
     dbPath: dbPath,
     repo: repo,
+    history: history,
   );
 }

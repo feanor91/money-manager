@@ -196,6 +196,7 @@ Future<String?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
+  List<sql_engine.ChatTurn> history = const [],
 }) async {
   if (!await isLocalLlmEnabled()) return null;
   if (repo == null) return null;
@@ -214,6 +215,7 @@ Future<String?> askLocalLlmWithFullDataAccess(
       readOnlyRepo: repo,
       systemPrompt: systemPrompt,
       engine: client,
+      history: history,
     );
   } catch (_) {
     return null;
