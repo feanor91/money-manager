@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.76] - 2026-08-23
+
+- feat(ai): turn the local AI dialog into a real multi-turn chat
+
 ## [1.0.75] - 2026-08-23
 
 - fix(payees): auto-creation of a newly-typed payee did nothing when editing
