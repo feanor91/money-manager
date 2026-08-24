@@ -32,7 +32,8 @@ const _examples = [
 /// failed, and the rule-based pieces are the ones a rephrase can actually
 /// act on (same fixed keyword set on every platform), unlike whatever the
 /// LLM did or didn't parse out of it.
-String _notUnderstoodMessage(String question, {required List<Account> accounts}) {
+String _notUnderstoodMessage(String question,
+    {required List<Account> accounts}) {
   final pieces = recognizedPieces(question, accounts: accounts);
   final recognized = <String>[
     if (pieces.accountId != null)
@@ -143,6 +144,7 @@ class NlQueryDialog extends StatefulWidget {
 
 class _NlQueryDialogState extends State<NlQueryDialog> {
   final _controller = TextEditingController();
+  final _questionFocusNode = FocusNode();
   final _scrollController = ScrollController();
   bool _loading = false;
   final List<_ChatEntry> _messages = [];
@@ -150,6 +152,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   @override
   void dispose() {
     _controller.dispose();
+    _questionFocusNode.dispose();
     _scrollController.dispose();
     // Kills the (Windows-only) llama-server.exe process and frees its
     // multi-gigabyte model from RAM/VRAM the moment this dialog closes,
@@ -199,6 +202,18 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   void _clearConversation() {
     _controller.clear();
     setState(() => _messages.clear());
+  }
+
+  /// Puts a previously-asked question back into the input field for editing
+  /// (2026-08-24 user request: "reprendre une question déjà posée pour la
+  /// modifier ou la préciser") - tapping any of the user's own bubbles in
+  /// the transcript, rather than retyping a long question from scratch to
+  /// fix a typo or add detail. Does not re-ask it or touch the transcript;
+  /// the user still presses send.
+  void _editQuestion(String text) {
+    _controller.text = text;
+    _controller.selection = TextSelection.collapsed(offset: text.length);
+    _questionFocusNode.requestFocus();
   }
 
   Future<void> _ask(String question) async {
@@ -254,12 +269,14 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // local AI available - this changes nothing and falls straight through
     // to whatever would have run anyway (the old adHoc vocabulary if
     // that's what was recognized, or the rule-based parser).
-    if (isLocalLlmSupported && (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
+    if (isLocalLlmSupported &&
+        (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
       // dbPath (desktop: the real file path, reopened read-only by the
       // implementation) vs repo (web: the in-memory database itself -
       // there is no file to reopen there, see local_llm_manager_web.dart).
       final sqlAnswer = kIsWeb
-          ? await askLocalLlmWithFullDataAccess(trimmed, repo: repo, history: history)
+          ? await askLocalLlmWithFullDataAccess(trimmed,
+              repo: repo, history: history)
           : await askLocalLlmWithFullDataAccess(trimmed,
               dbPath: repo.db.label, history: history);
       if (sqlAnswer != null) {
@@ -285,11 +302,13 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // distinct from a real computed-from-your-data answer). Only
       // attempted when local AI is actually usable; otherwise there is no
       // model left to ask and the message below is all there is.
-      final freeform = isLocalLlmSupported ? await askLocalLlmFreeform(trimmed) : null;
+      final freeform =
+          isLocalLlmSupported ? await askLocalLlmFreeform(trimmed) : null;
       if (freeform != null) {
         reply(freeform, _AnswerKind.freeform);
       } else {
-        reply(_notUnderstoodMessage(trimmed, accounts: accounts), _AnswerKind.error);
+        reply(_notUnderstoodMessage(trimmed, accounts: accounts),
+            _AnswerKind.error);
       }
       return;
     }
@@ -305,14 +324,16 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // every account - forcing it down to one first would make that grouping
     // pointless. Confirmed explicitly as the one case allowed to break the
     // "never silently combine accounts" rule below.
-    final wantsEveryAccount =
-        intent.kind == QueryKind.adHoc && intent.adHocGroupBy == AdHocGroupBy.account;
+    final wantsEveryAccount = intent.kind == QueryKind.adHoc &&
+        intent.adHocGroupBy == AdHocGroupBy.account;
     if (intent.accountId == null && !wantsEveryAccount) {
-      final fallbackAccountId =
-          widget.defaultAccountId ?? (accounts.length == 1 ? accounts.single.id : null);
+      final fallbackAccountId = widget.defaultAccountId ??
+          (accounts.length == 1 ? accounts.single.id : null);
       if (fallbackAccountId == null) {
-        final example = accounts.isNotEmpty ? accounts.first.name : 'Compte Courant';
-        reply('Précise le compte dans ta question, par exemple : "sur $example".',
+        final example =
+            accounts.isNotEmpty ? accounts.first.name : 'Compte Courant';
+        reply(
+            'Précise le compte dans ta question, par exemple : "sur $example".',
             _AnswerKind.error);
         return;
       }
@@ -331,7 +352,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         period: DateRange(
           start: DateTime(today.year, today.month, today.day),
           end: forecastDate.add(const Duration(days: 1)),
-          label: 'd\'ici le ${DateFormat('d MMMM yyyy', 'fr_FR').format(forecastDate)}',
+          label:
+              'd\'ici le ${DateFormat('d MMMM yyyy', 'fr_FR').format(forecastDate)}',
         ),
       );
     }
@@ -346,7 +368,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       if (intent.kind == QueryKind.adHoc) {
         final readOnlyRepo = await openReadOnlyAdHocRepository(repo.db.label);
         if (readOnlyRepo == null) {
-          reply("Erreur : impossible d'accéder à la base en lecture seule pour cette question.",
+          reply(
+              "Erreur : impossible d'accéder à la base en lecture seule pour cette question.",
               _AnswerKind.error);
           return;
         }
@@ -380,7 +403,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   // rendered as a single [Text]. Computed (deterministic formatter)
   // answers and errors are plain text and are left as-is.
   Widget _buildEntryText(BuildContext context, _ChatEntry entry) {
-    if (entry.kind != _AnswerKind.freeform && entry.kind != _AnswerKind.sqlGrounded) {
+    if (entry.kind != _AnswerKind.freeform &&
+        entry.kind != _AnswerKind.sqlGrounded) {
       return Text(entry.text);
     }
     return MarkdownBody(
@@ -401,15 +425,29 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       return Align(
         alignment: Alignment.centerRight,
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.75),
+          constraints:
+              BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.75),
           child: Container(
             margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
               color: theme.colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Text(entry.text, style: theme.textTheme.bodyMedium),
+            clipBehavior: Clip.antiAlias,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _loading ? null : () => _editQuestion(entry.text),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Tooltip(
+                    message: 'Toucher pour reprendre cette question',
+                    child: Text(entry.text, style: theme.textTheme.bodyMedium),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       );
@@ -418,7 +456,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     return Align(
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
         child: Container(
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(12),
@@ -443,7 +482,8 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
               if (entry.kind == _AnswerKind.sqlGrounded)
                 const _AnswerBadge(
                   icon: Icons.travel_explore,
-                  label: "Réponse IA à partir d'une requête sur tes données réelles",
+                  label:
+                      "Réponse IA à partir d'une requête sur tes données réelles",
                 ),
               _buildEntryText(context, entry),
             ],
@@ -457,111 +497,128 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   Widget build(BuildContext context) {
     // A bare Dialog doesn't reliably pick up the app's dark surface color on
     // its own - paint it explicitly, same fix as category_spend_analyzer.dart.
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text('Discuter avec mes finances',
-                      style: Theme.of(context).textTheme.titleLarge),
-                ),
-                if (_messages.isNotEmpty)
-                  IconButton(
-                    tooltip: 'Nouvelle conversation',
-                    icon: const Icon(Icons.refresh),
-                    onPressed: _loading ? null : _clearConversation,
+    //
+    // Its own SelectionArea (2026-08-24 user report: "je ne peux toujours
+    // pas faire de copie") - the app-wide one wrapping _PinGate's main route
+    // (app.dart) doesn't reach here: showDialog pushes this dialog as a
+    // *separate* route/OverlayEntry on the same Navigator, a sibling branch
+    // of the widget tree rather than a descendant of that route's content,
+    // so SelectionArea (which propagates via the widget tree, not shared
+    // Overlay/Navigator membership) needs its own instance in every such
+    // route to make its own text selectable.
+    return SelectionArea(
+      child: Material(
+        color: Theme.of(context).colorScheme.surface,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('Discuter avec mes finances',
+                        style: Theme.of(context).textTheme.titleLarge),
                   ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: _messages.isEmpty
-                ? SingleChildScrollView(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Exemples :', style: Theme.of(context).textTheme.labelLarge),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final example in _examples)
-                              ActionChip(
-                                label: Text(example),
-                                onPressed: _loading ? null : () => _ask(example),
-                              ),
-                          ],
-                        ),
-                      ],
+                  if (_messages.isNotEmpty)
+                    IconButton(
+                      tooltip: 'Nouvelle conversation',
+                      icon: const Icon(Icons.refresh),
+                      onPressed: _loading ? null : _clearConversation,
                     ),
-                  )
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(20),
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) => _buildBubble(context, _messages[index]),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
                   ),
-          ),
-          if (_loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                ],
               ),
             ),
-          Padding(
-            padding: EdgeInsets.fromLTRB(
-                20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: const InputDecoration(
-                      labelText: 'Ta question',
-                      hintText: 'ex : quelles ont été mes dépenses en juillet ?',
-                      border: OutlineInputBorder(),
+            const Divider(height: 1),
+            Expanded(
+              child: _messages.isEmpty
+                  ? SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Exemples :',
+                              style: Theme.of(context).textTheme.labelLarge),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final example in _examples)
+                                ActionChip(
+                                  label: Text(example),
+                                  onPressed:
+                                      _loading ? null : () => _ask(example),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(20),
+                      itemCount: _messages.length,
+                      itemBuilder: (context, index) =>
+                          _buildBubble(context, _messages[index]),
                     ),
-                    minLines: 1,
-                    maxLines: 5,
-                    textInputAction: TextInputAction.send,
-                    enabled: !_loading,
-                    onSubmitted: _ask,
+            ),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
-                const SizedBox(width: 8),
-                IconButton.filled(
-                  key: const Key('nlQuerySendButton'),
-                  onPressed: _loading ? null : () => _ask(_controller.text),
-                  icon: _loading
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.send),
-                ),
-              ],
+              ),
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      focusNode: _questionFocusNode,
+                      decoration: const InputDecoration(
+                        labelText: 'Ta question',
+                        hintText:
+                            'ex : quelles ont été mes dépenses en juillet ?',
+                        border: OutlineInputBorder(),
+                      ),
+                      minLines: 1,
+                      maxLines: 5,
+                      textInputAction: TextInputAction.send,
+                      enabled: !_loading,
+                      onSubmitted: _ask,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    key: const Key('nlQuerySendButton'),
+                    onPressed: _loading ? null : () => _ask(_controller.text),
+                    icon: _loading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.send),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

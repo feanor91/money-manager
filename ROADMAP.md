@@ -3,6 +3,15 @@
 Idées et pistes pour la suite, non planifiées ni engagées - une liste de
 courses, pas des engagements.
 
+## Priorité 1 (bugs à corriger)
+
+- **Impossible de sélectionner un tiers dans la liste s'il n'y en a
+  qu'un seul.** Lors de l'ajout d'une opération dans le grand livre d'un
+  compte, si la liste de suggestion de tiers ne contient qu'un seul nom,
+  il n'est pas possible de le sélectionner dans cette liste (signalé
+  2026-08-24). À vérifier aussi pour les opérations récurrentes (même
+  champ tiers, probablement le même widget/la même logique de filtrage).
+
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou

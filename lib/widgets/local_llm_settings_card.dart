@@ -2,11 +2,40 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../services/nl_query/local_llm/local_llm_manager.dart';
 import '../services/nl_query/local_llm/local_llm_support.dart';
 import '../services/nl_query/local_llm/model_catalog.dart';
-import '../services/nl_query/local_llm/sql_query_engine.dart' show defaultSqlSystemPrompt;
+import '../services/nl_query/local_llm/sql_query_engine.dart'
+    show defaultSqlSystemPrompt;
+
+/// The desktop build's own runtime/model folders (model_downloader.dart's
+/// `getApplicationSupportDirectory()` + "local_llm_models"/"local_llm_runtime"
+/// - both siblings under the same app-support base), spelled out with the
+/// PowerShell `$env:APPDATA` variable rather than a real absolute path.
+/// Backs the web settings card's copyable launch commands (2026-08-24 user
+/// request): a literal path baked in here would embed *this machine's*
+/// Windows username - `$env:APPDATA` resolves per-user at the moment the
+/// command actually runs, so the exact same string is correct on anyone's
+/// PC, not just the one this was written on. Only meaningful if the model
+/// was already downloaded once through the desktop build (or the .gguf was
+/// placed there by hand) - the web build itself never downloads anything
+/// (see [LocalLlmSettingsCard]'s own doc comment).
+const _appSupportBase = r'$env:APPDATA\com.bteuile.moneymanager\money_manager';
+
+/// The exact PowerShell command to start `llama-server.exe` for [model],
+/// matching local_llm_manager_io.dart's own `Process.start` arguments
+/// (`-c 32768 -ngl 999`, i.e. the desktop build's own defaults) so a model
+/// launched this way for the web build behaves identically to how the
+/// desktop build would have launched it itself. `--host 0.0.0.0` (not
+/// 127.0.0.1) so the server is reachable from another device on the same
+/// network too (e.g. testing the web app from a phone) - still reachable
+/// via 127.0.0.1 from the same PC.
+String _launchCommandFor(LocalLlmModel model) =>
+    '& "$_appSupportBase\\local_llm_runtime\\llama-server.exe" '
+    '-m "$_appSupportBase\\local_llm_models\\${model.fileName}" '
+    '--host 0.0.0.0 --port 8792 -c 32768 -ngl 999';
 
 /// Settings card for the optional local-AI layer behind "Poser une
 /// question". On desktop (Windows) it shows the full setup: model
@@ -82,8 +111,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
       });
       return;
     }
-    final modelId =
-        await selectedLocalLlmModelId() ?? localLlmModels.first.id;
+    final modelId = await selectedLocalLlmModelId() ?? localLlmModels.first.id;
     final downloaded = await isLocalLlmModelDownloaded(
         localLlmModelById(modelId) ?? localLlmModels.first);
     final runtimeAvailable = await isLocalLlmRuntimeAvailable();
@@ -194,7 +222,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
       setState(() => _serverSettingsError = null);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-            content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
+            content: Text(
+                'Réglages enregistrés - appliqués à la prochaine question.')),
       );
       return;
     }
@@ -225,7 +254,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     setState(() => _serverSettingsError = null);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-          content: Text('Réglages enregistrés - appliqués à la prochaine question.')),
+          content: Text(
+              'Réglages enregistrés - appliqués à la prochaine question.')),
     );
   }
 
@@ -234,7 +264,8 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-          content: Text('Prompt enregistré - appliqué à la prochaine question.')),
+          content:
+              Text('Prompt enregistré - appliqué à la prochaine question.')),
     );
   }
 
@@ -470,16 +501,24 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
             const SizedBox(height: 8),
             Text('Serveur IA', style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 4),
-            Text(
-              'Lance le serveur IA sur ton ordinateur avec une commande du type :\n'
-              'llama-server.exe -m mon_modele.gguf --host 0.0.0.0 --port 8792\n\n'
+            const Text(
+              'Lance le serveur IA sur ton ordinateur (PowerShell) avec l\'une des '
+              'commandes ci-dessous, selon le modèle voulu - copie-la puis colle-la '
+              'dans une fenêtre PowerShell. Elles supposent que le modèle a déjà été '
+              'téléchargé une fois via la version bureau (Paramètres IA > télécharger '
+              'un modèle) ; si tu l\'as placé ailleurs toi-même, remplace le chemin '
+              'après "-m".\n\n'
               'Puis renseigne l\'adresse ci-dessous. Si la page web est ouverte sur le '
               'même ordinateur que le serveur, « 127.0.0.1 » suffit. Si elle est ouverte '
               'depuis un autre appareil (téléphone, autre PC), utilise l\'adresse IP de '
               'cet ordinateur sur le réseau local.',
-              style: Theme.of(context).textTheme.bodySmall,
+              style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
             const SizedBox(height: 8),
+            for (final model in localLlmModels) ...[
+              _LaunchCommandBlock(model: model),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Expanded(
@@ -593,6 +632,59 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// One model's launch command in a monospace, selectable box with a copy
+/// button - so the web settings card's commands (see [_launchCommandFor])
+/// can go straight from here into a PowerShell window without retyping.
+class _LaunchCommandBlock extends StatelessWidget {
+  final LocalLlmModel model;
+
+  const _LaunchCommandBlock({required this.model});
+
+  Future<void> _copy(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: _launchCommandFor(model)));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Commande copiée.'), duration: Duration(seconds: 2)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(model.label,
+                    style: Theme.of(context).textTheme.labelMedium),
+                const SizedBox(height: 4),
+                SelectableText(
+                  _launchCommandFor(model),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'Copier la commande',
+            icon: const Icon(Icons.copy, size: 18),
+            onPressed: () => _copy(context),
+          ),
+        ],
       ),
     );
   }
