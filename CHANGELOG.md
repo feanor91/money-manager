@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.77] - 2026-08-24
+
+- fix(ai): fix data-access bugs in the full-SQL chat mode, enable text selection
+
 ## [1.0.76] - 2026-08-23
 
 - feat(ai): turn the local AI dialog into a real multi-turn chat
