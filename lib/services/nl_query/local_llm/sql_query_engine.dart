@@ -51,22 +51,63 @@ Règles strictes :
   milliers de lignes brutes : les résultats sont passés tels quels à
   l'étape de réponse, et un résultat trop volumineux serait tronqué.
 - Question thématique ("vacances", "travaux", "cadeaux"...) : cherche
-  d'abord le thème dans les NOMS DE CATÉGORIE (C.CATEGNAME LIKE '%mot%'
-  sur CATEGORY_V1, jointe par CATEGID), jamais par le texte des NOTES -
-  les notes sont trop imprévisibles pour servir de base. Si aucune
-  catégorie existante ne correspond au thème, réponds
-  {"sql": null, "raison": "aucune catégorie ne correspond"} plutôt que
-  de deviner. Exemple : "analyse mes dépenses vacances sur 3 mois" ->
-  SELECT C.CATEGNAME, SUM(T.TRANSAMOUNT) AS total
-  FROM CHECKINGACCOUNT_V1 T JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID
-  WHERE C.CATEGNAME LIKE '%vacance%' AND T.TRANSCODE = 'Withdrawal'
-    AND T.DELETEDTIME = '' AND T.STATUS != 'V'
-    AND T.TRANSDATE >= date('now', '-3 months')
-  GROUP BY C.CATEGNAME ORDER BY total DESC.
+  d'abord le thème dans les NOMS DE CATÉGORIE (CATEGNAME sur CATEGORY_V1,
+  jointe par CATEGID), jamais par le texte des NOTES - les notes sont trop
+  imprévisibles pour servir de base.
+  **IMPORTANT : CATEGNAME ne contient JAMAIS le chemin complet "Parent:
+  Enfant" - toujours le seul nom de la catégorie elle-même (le segment
+  après le dernier ":"), même quand une sous-catégorie apparaît sous la
+  forme "Loisirs:Vacances" dans le vocabulaire ci-dessous.** Pour une
+  recherche LIKE par thème, utilise seulement le mot-clé
+  (`LIKE '%vacance%'`) - JAMAIS le chemin complet
+  (`LIKE '%Loisirs:Vacances%'` ne trouvera jamais rien, même si la
+  catégorie existe bien).
+  **IMPORTANT, et ceci s'applique à TOUTE requête thématique - un total,
+  une liste d'opérations, un détail par mois, peu importe la forme :
+  une catégorie qui a des sous-catégories (ex. "Vacances" avec les
+  sous-catégories "Logement", "Resto", "Transports"...) sert souvent de
+  simple regroupement - la plupart des vraies opérations sont
+  enregistrées directement sur une SOUS-catégorie (CATEGID d'"Resto", pas
+  celui de "Vacances"), dont le nom ne contient PAS forcément le mot du
+  thème. Un filtre `CATEGNAME LIKE '%vacance%'` seul (sans la jointure
+  vers le parent ci-dessous) ne trouve donc que les rares opérations
+  classées directement sur la catégorie parente, et RATE tout ce qui est
+  classé sur ses sous-catégories - que ce soit pour un total (une
+  sous-estimation massive et silencieuse) ou pour une simple liste
+  d'opérations (une liste vide ou incomplète alors que les opérations
+  existent bel et bien). N'écris JAMAIS une requête thématique - même une
+  simple liste - sans cette jointure vers le parent. Pour un thème qui
+  correspond à une catégorie ayant des sous-catégories (regarde le
+  vocabulaire ci-dessous, qui liste les chemins complets "Parent:Enfant"),
+  inclut TOUJOURS aussi les opérations de ses sous-catégories, via une
+  jointure vers la catégorie parente - que la requête calcule un total ou
+  liste des opérations individuelles :
+  SELECT SUM(T.TRANSAMOUNT) AS total
+  FROM CHECKINGACCOUNT_V1 T
+  JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID
+  LEFT JOIN CATEGORY_V1 P ON C.PARENTID = P.CATEGID
+  WHERE (C.CATEGNAME LIKE '%vacance%' OR P.CATEGNAME LIKE '%vacance%')
+    AND T.TRANSCODE = 'Withdrawal'
+    AND (T.DELETEDTIME IS NULL OR T.DELETEDTIME = '') AND T.STATUS != 'V'
+    AND T.TRANSDATE >= date('now', '-3 months').
+  (`C.CATEGNAME LIKE '%vacance%'` attrape les opérations classées
+  directement sur "Vacances" ; `P.CATEGNAME LIKE '%vacance%'` attrape
+  celles classées sur une de ses sous-catégories comme "Resto". La même
+  jointure `LEFT JOIN CATEGORY_V1 P ON C.PARENTID = P.CATEGID` et le même
+  `WHERE (C.CATEGNAME LIKE ... OR P.CATEGNAME LIKE ...)` s'appliquent
+  identiquement à une requête qui liste des opérations individuelles au
+  lieu de sommer - seules les colonnes du SELECT changent.) Si tu dois
+  filtrer sur le nom exact d'une sous-catégorie citée avec son chemin
+  complet, ne compare que sur le segment après le ":"
+  (`CATEGNAME = 'Vacances'`), jamais sur la chaîne complète. Si aucune
+  catégorie existante ne correspond au thème, réponds {"sql": null,
+  "raison": "aucune catégorie ne correspond"} plutôt que de deviner.
 - Le vocabulaire réel de la base de l'utilisateur (comptes, catégories,
-  tiers) est joint en bas de ce prompt : utilise EXACTEMENT ces noms
-  (catégories en chemin complet "Parent:Enfant") quand la question en
-  cite un, plutôt que de deviner un nom proche.
+  tiers) est joint en bas de ce prompt, à titre indicatif pour savoir ce
+  qui existe vraiment (et éviter de deviner un nom proche mais faux) - les
+  catégories y sont affichées en chemin complet "Parent:Enfant"
+  uniquement pour montrer la hiérarchie, jamais comme valeur littérale à
+  comparer à CATEGNAME (voir la règle ci-dessus).
 - N'utilise QUE les tables et colonnes listées ci-dessous. N'invente jamais
   un nom de table ou de colonne absent de cette liste.
 - Les montants (TRANSAMOUNT, TOTRANSAMOUNT, INITIALBAL...) sont toujours des
@@ -74,10 +115,41 @@ Règles strictes :
   signe.
 - Une opération annulée a STATUS = 'V' (majuscule) - à exclure des totaux
   sauf si la question porte explicitement dessus. Une opération supprimée a
-  DELETEDTIME non vide - toujours à exclure.
-- Les dates (TRANSDATE, NEXTOCCURRENCEDATE...) sont stockées en texte
-  'AAAA-MM-JJ'. Compare-les directement en tant que texte (>=, <, BETWEEN),
-  jamais via une fonction de date incompatible SQLite.
+  DELETEDTIME renseigné (non vide) - à exclure. **IMPORTANT : sur les
+  lignes NON supprimées, DELETEDTIME vaut soit NULL soit '' selon la
+  ligne (jamais un seul des deux de façon fiable) - un filtre
+  `DELETEDTIME = ''` seul ignore silencieusement toutes les lignes où
+  c'est NULL, ce qui peut exclure la quasi-totalité des vraies données.**
+  Filtre toujours avec `(DELETEDTIME IS NULL OR DELETEDTIME = '')` pour
+  "non supprimée", jamais `DELETEDTIME = ''` seul.
+- Les dates (TRANSDATE, NEXTOCCURRENCEDATE...) sont stockées en texte, le
+  plus souvent 'AAAA-MM-JJTHH:MM:SS' mais parfois juste 'AAAA-MM-JJ' selon
+  la ligne. Une comparaison par plage (>=, <, BETWEEN avec un texte
+  'AAAA-MM-JJ') fonctionne dans les deux cas ; évite une égalité stricte
+  (`TRANSDATE = 'AAAA-MM-JJ'`) qui raterait les lignes au format complet -
+  préfère `TRANSDATE LIKE 'AAAA-MM-JJ%'` si tu dois cibler un jour précis.
+  **IMPORTANT sur les parenthèses, règle absolue : dans TOUT WHERE, si tu
+  écris `OR` en dehors d'une paire de parenthèses qui l'entoure déjà, ta
+  requête est FAUSSE. Un `OR` ne doit JAMAIS apparaître nu entre deux
+  `AND` - il doit toujours être entre parenthèses. Exemple concret pour
+  "les opérations de novembre et décembre 2025" :
+  FAUX (ne fais JAMAIS ça) :
+  `WHERE (C.CATEGNAME LIKE '%vacance%' OR P.CATEGNAME LIKE '%vacance%')
+    AND T.TRANSDATE LIKE '2025-11%' OR T.TRANSDATE LIKE '2025-12%'
+    AND T.STATUS != 'V'`
+  (le `OR T.TRANSDATE LIKE '2025-12%'` ici est nu, pas entouré de
+  parenthèses - SQL le lit comme "(tout ce qui précède) OU (décembre ET
+  pas annulé)", ce qui retourne des opérations de n'importe quelle
+  catégorie en décembre, et perd le filtre catégorie/statut pour
+  novembre.)
+  CORRECT (fais toujours ça) :
+  `WHERE (C.CATEGNAME LIKE '%vacance%' OR P.CATEGNAME LIKE '%vacance%')
+    AND (T.TRANSDATE LIKE '2025-11%' OR T.TRANSDATE LIKE '2025-12%')
+    AND T.STATUS != 'V'`
+  (chaque groupe OR - catégorie, dates, comptes, tiers... - a sa PROPRE
+  paire de parenthèses qui l'isole des AND autour de lui.) Avant de
+  répondre, relis ta requête et vérifie qu'aucun `OR` n'est en dehors de
+  parenthèses.
 - Le "aujourd'hui" pertinent, si besoin, peut être obtenu via date('now') -
   ne suppose jamais une date fixe.
 - Ne calcule jamais de solde de compte en sommant CHECKINGACCOUNT_V1 seule :
@@ -99,7 +171,9 @@ CHECKINGACCOUNT_V1 (le grand livre - chaque ligne est une opération réelle)
   TRANSAMOUNT REAL (montant débité du compte ACCOUNTID, toujours positif),
   TOTRANSAMOUNT REAL (montant crédité sur TOACCOUNTID pour un virement),
   STATUS TEXT (''=normal, 'R'=pointée, 'V'=annulée),
-  TRANSDATE TEXT ('AAAA-MM-JJ'), NOTES TEXT, DELETEDTIME TEXT (vide = pas supprimée)
+  TRANSDATE TEXT ('AAAA-MM-JJ' ou 'AAAA-MM-JJTHH:MM:SS' selon la ligne),
+  NOTES TEXT,
+  DELETEDTIME TEXT (NULL ou '' = pas supprimée, toute autre valeur = supprimée)
 
 ACCOUNTLIST_V1 (les comptes)
   ACCOUNTID INTEGER, ACCOUNTNAME TEXT, ACCOUNTTYPE TEXT, STATUS TEXT ('Open'/'Closed'),
@@ -141,6 +215,14 @@ Tu formules une réponse en français à partir des résultats de requêtes déj
 exécutés sur les données financières réelles de l'utilisateur - tu ne
 calcules rien toi-même, tu ne fais que lire et reformuler ces données.
 N'invente jamais un nombre absent des résultats fournis.
+
+IMPORTANT sur les nombres : dans les résultats JSON fournis, un nombre comme
+7.93 utilise le POINT comme séparateur DÉCIMAL (format JSON standard) - cela
+représente sept euros et quatre-vingt-treize centimes, jamais sept mille
+neuf cent trente. Convertis-le en notation française (virgule décimale) SANS
+changer sa valeur : 7.93 devient "7,93 €", jamais "7 930,00 €". Ne multiplie
+et ne divise jamais un montant en le reformattant - recopie exactement les
+mêmes chiffres, seul le séparateur décimal change (point -> virgule).
 ''';
 
 /// One executed step of a multi-step plan, ready to be handed to the
@@ -277,6 +359,125 @@ Map<String, dynamic>? _decodeJsonObject(String rawResponse) {
   }
 }
 
+/// True if [sql] has a WHERE clause that mixes AND and OR at the same
+/// top-level nesting depth within that clause (outside any parentheses) -
+/// e.g. `WHERE ... AND a OR b AND ...`. SQL's operator precedence reads
+/// that as `(... AND a) OR (b AND ...)`, not the "all of these conditions,
+/// and either a or b" the model almost always means - a real, repeatedly-
+/// observed failure mode of the local model (2026-08-23: it kept dropping
+/// the parentheses around a multi-month `OR` date filter -
+/// `TRANSDATE LIKE '2025-11%' OR TRANSDATE LIKE '2025-12%'` - despite
+/// three increasingly explicit prompt rewrites asking it not to). Rather
+/// than keep tuning the prompt against a model limitation that prompt
+/// wording alone didn't fix, this is a hard static check: a query this
+/// ambiguous fails closed (rejected, same as any other malformed plan)
+/// rather than silently running with the wrong logic - a missed answer is
+/// much safer than a wrong one for financial data. A WHERE clause using
+/// only OR (no top-level AND) or only AND (no top-level OR) is
+/// unambiguous and passes fine; only the combination at the same depth is
+/// rejected. Deliberately scoped to WHERE clauses only (stopping at the
+/// next top-level GROUP/ORDER/LIMIT/HAVING/UNION keyword, or a lower
+/// paren depth than where the clause started) - a multi-condition JOIN...
+/// ON (`ON a.x = b.x AND a.y = b.y`) is a completely different, unrelated
+/// clause and must never trip this check. A query can have more than one
+/// top-level WHERE (e.g. either side of a UNION); every one is checked.
+/// Single-quoted string literals (including doubled `''` as an escaped
+/// quote) are skipped so a NOTES/PAYEENAME value containing "and"/"or" or
+/// a literal parenthesis can never corrupt the depth count.
+bool _hasAmbiguousTopLevelOrAnd(String sql) {
+  var depth = 0;
+  var i = 0;
+  while (i < sql.length) {
+    final ch = sql[i];
+    if (ch == "'") {
+      i++;
+      while (i < sql.length) {
+        if (sql[i] == "'") {
+          if (i + 1 < sql.length && sql[i + 1] == "'") {
+            i += 2;
+            continue;
+          }
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    if (ch == '(') {
+      depth++;
+      i++;
+      continue;
+    }
+    if (ch == ')') {
+      if (depth > 0) depth--;
+      i++;
+      continue;
+    }
+    if (depth == 0 && RegExp(r'^WHERE\b', caseSensitive: false).hasMatch(sql.substring(i))) {
+      final clauseStartDepth = depth;
+      var j = i + 5; // past "WHERE"
+      var clauseDepth = 0;
+      var topLevelHasAnd = false;
+      var topLevelHasOr = false;
+      while (j < sql.length) {
+        final cj = sql[j];
+        if (cj == "'") {
+          j++;
+          while (j < sql.length) {
+            if (sql[j] == "'") {
+              if (j + 1 < sql.length && sql[j + 1] == "'") {
+                j += 2;
+                continue;
+              }
+              j++;
+              break;
+            }
+            j++;
+          }
+          continue;
+        }
+        if (cj == '(') {
+          clauseDepth++;
+          j++;
+          continue;
+        }
+        if (cj == ')') {
+          if (clauseDepth == 0) break; // closes an enclosing paren - clause ends here
+          clauseDepth--;
+          j++;
+          continue;
+        }
+        if (clauseDepth == 0) {
+          final rest = sql.substring(j);
+          if (RegExp(r'^(GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING|UNION)\b',
+                  caseSensitive: false)
+              .hasMatch(rest)) {
+            break;
+          }
+          if (RegExp(r'^AND\b', caseSensitive: false).hasMatch(rest)) {
+            topLevelHasAnd = true;
+            j += 3;
+            continue;
+          }
+          if (RegExp(r'^OR\b', caseSensitive: false).hasMatch(rest)) {
+            topLevelHasOr = true;
+            j += 2;
+            continue;
+          }
+        }
+        j++;
+      }
+      if (topLevelHasAnd && topLevelHasOr) return true;
+      depth = clauseStartDepth;
+      i = j;
+      continue;
+    }
+    i++;
+  }
+  return false;
+}
+
 /// The shared SELECT-only safety check used by both [extractValidatedSql]
 /// and [extractValidatedSqlPlan] - see [extractValidatedSql]'s own doc
 /// for why this is quality control on top of the OS-enforced read-only
@@ -295,6 +496,7 @@ String? _validateSqlText(String? sql) {
   for (final word in forbidden) {
     if (RegExp('\\b$word\\b').hasMatch(upper)) return null;
   }
+  if (_hasAmbiguousTopLevelOrAnd(trimmed)) return null;
   return trimmed;
 }
 

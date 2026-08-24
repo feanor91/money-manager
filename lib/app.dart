@@ -237,7 +237,20 @@ class _PinGateState extends State<_PinGate> with WidgetsBindingObserver {
       key: _gateNavigatorKey,
       onGenerateRoute: (_) => MaterialPageRoute(builder: (routeContext) {
         _maybeCheckForUpdates(routeContext);
-        return child;
+        // SelectionArea makes mouse-drag text selection (and Ctrl+C) work
+        // everywhere - 2026-08-23 user report ("nulle part... je ne peux
+        // pas sélectionner du texte"): plain [Text] widgets aren't
+        // selectable in Flutter by default, only [SelectableText] or
+        // something wrapped in [SelectionArea] is, and this app used the
+        // former nowhere except the AI chat's Markdown answers
+        // (`MarkdownBody(selectable: true)`, nl_query_dialog.dart).
+        // Placed *here*, inside this Navigator's own route - not up in
+        // MaterialApp.builder, one level further out - because
+        // [SelectionArea] internally needs an Overlay ancestor just like
+        // EditableText does (see this method's own doc comment above): put
+        // outside this Navigator, it has none yet and throws "No Overlay
+        // widget found" building the very first frame.
+        return SelectionArea(child: child);
       }),
     );
   }

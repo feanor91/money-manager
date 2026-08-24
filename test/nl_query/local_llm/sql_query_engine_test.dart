@@ -97,6 +97,68 @@ void main() {
       expect(extractValidatedSql('{"sql":""}'), isNull);
       expect(extractValidatedSql('{"sql":"   "}'), isNull);
     });
+
+    test(
+        'rejects a WHERE clause with an unparenthesized top-level OR mixed '
+        'with AND - regression test for the 2026-08-23 report that a real '
+        'model response silently dropped the parens around a multi-month '
+        'date filter ("novembre et décembre 2025"), which SQL precedence '
+        'reinterprets as breaking the category/status filters instead of '
+        'the intended "(nov OR dec) AND category AND status"', () {
+      // The exact ambiguous shape the live model produced.
+      expect(
+        extractValidatedSql('{"sql":"SELECT * FROM CHECKINGACCOUNT_V1 T '
+            "WHERE (T.CATEGID = 1 OR T.CATEGID = 2) AND T.TRANSDATE LIKE "
+            "'2025-11%' OR T.TRANSDATE LIKE '2025-12%' AND T.STATUS != "
+            '\'V\'"}'),
+        isNull,
+      );
+      // The corrected, fully-parenthesized version must still pass.
+      expect(
+        extractValidatedSql('{"sql":"SELECT * FROM CHECKINGACCOUNT_V1 T '
+            "WHERE (T.CATEGID = 1 OR T.CATEGID = 2) AND (T.TRANSDATE LIKE "
+            "'2025-11%' OR T.TRANSDATE LIKE '2025-12%') AND T.STATUS != "
+            '\'V\'"}'),
+        isNotNull,
+      );
+    });
+
+    test(
+        'does not false-positive on an unrelated AND in a JOIN...ON clause '
+        'alongside a top-level WHERE OR with no top-level AND', () {
+      expect(
+        extractValidatedSql('{"sql":"SELECT * FROM CHECKINGACCOUNT_V1 T '
+            'JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID AND C.ACTIVE = 1 '
+            "WHERE T.CATEGID = 1 OR T.CATEGID = 2\"}"),
+        isNotNull,
+      );
+    });
+
+    test('does not false-positive on a WHERE using only OR, or only AND',
+        () {
+      expect(
+        extractValidatedSql(
+            '{"sql":"SELECT * FROM CATEGORY_V1 WHERE CATEGID = 1 OR '
+            'CATEGID = 2"}'),
+        isNotNull,
+      );
+      expect(
+        extractValidatedSql(
+            '{"sql":"SELECT * FROM CATEGORY_V1 WHERE CATEGID = 1 AND '
+            'ACTIVE = 1"}'),
+        isNotNull,
+      );
+    });
+
+    test(
+        'does not false-positive on a literal apostrophe/parenthesis inside '
+        'a string value', () {
+      expect(
+        extractValidatedSql('{"sql":"SELECT * FROM CHECKINGACCOUNT_V1 '
+            'WHERE NOTES = \'and (or) a b\'\'s trip\' OR STATUS = \'V\'"}'),
+        isNotNull,
+      );
+    });
   });
 
   test('defaultSqlSystemPrompt documents the read-only/single-statement contract', () {
@@ -115,6 +177,44 @@ void main() {
     expect(defaultSqlSystemPrompt, contains('AGREGUE en SQL'));
     expect(defaultSqlSystemPrompt, contains('GROUP BY'));
     expect(defaultSqlSystemPrompt, contains('vocabulaire réel'));
+  });
+
+  test(
+      'defaultSqlSystemPrompt warns against matching CATEGNAME against the full '
+      '"Parent:Enfant" vocabulary path - regression test for the 2026-08-23 report of a '
+      'real subcategory ("Loisirs:Vacances") never being found', () {
+    expect(defaultSqlSystemPrompt, contains('ne contient JAMAIS le chemin complet'));
+    expect(defaultSqlSystemPrompt, contains("LIKE '%Loisirs:Vacances%'"));
+  });
+
+  test(
+      'defaultSqlSystemPrompt requires a thematic search to also roll up '
+      'sub-categories via a parent join - regression test for the '
+      '2026-08-23 report that a real "Vacances" category (parent of '
+      '"Voyages", "Resto", "Logement"...) came back at 7,93€ instead of '
+      'the ~3 500€ actually spent, because almost every real transaction '
+      'is filed on a sub-category whose own name never contains the '
+      'theme word', () {
+    expect(defaultSqlSystemPrompt, contains('LEFT JOIN CATEGORY_V1 P ON C.PARENTID = P.CATEGID'));
+    expect(defaultSqlSystemPrompt,
+        contains("(C.CATEGNAME LIKE '%vacance%' OR P.CATEGNAME LIKE '%vacance%')"));
+    expect(defaultSqlSystemPrompt, contains('sous-estimation massive et silencieuse'));
+  });
+
+  test(
+      'defaultSqlSystemPrompt requires DELETEDTIME IS NULL OR = \'\', never = '
+      "'' alone - regression test for the 2026-08-23 report that a real "
+      'category with real transactions ("Vacances") always came back empty: '
+      'the real database stores "not deleted" as either NULL or \'\' '
+      "depending on the row (confirmed directly against MesComptes.mmb - "
+      "most rows are NULL), so a bare DELETEDTIME = '' filter silently "
+      'dropped the vast majority of real transactions, not just this one '
+      'category.', () {
+    expect(defaultSqlSystemPrompt,
+        contains("(DELETEDTIME IS NULL OR DELETEDTIME = '')"));
+    expect(defaultSqlSystemPrompt,
+        contains("(T.DELETEDTIME IS NULL OR T.DELETEDTIME = '')"));
+    expect(defaultSqlSystemPrompt, isNot(contains("AND T.DELETEDTIME = ''")));
   });
 
   group('extractValidatedSqlPlan', () {
@@ -345,6 +445,30 @@ void main() {
       expect(formattingPrompt, contains('100'));
       expect(formattingPrompt, contains('Loisirs'));
       expect(formattingPrompt, contains('rapport'));
+    });
+
+    test(
+        'the answer-formatting call is warned that JSON numbers use a '
+        'decimal POINT, not a French thousands separator - regression test '
+        'for the 2026-08-23 report of a real 7.93€ transaction being '
+        'reformatted as "7 930,00 €" (a 1000x error)', () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 7.93}]
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      await answerViaFullSqlAccess(
+        question: 'combien ?',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      final formattingPrompt = engine.prompts.last;
+      expect(formattingPrompt, contains('7.93'));
+      expect(formattingPrompt, contains('séparateur DÉCIMAL'));
+      expect(formattingPrompt, contains('"7,93 €"'));
     });
 
     test('still supports the single-sql form', () async {
