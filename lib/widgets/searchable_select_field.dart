@@ -54,10 +54,12 @@ class SearchableSelectField<T extends Object> extends StatefulWidget {
   });
 
   @override
-  State<SearchableSelectField<T>> createState() => _SearchableSelectFieldState<T>();
+  State<SearchableSelectField<T>> createState() =>
+      _SearchableSelectFieldState<T>();
 }
 
-class _SearchableSelectFieldState<T extends Object> extends State<SearchableSelectField<T>> {
+class _SearchableSelectFieldState<T extends Object>
+    extends State<SearchableSelectField<T>> {
   late final TextEditingController _pendingTextHolder;
   stt.SpeechToText? _speech;
   bool _listening = false;
@@ -105,7 +107,8 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
     unawaited(speech.listen(
       onResult: (result) {
         controller.text = result.recognizedWords;
-        controller.selection = TextSelection.collapsed(offset: controller.text.length);
+        controller.selection =
+            TextSelection.collapsed(offset: controller.text.length);
       },
       listenOptions: stt.SpeechListenOptions(
         localeId: 'fr_FR',
@@ -125,7 +128,9 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
         Expanded(
           child: Autocomplete<T>(
             initialValue: TextEditingValue(
-              text: widget.initialValue != null ? widget.labelOf(widget.initialValue as T) : '',
+              text: widget.initialValue != null
+                  ? widget.labelOf(widget.initialValue as T)
+                  : '',
             ),
             displayStringForOption: widget.labelOf,
             optionsBuilder: (textEditingValue) {
@@ -133,7 +138,8 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
               widget.onTextChanged?.call(textEditingValue.text);
               final query = textEditingValue.text.trim().toLowerCase();
               if (query.isEmpty) return widget.options;
-              return widget.options.where((o) => widget.labelOf(o).toLowerCase().contains(query));
+              return widget.options.where(
+                  (o) => widget.labelOf(o).toLowerCase().contains(query));
             },
             onSelected: widget.onSelected,
             fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
@@ -151,7 +157,9 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
                           icon: Icon(
                             _listening ? Icons.mic : Icons.mic_none,
                             size: 18,
-                            color: _listening ? Theme.of(context).colorScheme.error : null,
+                            color: _listening
+                                ? Theme.of(context).colorScheme.error
+                                : null,
                           ),
                           onPressed: () => _toggleListening(controller),
                         ),
@@ -181,17 +189,52 @@ class _SearchableSelectFieldState<T extends Object> extends State<SearchableSele
                   elevation: 4,
                   borderRadius: BorderRadius.circular(12),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 320, minWidth: 240),
+                    constraints:
+                        const BoxConstraints(maxHeight: 320, minWidth: 240),
                     child: ListView.builder(
                       padding: EdgeInsets.zero,
                       shrinkWrap: true,
                       itemCount: list.length,
                       itemBuilder: (context, index) {
                         final option = list[index];
-                        return ListTile(
-                          dense: true,
-                          title: _OptionLabel(text: widget.labelOf(option)),
-                          onTap: () => onSelectedCallback(option),
+                        // A raw Listener.onPointerDown, not
+                        // InkWell.onTap/onTapDown (2026-08-24, intermittent
+                        // "can't select an option" report, most visibly a
+                        // single filtered match on the ledger's transaction
+                        // form). Root cause, confirmed with a widget test
+                        // that reproduces it (see
+                        // searchable_select_field_test.dart's "selection
+                        // survives a rebuild landing between pointer-down
+                        // and pointer-up"): this row sits inside a
+                        // ListView, so its InkWell's TapGestureRecognizer
+                        // shares a gesture arena with the ListView's own
+                        // scroll/pan recognizer - the arena only resolves
+                        // (and only THEN does onTapDown/onTap actually
+                        // fire) once it's clear the pan recognizer won't
+                        // claim the gesture, which is deferred all the way
+                        // to pointer-up, not pointer-down as the name
+                        // suggests. If a ChangeNotifier rebuild (this form
+                        // watches DatabaseProvider, which fires for
+                        // unrelated reasons - a debounced save completing,
+                        // etc.) tears down and rebuilds this exact row
+                        // before that resolution, the tap is silently
+                        // dropped. Listener.onPointerDown bypasses the
+                        // gesture arena entirely - it fires on the raw
+                        // pointer-down event unconditionally, before any
+                        // rebuild has a chance to interrupt it. The InkWell
+                        // stays, purely for the visual tap ripple - it no
+                        // longer drives the actual selection.
+                        return Listener(
+                          key: ValueKey(widget.labelOf(option)),
+                          behavior: HitTestBehavior.opaque,
+                          onPointerDown: (_) => onSelectedCallback(option),
+                          child: InkWell(
+                            onTap: () {},
+                            child: ListTile(
+                              dense: true,
+                              title: _OptionLabel(text: widget.labelOf(option)),
+                            ),
+                          ),
                         );
                       },
                     ),
@@ -239,7 +282,9 @@ class _OptionLabel extends StatelessWidget {
       text: TextSpan(
         style: DefaultTextStyle.of(context).style,
         children: [
-          TextSpan(text: text.substring(0, separator + 1), style: TextStyle(color: muted)),
+          TextSpan(
+              text: text.substring(0, separator + 1),
+              style: TextStyle(color: muted)),
           TextSpan(
             text: text.substring(separator + 1),
             style: const TextStyle(fontWeight: FontWeight.w600),

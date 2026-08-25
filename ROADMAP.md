@@ -3,15 +3,6 @@
 Idées et pistes pour la suite, non planifiées ni engagées - une liste de
 courses, pas des engagements.
 
-## Priorité 1 (bugs à corriger)
-
-- **Impossible de sélectionner un tiers dans la liste s'il n'y en a
-  qu'un seul.** Lors de l'ajout d'une opération dans le grand livre d'un
-  compte, si la liste de suggestion de tiers ne contient qu'un seul nom,
-  il n'est pas possible de le sélectionner dans cette liste (signalé
-  2026-08-24). À vérifier aussi pour les opérations récurrentes (même
-  champ tiers, probablement le même widget/la même logique de filtrage).
-
 ## Suggestions (à valider avant de s'y lancer)
 
 - **Export CSV** des transactions (utile pour la déclaration d'impôts ou
@@ -43,6 +34,35 @@ courses, pas des engagements.
     qu'il n'y a qu'un seul utilisateur francophone.
 
 ## Récemment fait
+
+- ~~Impossible de sélectionner un tiers/une catégorie dans la liste quand
+  un seul choix reste affiché~~ - **corrigé avec réserve (2026-08-24)**.
+  Signalé d'abord sur le champ Tiers ("un seul tiers dans la liste, pas
+  moyen de le sélectionner"), confirmé ensuite aussi sur Catégorie
+  (capture d'écran : "boula" -> "Nourriture:Boulangerie" impossible à
+  toucher), sur la page Transactions, **de façon intermittente/aléatoire**
+  ("j'ai retesté plusieurs fois et maintenant ça marche") - jamais
+  reproduit sur le tableau de bord ni sur les opérations récurrentes.
+  Cause probable, confirmée par un test automatisé qui reproduit le
+  symptôme (`test/widgets/searchable_select_field_test.dart`) : la ligne
+  d'option, affichée dans une `ListView` à l'intérieur d'une infobulle
+  superposée (`Autocomplete`), partage son arène de gestes avec le
+  défilement de cette liste - or ce formulaire observe `DatabaseProvider`
+  (`context.watch`), qui se redéclenche pour des raisons sans rapport
+  (une sauvegarde différée qui se termine, etc.) ; si ça arrive pile entre
+  l'appui et le relâchement du doigt/clic, Flutter reconstruit la ligne
+  en plein milieu du geste et l'appui est silencieusement perdu - jamais
+  reproduit sur le tableau de bord/les opérations récurrentes faute d'un
+  formulaire aussi souvent reconstruit par autre chose que la saisie
+  elle-même. Corrigé dans `lib/widgets/searchable_select_field.dart` en
+  faisant sélectionner l'option par un `Listener.onPointerDown` brut
+  (qui court-circuite entièrement cette arène de gestes) plutôt que par
+  le `onTap` habituel d'un `ListTile`/`InkWell`. **Réserve du 2026-08-24**
+  : cause réelle et corrigée dans un test qui la reproduit fidèlement
+  (down → reconstruction externe → up, échouait avant, passe maintenant),
+  mais jamais reproduite dans l'appli réelle elle-même (juste rapportée
+  comme aléatoire par l'utilisateur) - à surveiller si ça revient malgré
+  tout.
 
 - ~~IA locale : mode IA sur la version web~~ - **fait (2026-08-22)**.
   Le mode IA (question-réponse en langage naturel) ne fonctionnait que
