@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.79] - 2026-08-25
+
+- fix(ui): fix intermittent failure to select an Autocomplete option
+
 ## [1.0.78] - 2026-08-24
 
 - feat(ai): fix chat text selection, add edit-previous-question, copyable launch commands
