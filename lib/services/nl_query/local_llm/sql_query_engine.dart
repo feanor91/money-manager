@@ -522,8 +522,9 @@ bool _hasAmbiguousTopLevelOrAnd(String sql) {
           continue;
         }
         if (cj == ')') {
-          if (clauseDepth == 0)
+          if (clauseDepth == 0) {
             break; // closes an enclosing paren - clause ends here
+          }
           clauseDepth--;
           j++;
           continue;

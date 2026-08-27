@@ -134,8 +134,9 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Payee> payees,
   DateTime? now,
 }) async {
-  if (!await isLocalLlmEnabled())
+  if (!await isLocalLlmEnabled()) {
     return (intent: null, periodWasExplicit: false);
+  }
   final client = await _ensureClient();
   if (client == null) return (intent: null, periodWasExplicit: false);
   try {

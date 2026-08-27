@@ -341,8 +341,9 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   DateTime? now,
 }) async {
   if (!Platform.isWindows) return (intent: null, periodWasExplicit: false);
-  if (!await isLocalLlmEnabled())
+  if (!await isLocalLlmEnabled()) {
     return (intent: null, periodWasExplicit: false);
+  }
   final engine = await _ensureEngine();
   if (engine == null) return (intent: null, periodWasExplicit: false);
   try {
