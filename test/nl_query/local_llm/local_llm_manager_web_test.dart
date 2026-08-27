@@ -168,7 +168,7 @@ void main() {
       repo: repo,
     );
 
-    expect(answer, 'Tu as 0 compte.');
+    expect(answer?.text, 'Tu as 0 compte.');
     expect(receivedBodies, hasLength(2));
     expect(receivedPaths, ['/completion', '/completion']);
     expect(receivedBodies.first, contains('combien de comptes ?'));

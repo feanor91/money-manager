@@ -453,7 +453,7 @@ void main() {
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, 'Réponse finale.');
+      expect(answer?.text, 'Réponse finale.');
       expect(repo.executed, [
         'SELECT * FROM (SELECT 1) LIMIT 5000',
         'SELECT * FROM (SELECT 2) LIMIT 5000',
@@ -466,6 +466,59 @@ void main() {
       expect(formattingPrompt, contains('100'));
       expect(formattingPrompt, contains('Loisirs'));
       expect(formattingPrompt, contains('rapport'));
+    });
+
+    test(
+        'the CSV alongside the answer has one labeled section per step, '
+        'with a header row, and stays a separate table per step rather '
+        'than merging them - regression test for the 2026-08-27 "export '
+        'en CSV" request', () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 100}],
+        [
+          {'categorie': 'Loisirs', 'total': 60},
+          {'categorie': 'Nourriture', 'total': 40},
+        ],
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"steps":[{"objectif":"Total","sql":"SELECT 1"},{"objectif":"Détail","sql":"SELECT 2"}]}',
+        'Réponse finale.',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'analyse mes dépenses',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer, isNotNull);
+      final csv = answer!.csv;
+      expect(csv, contains('# Total'));
+      expect(csv, contains('# Détail'));
+      expect(csv, contains('total\n100'));
+      expect(csv, contains('categorie,total'));
+      expect(csv, contains('Loisirs,60'));
+      expect(csv, contains('Nourriture,40'));
+    });
+
+    test('CSV fields containing a comma or a quote are RFC 4180-escaped',
+        () async {
+      final repo = _FakeRepo(perStepResults: [
+        [
+          {'libelle': 'Un, avec virgule', 'note': 'Il a dit "salut"'}
+        ],
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      final answer = await answerViaFullSqlAccess(
+        question: 'liste',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(answer!.csv, contains('"Un, avec virgule"'));
+      expect(answer.csv, contains('"Il a dit ""salut"""'));
     });
 
     test(
@@ -506,7 +559,7 @@ void main() {
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, 'Réponse finale.');
+      expect(answer?.text, 'Réponse finale.');
       expect(repo.executed, ['SELECT * FROM (SELECT 1) LIMIT 5000']);
     });
 
@@ -564,7 +617,7 @@ void main() {
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, 'Réponse finale.');
+      expect(answer?.text, 'Réponse finale.');
       // The answer-formatting call is the last one recorded.
       final formattingPrompt = engine.prompts.last;
       expect(formattingPrompt, contains('partiel'));

@@ -1,5 +1,9 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:intl/intl.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
@@ -78,11 +82,18 @@ class _ChatEntry {
   final String text;
   final _AnswerKind kind;
 
+  /// The raw rows behind a [_AnswerKind.sqlGrounded] answer, as CSV -
+  /// null for every other kind (2026-08-27 user request: an export button
+  /// on SQL-grounded answers so the real numbers can go into a
+  /// spreadsheet, not just the model's prose).
+  final String? csv;
+
   const _ChatEntry.user(this.text)
       : isUser = true,
-        kind = _AnswerKind.computed;
+        kind = _AnswerKind.computed,
+        csv = null;
 
-  const _ChatEntry.assistant(this.text, this.kind) : isUser = false;
+  const _ChatEntry.assistant(this.text, this.kind, {this.csv}) : isUser = false;
 }
 
 /// Opens the natural-language query tool as a dialog - same shape as
@@ -216,6 +227,39 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     _questionFocusNode.requestFocus();
   }
 
+  /// Saves a SQL-grounded answer's raw rows to a .csv file via the same
+  /// cross-platform save dialog `FilePicker.saveFile` already handles for
+  /// the database export in settings_screen.dart (web: browser download,
+  /// desktop: native save dialog, Android: share/save sheet) - reused
+  /// rather than building a separate platform-shell just for this.
+  Future<void> _exportCsv(BuildContext context, String csv) async {
+    final timestamp = DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now());
+    try {
+      await FilePicker.saveFile(
+        fileName: 'reponse_ia_$timestamp.csv',
+        bytes: Uint8List.fromList(utf8.encode(csv)),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Échec de l'export CSV : $e")),
+      );
+    }
+  }
+
+  /// Copies a whole answer's plain text to the clipboard (2026-08-27 user
+  /// request: "pouvoir copier la totalité du texte de la réponse... pour
+  /// un copier/coller dans un notepad") - a one-tap alternative to
+  /// manually drag-selecting the whole bubble.
+  Future<void> _copyAnswer(BuildContext context, String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+          content: Text('Réponse copiée.'), duration: Duration(seconds: 2)),
+    );
+  }
+
   Future<void> _ask(String question) async {
     final trimmed = question.trim();
     if (trimmed.isEmpty || _loading) return;
@@ -227,10 +271,10 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     });
     _scrollToBottom();
 
-    void reply(String text, _AnswerKind kind) {
+    void reply(String text, _AnswerKind kind, {String? csv}) {
       setState(() {
         _loading = false;
-        _messages.add(_ChatEntry.assistant(text, kind));
+        _messages.add(_ChatEntry.assistant(text, kind, csv: csv));
       });
       _scrollToBottom();
     }
@@ -280,7 +324,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
           : await askLocalLlmWithFullDataAccess(trimmed,
               dbPath: repo.db.label, history: history);
       if (sqlAnswer != null) {
-        reply(sqlAnswer, _AnswerKind.sqlGrounded);
+        reply(sqlAnswer.text, _AnswerKind.sqlGrounded, csv: sqlAnswer.csv);
         return;
       }
     }
@@ -486,6 +530,41 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                       "Réponse IA à partir d'une requête sur tes données réelles",
                 ),
               _buildEntryText(context, entry),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 4,
+                children: [
+                  // Copy-the-whole-answer (2026-08-27 user request: "pouvoir
+                  // copier la totalité du texte... pour un copier/coller
+                  // dans un notepad") - on every assistant bubble, not just
+                  // SQL-grounded ones, since even a computed/freeform answer
+                  // is worth pasting elsewhere. A convenience shortcut for
+                  // "select everything in this bubble", not a substitute
+                  // for it - the bubble's own text is still selectable
+                  // directly (see this dialog's own SelectionArea).
+                  TextButton.icon(
+                    onPressed: () => _copyAnswer(context, entry.text),
+                    icon: const Icon(Icons.copy, size: 16),
+                    label: const Text('Copier'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
+                  if (entry.csv != null)
+                    TextButton.icon(
+                      onPressed: () => _exportCsv(context, entry.csv!),
+                      icon: const Icon(Icons.download, size: 16),
+                      label: const Text('Exporter en CSV'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ),

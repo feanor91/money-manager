@@ -260,6 +260,68 @@ class StepResult {
   });
 }
 
+/// A grounded answer paired with the exact rows that backed it, formatted
+/// as one downloadable CSV (2026-08-27 user request: "un système qui
+/// exporte les données de la réponse en CSV") - lets the user get the raw
+/// numbers into a spreadsheet instead of only the model's prose. One
+/// section per plan step (its `objectif` as a comment line, then a header
+/// row, then the data), separated by a blank line, since different steps
+/// of the same plan often have different columns (see
+/// [defaultSqlSystemPrompt]'s "Nourriture" example: one step totals by
+/// month, the next breaks that down by month *and* sub-category) and so
+/// can't be merged into a single flat table. Reuses the exact rows the
+/// answer-formatting call itself was grounded in - if a result was
+/// truncated for that call (see [_resultBudgetChars]), the CSV is
+/// truncated the same way and says so, rather than silently re-querying
+/// for a possibly-larger set the model never actually saw.
+class SqlGroundedAnswer {
+  final String text;
+  final String csv;
+
+  const SqlGroundedAnswer({required this.text, required this.csv});
+}
+
+/// Escapes one CSV field per RFC 4180: wrap in double quotes (doubling any
+/// quote already inside) whenever the value contains a comma, quote, or
+/// newline - the three characters that would otherwise be ambiguous with
+/// the format's own delimiters.
+String _csvField(Object? value) {
+  if (value == null) return '';
+  final text = value.toString();
+  if (text.contains(RegExp('[,"\n\r]'))) {
+    return '"${text.replaceAll('"', '""')}"';
+  }
+  return text;
+}
+
+/// Renders every step's rows as one CSV, each step in its own labeled
+/// section (see [SqlGroundedAnswer]'s own doc for why they aren't merged).
+String _resultsToCsv(List<StepResult> results) {
+  final buffer = StringBuffer();
+  for (var i = 0; i < results.length; i++) {
+    final result = results[i];
+    if (i > 0) buffer.write('\n');
+    buffer
+        .write('# ${result.objectif.isEmpty ? "Résultat" : result.objectif}\n');
+    final rows =
+        (jsonDecode(result.rowsJson) as List).cast<Map<String, dynamic>>();
+    if (rows.isEmpty) {
+      buffer.write('(aucune ligne)\n');
+      continue;
+    }
+    final columns = rows.first.keys.toList();
+    buffer.write('${columns.map(_csvField).join(',')}\n');
+    for (final row in rows) {
+      buffer.write('${columns.map((c) => _csvField(row[c])).join(',')}\n');
+    }
+    if (result.truncated) {
+      buffer.write(
+          '# (résultat tronqué - des lignes supplémentaires existent)\n');
+    }
+  }
+  return buffer.toString();
+}
+
 /// How much of the query results' JSON may reach the answer-formatting
 /// model in total before individual results get truncated (with an
 /// explicit notice, see [buildAnswerFormattingPrompt]) - a few hundred
@@ -314,27 +376,25 @@ String buildAnswerFormattingPrompt(
     buffer
       ..write(result.objectif.isEmpty
           ? 'Résultat exact de la requête SQL exécutée sur ses données '
-            '(JSON, ${result.rowCount} ligne(s)) :\n'
+              '(JSON, ${result.rowCount} ligne(s)) :\n'
           : 'Résultat de l\'étape « ${result.objectif} » (JSON, '
-            '${result.rowCount} ligne(s)) :\n')
+              '${result.rowCount} ligne(s)) :\n')
       ..write(result.rowsJson)
       ..write(result.truncated
           ? '\n(Ce résultat est partiel : des lignes supplémentaires ont '
-            'été retirées pour rester dans la limite de place - ne réponds '
-            'pas comme si ces lignes manquaient.)\n'
+              'été retirées pour rester dans la limite de place - ne réponds '
+              'pas comme si ces lignes manquaient.)\n'
           : '')
       ..write('\n');
   }
   if (truncated) {
-    buffer.write(
-        'ATTENTION : au moins un des résultats ci-dessus a été '
+    buffer.write('ATTENTION : au moins un des résultats ci-dessus a été '
         'tronqué par manque de place - tes données sont donc partielles, '
         'dis-le clairement dans ta réponse plutôt que de répondre comme '
         'si elles étaient complètes.\n\n');
   }
   if (isReport) {
-    buffer.write(
-        'Réponds à la question sous forme de rapport structuré en '
+    buffer.write('Réponds à la question sous forme de rapport structuré en '
         'français, en te basant EXCLUSIVEMENT sur ces données : '
         'organise la réponse en sections avec titres et puces, donne le '
         'détail par catégorie et par année/mois quand les données le '
@@ -345,8 +405,7 @@ String buildAnswerFormattingPrompt(
         'fournis ; si un résultat est vide, dis-le clairement plutôt que '
         'de deviner.');
   } else {
-    buffer.write(
-        'Réponds à la question en une ou deux phrases claires, en '
+    buffer.write('Réponds à la question en une ou deux phrases claires, en '
         'français, en te basant EXCLUSIVEMENT sur ces données. Formate '
         'les montants avec 2 décimales et le symbole €. N\'invente aucun '
         'nombre absent des résultats fournis. Si un résultat est vide, '
@@ -433,7 +492,8 @@ bool _hasAmbiguousTopLevelOrAnd(String sql) {
       i++;
       continue;
     }
-    if (depth == 0 && RegExp(r'^WHERE\b', caseSensitive: false).hasMatch(sql.substring(i))) {
+    if (depth == 0 &&
+        RegExp(r'^WHERE\b', caseSensitive: false).hasMatch(sql.substring(i))) {
       final clauseStartDepth = depth;
       var j = i + 5; // past "WHERE"
       var clauseDepth = 0;
@@ -462,7 +522,8 @@ bool _hasAmbiguousTopLevelOrAnd(String sql) {
           continue;
         }
         if (cj == ')') {
-          if (clauseDepth == 0) break; // closes an enclosing paren - clause ends here
+          if (clauseDepth == 0)
+            break; // closes an enclosing paren - clause ends here
           clauseDepth--;
           j++;
           continue;
@@ -508,9 +569,26 @@ String? _validateSqlText(String? sql) {
   final upper = trimmed.toUpperCase();
   if (!RegExp(r'^\s*(SELECT|WITH)\b').hasMatch(upper)) return null;
   const forbidden = [
-    'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE',
-    'TRUNCATE', 'ATTACH', 'DETACH', 'PRAGMA', 'VACUUM', 'REINDEX',
-    'ANALYZE', 'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'EXEC',
+    'INSERT',
+    'UPDATE',
+    'DELETE',
+    'DROP',
+    'ALTER',
+    'CREATE',
+    'REPLACE',
+    'TRUNCATE',
+    'ATTACH',
+    'DETACH',
+    'PRAGMA',
+    'VACUUM',
+    'REINDEX',
+    'ANALYZE',
+    'BEGIN',
+    'COMMIT',
+    'ROLLBACK',
+    'SAVEPOINT',
+    'RELEASE',
+    'EXEC',
   ];
   for (final word in forbidden) {
     if (RegExp('\\b$word\\b').hasMatch(upper)) return null;
@@ -645,7 +723,7 @@ String _formatHistory(List<ChatTurn> history) {
 /// an empty model response - same never-throws contract as every other
 /// local-AI entry point here, so the caller (nl_query_dialog.dart) always
 /// has a safe fallback.
-Future<String?> answerViaFullSqlAccess({
+Future<SqlGroundedAnswer?> answerViaFullSqlAccess({
   required String question,
   required MmexRepository readOnlyRepo,
   required String systemPrompt,
@@ -661,8 +739,8 @@ Future<String?> answerViaFullSqlAccess({
     final results = <StepResult>[];
     var anyTruncated = false;
     for (final step in plan) {
-      final rawRows = readOnlyRepo.db
-          .query('SELECT * FROM (${step.sql}) LIMIT 5000');
+      final rawRows =
+          readOnlyRepo.db.query('SELECT * FROM (${step.sql}) LIMIT 5000');
       final fit = _fitRowsToBudget(rawRows, _resultBudgetChars);
       final truncated = fit.dropped > 0;
       if (truncated) anyTruncated = true;
@@ -684,7 +762,8 @@ Future<String?> answerViaFullSqlAccess({
       formattingPrompt,
     );
     final trimmed = answer.trim();
-    return trimmed.isEmpty ? null : trimmed;
+    if (trimmed.isEmpty) return null;
+    return SqlGroundedAnswer(text: trimmed, csv: _resultsToCsv(results));
   } catch (_) {
     return null;
   }

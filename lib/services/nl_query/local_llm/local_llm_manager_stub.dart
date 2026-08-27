@@ -4,7 +4,8 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
-import 'sql_query_engine.dart' show ChatTurn, defaultSqlSystemPrompt;
+import 'sql_query_engine.dart'
+    show ChatTurn, SqlGroundedAnswer, defaultSqlSystemPrompt;
 
 Future<bool> isLocalLlmEnabled() async => false;
 Future<void> setLocalLlmEnabled(bool value) async {}
@@ -37,23 +38,25 @@ Future<void> shutdownLocalLlmEngine() async {}
 
 void registerLocalLlmSignalShutdownHook() {}
 
-Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLlm(
+Future<({QueryIntent? intent, bool periodWasExplicit})>
+    extractIntentWithLocalLlm(
   String question, {
   required List<Category> categories,
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
 }) async =>
-    (intent: null, periodWasExplicit: false);
+        (intent: null, periodWasExplicit: false);
 
 Future<String?> askLocalLlmFreeform(String question) async => null;
 
-Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async => null;
+Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async =>
+    null;
 
 Future<String> localLlmSqlSystemPrompt() async => defaultSqlSystemPrompt;
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {}
 
-Future<String?> askLocalLlmWithFullDataAccess(
+Future<SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,

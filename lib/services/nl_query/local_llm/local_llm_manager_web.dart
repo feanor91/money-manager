@@ -66,8 +66,8 @@ Future<void> setSelectedLocalLlmModelId(String id) async {}
 Future<bool> isLocalLlmModelDownloaded(LocalLlmModel model) async => false;
 
 Stream<double?> downloadLocalLlmModel(LocalLlmModel model) {
-  return Stream.error(
-      UnsupportedError('Sur le web, le modèle est chargé par le serveur que tu lances toi-même.'));
+  return Stream.error(UnsupportedError(
+      'Sur le web, le modèle est chargé par le serveur que tu lances toi-même.'));
 }
 
 Future<void> deleteLocalLlmModel(LocalLlmModel model) async {}
@@ -116,9 +116,8 @@ Future<bool> isLocalLlmServerReachable() async {
   final port = await localLlmServerPort();
   final client = LlamaServerClient(port, host: host);
   try {
-    final response = await client
-        .healthCheck()
-        .timeout(const Duration(seconds: 3));
+    final response =
+        await client.healthCheck().timeout(const Duration(seconds: 3));
     return response;
   } catch (_) {
     return false;
@@ -127,14 +126,16 @@ Future<bool> isLocalLlmServerReachable() async {
   }
 }
 
-Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLlm(
+Future<({QueryIntent? intent, bool periodWasExplicit})>
+    extractIntentWithLocalLlm(
   String question, {
   required List<Category> categories,
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
 }) async {
-  if (!await isLocalLlmEnabled()) return (intent: null, periodWasExplicit: false);
+  if (!await isLocalLlmEnabled())
+    return (intent: null, periodWasExplicit: false);
   final client = await _ensureClient();
   if (client == null) return (intent: null, periodWasExplicit: false);
   try {
@@ -165,11 +166,13 @@ Future<String?> askLocalLlmFreeform(String question) async {
   }
 }
 
-Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async => null;
+Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async =>
+    null;
 
 Future<String> localLlmSqlSystemPrompt() async {
   final prefs = await AppPreferences.getInstance();
-  return prefs.getString(_prefsKeySqlSystemPrompt) ?? sql_engine.defaultSqlSystemPrompt;
+  return prefs.getString(_prefsKeySqlSystemPrompt) ??
+      sql_engine.defaultSqlSystemPrompt;
 }
 
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {
@@ -192,7 +195,7 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) async {
 /// of the OS-enforced read-only connection - rather than a read-only
 /// connection, which is simply not expressible against an in-memory
 /// database.
-Future<String?> askLocalLlmWithFullDataAccess(
+Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,

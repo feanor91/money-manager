@@ -4,9 +4,9 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'model_catalog.dart';
-import 'sql_query_engine.dart' show ChatTurn;
+import 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
 
-export 'sql_query_engine.dart' show ChatTurn;
+export 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
 
 import 'local_llm_manager_stub.dart'
     if (dart.library.js_interop) 'local_llm_manager_web.dart'
@@ -24,11 +24,15 @@ Future<bool> isLocalLlmEnabled() => impl.isLocalLlmEnabled();
 Future<void> setLocalLlmEnabled(bool value) => impl.setLocalLlmEnabled(value);
 
 Future<String?> selectedLocalLlmModelId() => impl.selectedLocalLlmModelId();
-Future<void> setSelectedLocalLlmModelId(String id) => impl.setSelectedLocalLlmModelId(id);
+Future<void> setSelectedLocalLlmModelId(String id) =>
+    impl.setSelectedLocalLlmModelId(id);
 
-Future<bool> isLocalLlmModelDownloaded(LocalLlmModel model) => impl.isLocalLlmModelDownloaded(model);
-Stream<double?> downloadLocalLlmModel(LocalLlmModel model) => impl.downloadLocalLlmModel(model);
-Future<void> deleteLocalLlmModel(LocalLlmModel model) => impl.deleteLocalLlmModel(model);
+Future<bool> isLocalLlmModelDownloaded(LocalLlmModel model) =>
+    impl.isLocalLlmModelDownloaded(model);
+Stream<double?> downloadLocalLlmModel(LocalLlmModel model) =>
+    impl.downloadLocalLlmModel(model);
+Future<void> deleteLocalLlmModel(LocalLlmModel model) =>
+    impl.deleteLocalLlmModel(model);
 
 /// Where the user must manually place a compatible llama.cpp Windows
 /// runtime (llama.dll + its companion ggml*.dll files) - see
@@ -43,13 +47,17 @@ Future<bool> isLocalLlmRuntimeAvailable() => impl.isLocalLlmRuntimeAvailable();
 /// than silently continuing to run with the old value until the app
 /// restarts.
 Future<String> localLlmServerHost() => impl.localLlmServerHost();
-Future<void> setLocalLlmServerHost(String value) => impl.setLocalLlmServerHost(value);
+Future<void> setLocalLlmServerHost(String value) =>
+    impl.setLocalLlmServerHost(value);
 Future<int> localLlmServerPort() => impl.localLlmServerPort();
-Future<void> setLocalLlmServerPort(int value) => impl.setLocalLlmServerPort(value);
+Future<void> setLocalLlmServerPort(int value) =>
+    impl.setLocalLlmServerPort(value);
 Future<int> localLlmContextSize() => impl.localLlmContextSize();
-Future<void> setLocalLlmContextSize(int value) => impl.setLocalLlmContextSize(value);
+Future<void> setLocalLlmContextSize(int value) =>
+    impl.setLocalLlmContextSize(value);
 Future<int> localLlmGpuLayers() => impl.localLlmGpuLayers();
-Future<void> setLocalLlmGpuLayers(int value) => impl.setLocalLlmGpuLayers(value);
+Future<void> setLocalLlmGpuLayers(int value) =>
+    impl.setLocalLlmGpuLayers(value);
 
 /// One-shot, never-polling health check against the configured server
 /// address - backs Settings' "Tester la connexion" button. On desktop
@@ -64,33 +72,36 @@ Future<void> shutdownLocalLlmEngine() => impl.shutdownLocalLlmEngine();
 
 /// Call once at app startup, alongside [shutdownLocalLlmEngine] - see
 /// local_llm_manager_io.dart's doc comment on why both exist.
-void registerLocalLlmSignalShutdownHook() => impl.registerLocalLlmSignalShutdownHook();
+void registerLocalLlmSignalShutdownHook() =>
+    impl.registerLocalLlmSignalShutdownHook();
 
 /// Attempts to answer [question] using the local model - null if local AI
 /// isn't supported/enabled/ready, or on any failure. Never throws: the
 /// caller (nl_query_dialog.dart) always falls back to the rule-based
 /// parser either way, so a broken or absent local AI setup degrades
 /// gracefully rather than breaking the feature.
-Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLlm(
+Future<({QueryIntent? intent, bool periodWasExplicit})>
+    extractIntentWithLocalLlm(
   String question, {
   required List<Category> categories,
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
 }) =>
-    impl.extractIntentWithLocalLlm(
-      question,
-      categories: categories,
-      accounts: accounts,
-      payees: payees,
-      now: now,
-    );
+        impl.extractIntentWithLocalLlm(
+          question,
+          categories: categories,
+          accounts: accounts,
+          payees: payees,
+          now: now,
+        );
 
 /// Free-form fallback once neither the local AI's intent extractor nor the
 /// rule-based parser recognized [question] as a financial one - null under
 /// the same conditions as [extractIntentWithLocalLlm] (unsupported,
 /// disabled, not ready, or any failure). Never throws.
-Future<String?> askLocalLlmFreeform(String question) => impl.askLocalLlmFreeform(question);
+Future<String?> askLocalLlmFreeform(String question) =>
+    impl.askLocalLlmFreeform(question);
 
 /// Opens a throwaway, OS/SQLite-enforced read-only connection to the .mmb
 /// file at [dbPath] for running a [QueryKind.adHoc] question - null on any
@@ -106,7 +117,8 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) =>
 /// as the rest of this file's settings. Defaults to
 /// sql_query_engine.dart's `defaultSqlSystemPrompt`.
 Future<String> localLlmSqlSystemPrompt() => impl.localLlmSqlSystemPrompt();
-Future<void> setLocalLlmSqlSystemPrompt(String value) => impl.setLocalLlmSqlSystemPrompt(value);
+Future<void> setLocalLlmSqlSystemPrompt(String value) =>
+    impl.setLocalLlmSqlSystemPrompt(value);
 
 /// Full-database-access alternative to [extractIntentWithLocalLlm]'s closed
 /// vocabulary - the model writes real SQL against the schema described in
@@ -124,15 +136,15 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) => impl.setLocalLlmSqlSyst
 /// [history] (2026-08-23) - the current chat's prior turns, so a follow-up
 /// question ("et l'an dernier ?") resolves against what was just asked. See
 /// sql_query_engine.dart's ChatTurn/`_formatHistory`.
-Future<String?> askLocalLlmWithFullDataAccess(
+Future<SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
   List<ChatTurn> history = const [],
 }) {
   if (dbPath == null && repo == null) {
-    throw ArgumentError.value(
-        null, 'dbPath', 'Passe dbPath (natif) ou repo (web), pas les deux à null.');
+    throw ArgumentError.value(null, 'dbPath',
+        'Passe dbPath (natif) ou repo (web), pas les deux à null.');
   }
   return impl.askLocalLlmWithFullDataAccess(
     question,

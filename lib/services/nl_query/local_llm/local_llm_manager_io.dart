@@ -128,7 +128,8 @@ Future<bool> isLocalLlmServerReachable() async {
 Future<String> localLlmSqlSystemPrompt() async {
   if (!Platform.isWindows) return sql_engine.defaultSqlSystemPrompt;
   final prefs = await AppPreferences.getInstance();
-  return prefs.getString(_prefsKeySqlSystemPrompt) ?? sql_engine.defaultSqlSystemPrompt;
+  return prefs.getString(_prefsKeySqlSystemPrompt) ??
+      sql_engine.defaultSqlSystemPrompt;
 }
 
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {
@@ -201,12 +202,14 @@ Future<void> deleteLocalLlmModel(LocalLlmModel model) async {
 /// simply has no effect on a runtime build with no GPU backend compiled in.
 Future<Directory> _runtimeDirectory() async {
   final modelsDir = await downloader.localLlmModelsDirectory();
-  final dir = Directory('${modelsDir.parent.path}${Platform.pathSeparator}local_llm_runtime');
+  final dir = Directory(
+      '${modelsDir.parent.path}${Platform.pathSeparator}local_llm_runtime');
   if (!await dir.exists()) await dir.create(recursive: true);
   return dir;
 }
 
-Future<String> localLlmRuntimeFolderPath() async => (await _runtimeDirectory()).path;
+Future<String> localLlmRuntimeFolderPath() async =>
+    (await _runtimeDirectory()).path;
 
 Future<String> _serverExePath() async =>
     '${(await _runtimeDirectory()).path}${Platform.pathSeparator}llama-server.exe';
@@ -288,17 +291,24 @@ Future<LlamaServerClient?> _ensureEngine() async {
   final gpuLayers = await localLlmGpuLayers();
   final config = (host, port, contextSize, gpuLayers);
 
-  if (_serverClient != null && _engineModelPath == modelPath && _engineConfig == config) {
+  if (_serverClient != null &&
+      _engineModelPath == modelPath &&
+      _engineConfig == config) {
     return _serverClient;
   }
   await _disposeEngine();
   try {
     final process = await Process.start(await _serverExePath(), [
-      '-m', modelPath,
-      '--port', '$port',
-      '--host', host,
-      '-c', '$contextSize',
-      '-ngl', '$gpuLayers',
+      '-m',
+      modelPath,
+      '--port',
+      '$port',
+      '--host',
+      host,
+      '-c',
+      '$contextSize',
+      '-ngl',
+      '$gpuLayers',
     ]);
     // Drain stdout/stderr so the process's own pipe buffers can't fill up
     // and stall it - this app never needs to show that output anywhere.
@@ -308,7 +318,8 @@ Future<LlamaServerClient?> _ensureEngine() async {
     unawaited(process.exitCode.then((_) => processExited = true));
 
     final client = LlamaServerClient(port, host: host);
-    await client.waitUntilHealthy(timeout: _startupTimeout, hasExited: () => processExited);
+    await client.waitUntilHealthy(
+        timeout: _startupTimeout, hasExited: () => processExited);
 
     _serverProcess = process;
     _serverClient = client;
@@ -321,7 +332,8 @@ Future<LlamaServerClient?> _ensureEngine() async {
   }
 }
 
-Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLlm(
+Future<({QueryIntent? intent, bool periodWasExplicit})>
+    extractIntentWithLocalLlm(
   String question, {
   required List<Category> categories,
   required List<Account> accounts,
@@ -329,7 +341,8 @@ Future<({QueryIntent? intent, bool periodWasExplicit})> extractIntentWithLocalLl
   DateTime? now,
 }) async {
   if (!Platform.isWindows) return (intent: null, periodWasExplicit: false);
-  if (!await isLocalLlmEnabled()) return (intent: null, periodWasExplicit: false);
+  if (!await isLocalLlmEnabled())
+    return (intent: null, periodWasExplicit: false);
   final engine = await _ensureEngine();
   if (engine == null) return (intent: null, periodWasExplicit: false);
   try {
@@ -386,20 +399,22 @@ class _ReadOnlyAdHocDatabase implements MmexDatabase {
   bool get isDirectlyPersisted => false;
 
   @override
-  List<Map<String, Object?>> query(String sql, [List<Object?> params = const []]) =>
+  List<Map<String, Object?>> query(String sql,
+          [List<Object?> params = const []]) =>
       _db.select(sql, params).map((row) => row).toList();
 
   @override
   int execute(String sql, [List<Object?> params = const []]) =>
-      throw UnsupportedError('Connexion IA locale en lecture seule - écriture refusée.');
+      throw UnsupportedError(
+          'Connexion IA locale en lecture seule - écriture refusée.');
 
   @override
-  void transaction(void Function() action) =>
-      throw UnsupportedError('Connexion IA locale en lecture seule - écriture refusée.');
+  void transaction(void Function() action) => throw UnsupportedError(
+      'Connexion IA locale en lecture seule - écriture refusée.');
 
   @override
-  List<int> exportBytes() =>
-      throw UnsupportedError('Connexion IA locale en lecture seule - export non applicable.');
+  List<int> exportBytes() => throw UnsupportedError(
+      'Connexion IA locale en lecture seule - export non applicable.');
 
   @override
   void dispose() => _db.dispose();
@@ -449,7 +464,7 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
 /// persisted), and runs the SQL-generate-then-answer flow. Null (never
 /// throws) under the same conditions as every other local-AI entry point
 /// here - unsupported, disabled, not ready, or any failure at any step.
-Future<String?> askLocalLlmWithFullDataAccess(
+Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
