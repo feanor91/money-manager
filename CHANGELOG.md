@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.81] - 2026-08-27
+
+- fix(ci): add missing curly braces to fix flutter analyze failure
+- feat(ai): export SQL-grounded answers to CSV, copy any answer to clipboard
+
 ## [1.0.80] - 2026-08-27
 
 - fix(ai): add a second worked example to fix inconsistent sub-category rollup
