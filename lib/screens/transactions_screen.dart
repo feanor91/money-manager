@@ -1,5 +1,8 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show kIsWeb, defaultTargetPlatform, TargetPlatform, Uint8List;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -48,7 +51,15 @@ bool get _isAndroidPlatform =>
 /// and always renders fixed-first regardless of customization. Declaration
 /// order here is also the default display order (see
 /// DatabaseProvider.ledgerColumnOrder's doc comment).
-enum LedgerColumnId { date, tiers, statut, categorie, montant, solde, remarques }
+enum LedgerColumnId {
+  date,
+  tiers,
+  statut,
+  categorie,
+  montant,
+  solde,
+  remarques
+}
 
 String _ledgerColumnLabel(LedgerColumnId id) {
   switch (id) {
@@ -96,16 +107,19 @@ List<LedgerColumnId> _visibleLedgerColumns(DatabaseProvider dbProvider) {
 /// Same tiers/catégorie label rules [_LedgerTable]/[_LedgerCards] already
 /// render inline - factored out here purely for [_compareLedgerRows] to
 /// reuse, without touching either widget's own rendering code.
-String _ledgerTiersLabel(
-    MoneyTransaction tx, Map<int, Account> accountsById, Map<int, Payee> payeesById) {
+String _ledgerTiersLabel(MoneyTransaction tx, Map<int, Account> accountsById,
+    Map<int, Payee> payeesById) {
   return tx.transCode == TransCode.transfer
       ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
       : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
 }
 
-String _ledgerCategorieLabel(MoneyTransaction tx, Map<int, Category> categoriesById) {
+String _ledgerCategorieLabel(
+    MoneyTransaction tx, Map<int, Category> categoriesById) {
   final label = categoryFullPath(tx.categoryId, categoriesById);
-  return tx.transCode == TransCode.transfer && label.isEmpty ? 'Virement' : label;
+  return tx.transCode == TransCode.transfer && label.isEmpty
+      ? 'Virement'
+      : label;
 }
 
 /// Sort key for [LedgerColumnId.statut]: paused ranks after reconciled
@@ -133,7 +147,8 @@ int _compareLedgerRows(
     case LedgerColumnId.tiers:
       return _ledgerTiersLabel(txA, accountsById, payeesById)
           .toLowerCase()
-          .compareTo(_ledgerTiersLabel(txB, accountsById, payeesById).toLowerCase());
+          .compareTo(
+              _ledgerTiersLabel(txB, accountsById, payeesById).toLowerCase());
     case LedgerColumnId.statut:
       return _ledgerStatutRank(txA).compareTo(_ledgerStatutRank(txB));
     case LedgerColumnId.categorie:
@@ -141,11 +156,15 @@ int _compareLedgerRows(
           .toLowerCase()
           .compareTo(_ledgerCategorieLabel(txB, categoriesById).toLowerCase());
     case LedgerColumnId.montant:
-      return txA.signedAmountFor(accountId).compareTo(txB.signedAmountFor(accountId));
+      return txA
+          .signedAmountFor(accountId)
+          .compareTo(txB.signedAmountFor(accountId));
     case LedgerColumnId.solde:
       return a.balanceAfter.compareTo(b.balanceAfter);
     case LedgerColumnId.remarques:
-      return (txA.notes ?? '').toLowerCase().compareTo((txB.notes ?? '').toLowerCase());
+      return (txA.notes ?? '')
+          .toLowerCase()
+          .compareTo((txB.notes ?? '').toLowerCase());
   }
 }
 
@@ -199,7 +218,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   void _shiftMonth(int delta) {
     setState(() {
-      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + delta);
+      _selectedMonth =
+          DateTime(_selectedMonth.year, _selectedMonth.month + delta);
     });
   }
 
@@ -209,7 +229,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   static final _monthNames = [
-    for (var m = 1; m <= 12; m++) DateFormat('MMMM', 'fr_FR').format(DateTime(2000, m))
+    for (var m = 1; m <= 12; m++)
+      DateFormat('MMMM', 'fr_FR').format(DateTime(2000, m))
   ];
 
   @override
@@ -240,7 +261,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
     final recurringTxIds = repo.recurringTransactionIds();
     final recurringOccurrences = repo.recurringTransactionOccurrences();
-    final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+    final previousMonth =
+        DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
     final allRows = accountId == null
         ? const <TransactionWithBalance>[]
@@ -252,7 +274,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // account, always widened to also include today's year and whatever
     // year is currently selected (arrow navigation can land outside the
     // account's own data range, e.g. one month past its last transaction).
-    final yearRange = accountId == null ? null : repo.transactionYearRange(accountId);
+    final yearRange =
+        accountId == null ? null : repo.transactionYearRange(accountId);
     final candidateYears = [
       DateTime.now().year,
       _selectedMonth.year,
@@ -276,8 +299,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 ? '${accountsById[tx.accountId]?.name ?? ''} ${accountsById[tx.toAccountId]?.name ?? ''}'
                 : (payees[tx.payeeId]?.name ?? '');
             final txCategoryLabel = categoryFullPath(tx.categoryId, categories);
-            final categorie =
-                isTransfer && txCategoryLabel.isEmpty ? 'Virement' : txCategoryLabel;
+            final categorie = isTransfer && txCategoryLabel.isEmpty
+                ? 'Virement'
+                : txCategoryLabel;
             final haystack = foldDiacritics([
               tiers,
               categorie,
@@ -297,7 +321,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (_sortColumn != null && accountId != null) {
       final column = _sortColumn!;
       rows = [...rows]..sort((a, b) {
-          final cmp = _compareLedgerRows(a, b, column, accountId, accountsById, categories, payees);
+          final cmp = _compareLedgerRows(
+              a, b, column, accountId, accountsById, categories, payees);
           return _sortAscending ? cmp : -cmp;
         });
     }
@@ -314,6 +339,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               for (final a in visibleAccounts)
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.download_outlined),
+            tooltip: 'Exporter en CSV',
+            onPressed: rows.isEmpty
+                ? null
+                : () => _exportLedgerCsv(
+                      context,
+                      rows: rows,
+                      accountId: accountId,
+                      accountsById: accountsById,
+                      categories: categories,
+                      payees: payees,
+                    ),
           ),
           IconButton(
             icon: const Icon(Icons.view_column_outlined),
@@ -347,11 +386,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           value: _selectedMonth.month,
                           items: [
                             for (var m = 1; m <= 12; m++)
-                              DropdownMenuItem(value: m, child: Text(_monthNames[m - 1])),
+                              DropdownMenuItem(
+                                  value: m, child: Text(_monthNames[m - 1])),
                           ],
                           onChanged: (m) {
                             if (m == null) return;
-                            setState(() => _selectedMonth = DateTime(_selectedMonth.year, m));
+                            setState(() => _selectedMonth =
+                                DateTime(_selectedMonth.year, m));
                           },
                         ),
                       ),
@@ -359,11 +400,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       DropdownButton<int>(
                         value: _selectedMonth.year,
                         items: [
-                          for (final y in yearOptions) DropdownMenuItem(value: y, child: Text('$y')),
+                          for (final y in yearOptions)
+                            DropdownMenuItem(value: y, child: Text('$y')),
                         ],
                         onChanged: (y) {
                           if (y == null) return;
-                          setState(() => _selectedMonth = DateTime(y, _selectedMonth.month));
+                          setState(() => _selectedMonth =
+                              DateTime(y, _selectedMonth.month));
                         },
                       ),
                       IconButton(
@@ -388,7 +431,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   controller: _searchController,
                   decoration: InputDecoration(
                     prefixIcon: const Icon(Icons.search),
-                    hintText: 'Rechercher (tiers, catégorie, remarque, montant...)',
+                    hintText:
+                        'Rechercher (tiers, catégorie, remarque, montant...)',
                     isDense: true,
                     border: const OutlineInputBorder(),
                     suffixIcon: _search.isEmpty
@@ -416,8 +460,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       body: rows.isEmpty
           ? Center(
               child: Text(query.isEmpty
-                  ? (_showFullLedger ? 'Aucune transaction' : 'Aucune transaction sur cette période')
-                  : (_showFullLedger ? 'Aucun résultat' : 'Aucun résultat sur cette période')),
+                  ? (_showFullLedger
+                      ? 'Aucune transaction'
+                      : 'Aucune transaction sur cette période')
+                  : (_showFullLedger
+                      ? 'Aucun résultat'
+                      : 'Aucun résultat sur cette période')),
             )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
@@ -434,7 +482,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   currency: currency,
                   recurringTxIds: recurringTxIds,
                   recurringOccurrences: recurringOccurrences,
-                  onTapRow: (tx) => openTransactionEditor(context, existing: tx),
+                  onTapRow: (tx) =>
+                      openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
                     dbProvider.touch();
@@ -443,8 +492,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     repo.updateTransaction(tx.copyWith(date: date));
                     dbProvider.touch();
                   },
-                  onEditAmount: (tx, amount) =>
-                      _saveQuickAmountEdit(context, repo, dbProvider, tx, amount),
+                  onEditAmount: (tx, amount) => _saveQuickAmountEdit(
+                      context, repo, dbProvider, tx, amount),
                 );
               }
               return ResponsiveBody(
@@ -462,7 +511,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   sortColumn: _sortColumn,
                   sortAscending: _sortAscending,
                   onSort: _toggleSort,
-                  onTapRow: (tx) => openTransactionEditor(context, existing: tx),
+                  onTapRow: (tx) =>
+                      openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
                     repo.setReconciled(tx.id, value);
                     dbProvider.touch();
@@ -471,8 +521,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     repo.updateTransaction(tx.copyWith(date: date));
                     dbProvider.touch();
                   },
-                  onEditAmount: (tx, amount) =>
-                      _saveQuickAmountEdit(context, repo, dbProvider, tx, amount),
+                  onEditAmount: (tx, amount) => _saveQuickAmountEdit(
+                      context, repo, dbProvider, tx, amount),
                 ),
               );
             }),
@@ -545,13 +595,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
-  Future<void> _openRecurringEditor(BuildContext context, {int? defaultAccountId}) async {
+  Future<void> _openRecurringEditor(BuildContext context,
+      {int? defaultAccountId}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => RecurringEditorSheet(repo: repo, defaultAccountId: defaultAccountId),
+      builder: (_) =>
+          RecurringEditorSheet(repo: repo, defaultAccountId: defaultAccountId),
     );
     dbProvider.touch();
   }
@@ -560,13 +612,89 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// apply immediately (persisted to the companion settings file via
   /// DatabaseProvider.setLedgerColumns) rather than needing an explicit
   /// "save", same as the dashboard's account-order drag-and-drop.
-  Future<void> _openColumnSettings(BuildContext context, DatabaseProvider dbProvider) {
+  Future<void> _openColumnSettings(
+      BuildContext context, DatabaseProvider dbProvider) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (_) => _LedgerColumnSettingsSheet(dbProvider: dbProvider),
     );
   }
+
+  /// Exports exactly what's currently on screen - the same filtered/sorted
+  /// [rows] the ledger itself renders, not the account's whole history -
+  /// via the same cross-platform `FilePicker.saveFile` already used for the
+  /// database export (settings_screen.dart) and the AI chat's CSV export
+  /// (nl_query_dialog.dart). 2026-08-27 user request ("Ajoute un export csv
+  /// sur la page des transactions"), matching the long-standing ROADMAP
+  /// suggestion. Amounts use a plain dot-decimal string, not the account's
+  /// currency-formatted display text (e.g. "12,34 €") - a spreadsheet needs
+  /// a real number to sum, not a locale-formatted label.
+  Future<void> _exportLedgerCsv(
+    BuildContext context, {
+    required List<TransactionWithBalance> rows,
+    required int? accountId,
+    required Map<int, Account> accountsById,
+    required Map<int, Category> categories,
+    required Map<int, Payee> payees,
+  }) async {
+    final buffer = StringBuffer(
+        'Date,Compte,Tiers,Catégorie,Débit,Crédit,Solde après,Statut,Notes\n');
+    for (final row in rows) {
+      final tx = row.transaction;
+      final isTransfer = tx.transCode == TransCode.transfer;
+      final tiers = isTransfer
+          ? '${accountsById[tx.accountId]?.name ?? ''} -> ${accountsById[tx.toAccountId]?.name ?? ''}'
+          : (payees[tx.payeeId]?.name ?? '');
+      final txCategoryLabel = categoryFullPath(tx.categoryId, categories);
+      final categorie =
+          isTransfer && txCategoryLabel.isEmpty ? 'Virement' : txCategoryLabel;
+      final isCredit = tx.transCode == TransCode.deposit ||
+          (isTransfer && tx.accountId != accountId);
+      final statut = tx.isVoid
+          ? 'Annulée'
+          : tx.isReconciled
+              ? 'Pointée'
+              : '';
+      final fields = [
+        DateFormat('dd/MM/yyyy').format(tx.date),
+        accountsById[tx.accountId]?.name ?? '',
+        tiers,
+        categorie,
+        isCredit ? '' : tx.amount.toStringAsFixed(2),
+        isCredit ? tx.amount.toStringAsFixed(2) : '',
+        row.balanceAfter.toStringAsFixed(2),
+        statut,
+        tx.notes ?? '',
+      ];
+      buffer.write('${fields.map(_csvField).join(',')}\n');
+    }
+    final timestamp = DateFormat('yyyy-MM-dd_HHmmss').format(DateTime.now());
+    try {
+      await FilePicker.saveFile(
+        fileName: 'transactions_$timestamp.csv',
+        bytes: Uint8List.fromList(utf8.encode(buffer.toString())),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Échec de l'export CSV : $e")),
+      );
+    }
+  }
+}
+
+/// Escapes one CSV field per RFC 4180 - see sql_query_engine.dart's
+/// identical helper for the AI chat's own CSV export; duplicated rather
+/// than shared since both are small, private, and in otherwise-unrelated
+/// files.
+String _csvField(Object? value) {
+  if (value == null) return '';
+  final text = value.toString();
+  if (text.contains(RegExp('[,"\n\r]'))) {
+    return '"${text.replaceAll('"', '""')}"';
+  }
+  return text;
 }
 
 /// MMEX-style ledger grid: Date / Tiers / Statut / Categorie / Debit /
@@ -708,16 +836,23 @@ class _LedgerTable extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: mainAxisAlignment,
         children: [
-          if (align == TextAlign.right && icon != null) ...[icon, const SizedBox(width: 2)],
+          if (align == TextAlign.right && icon != null) ...[
+            icon,
+            const SizedBox(width: 2)
+          ],
           Flexible(
             child: Text(
               label,
               textAlign: align,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: color),
+              style: TextStyle(
+                  fontWeight: FontWeight.w700, fontSize: 12, color: color),
             ),
           ),
-          if (align != TextAlign.right && icon != null) ...[const SizedBox(width: 2), icon],
+          if (align != TextAlign.right && icon != null) ...[
+            const SizedBox(width: 2),
+            icon
+          ],
         ],
       ),
     );
@@ -732,17 +867,25 @@ class _LedgerTable extends StatelessWidget {
       case LedgerColumnId.tiers:
         return [_headerCell(context, _colTiers, 'Tiers', sortKey: col)];
       case LedgerColumnId.statut:
-        return [_headerCell(context, _colStatut, 'Statut', align: TextAlign.center, sortKey: col)];
+        return [
+          _headerCell(context, _colStatut, 'Statut',
+              align: TextAlign.center, sortKey: col)
+        ];
       case LedgerColumnId.categorie:
         return [_headerCell(context, _colCategorie, 'Catégorie', sortKey: col)];
       case LedgerColumnId.montant:
         return [
-          _headerCell(context, _colMontant, 'Débit', align: TextAlign.right, sortKey: col),
+          _headerCell(context, _colMontant, 'Débit',
+              align: TextAlign.right, sortKey: col),
           const SizedBox(width: _colGap),
-          _headerCell(context, _colMontant, 'Crédit', align: TextAlign.right, sortKey: col),
+          _headerCell(context, _colMontant, 'Crédit',
+              align: TextAlign.right, sortKey: col),
         ];
       case LedgerColumnId.solde:
-        return [_headerCell(context, _colSolde, 'Solde', align: TextAlign.right, sortKey: col)];
+        return [
+          _headerCell(context, _colSolde, 'Solde',
+              align: TextAlign.right, sortKey: col)
+        ];
       case LedgerColumnId.remarques:
         return [_headerCell(context, _colRemarques, 'Remarques', sortKey: col)];
     }
@@ -798,7 +941,9 @@ class _LedgerTable extends StatelessWidget {
               .pop(double.tryParse(v.replaceAll(',', '.'))),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Annuler')),
           FilledButton(
             onPressed: () => Navigator.of(context)
                 .pop(double.tryParse(controller.text.replaceAll(',', '.'))),
@@ -879,7 +1024,8 @@ class _LedgerTable extends StatelessWidget {
                   if (paused) ...[
                     Tooltip(
                       message: 'En pause - exclue du solde et des rapports',
-                      child: Icon(Icons.pause_circle_outline, size: 13, color: scheme.error),
+                      child: Icon(Icons.pause_circle_outline,
+                          size: 13, color: scheme.error),
                     ),
                     const SizedBox(width: 3),
                   ],
@@ -892,11 +1038,13 @@ class _LedgerTable extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.autorenew, size: 13, color: scheme.primary),
+                          Icon(Icons.autorenew,
+                              size: 13, color: scheme.primary),
                           if (recurringOccurrences[tx.id] != null)
                             Text(
                               ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
-                              style: TextStyle(fontSize: 10, color: scheme.primary),
+                              style: TextStyle(
+                                  fontSize: 10, color: scheme.primary),
                             ),
                         ],
                       ),
@@ -910,10 +1058,13 @@ class _LedgerTable extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 13,
-                        fontStyle: isFuture ? FontStyle.italic : FontStyle.normal,
+                        fontStyle:
+                            isFuture ? FontStyle.italic : FontStyle.normal,
                         fontWeight: isFuture
                             ? FontWeight.normal
-                            : (reconciled ? FontWeight.normal : FontWeight.w700),
+                            : (reconciled
+                                ? FontWeight.normal
+                                : FontWeight.w700),
                       ),
                     ),
                   ),
@@ -922,7 +1073,10 @@ class _LedgerTable extends StatelessWidget {
             ),
           ];
         case LedgerColumnId.statut:
-          return [cell(_colStatut, paused ? 'V' : (reconciled ? 'R' : ''), align: TextAlign.center)];
+          return [
+            cell(_colStatut, paused ? 'V' : (reconciled ? 'R' : ''),
+                align: TextAlign.center)
+          ];
         case LedgerColumnId.categorie:
           return [cell(_colCategorie, categorie)];
         case LedgerColumnId.montant:
@@ -973,40 +1127,42 @@ class _LedgerTable extends StatelessWidget {
     return Opacity(
       opacity: paused ? 0.55 : 1,
       child: Material(
-      color: index.isEven ? scheme.surfaceContainerLowest : scheme.surfaceContainerHigh,
-      child: InkWell(
-        onTap: () => onTapRow(tx),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              SizedBox(
-                width: _colCheck,
-                child: IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  iconSize: 20,
-                  tooltip: reconciled
-                      ? 'Pointée - toucher pour dépointer'
-                      : 'Non pointée - toucher pour pointer',
-                  icon: Icon(
-                    reconciled
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                    color: reconciled ? AppTheme.positive : Colors.grey[400],
+        color: index.isEven
+            ? scheme.surfaceContainerLowest
+            : scheme.surfaceContainerHigh,
+        child: InkWell(
+          onTap: () => onTapRow(tx),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(
+                  width: _colCheck,
+                  child: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    iconSize: 20,
+                    tooltip: reconciled
+                        ? 'Pointée - toucher pour dépointer'
+                        : 'Non pointée - toucher pour pointer',
+                    icon: Icon(
+                      reconciled
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      color: reconciled ? AppTheme.positive : Colors.grey[400],
+                    ),
+                    onPressed: () => onToggleReconciled(tx, !reconciled),
                   ),
-                  onPressed: () => onToggleReconciled(tx, !reconciled),
                 ),
-              ),
-              for (final col in columns) ...[
-                const SizedBox(width: _colGap),
-                ...cellsFor(col),
+                for (final col in columns) ...[
+                  const SizedBox(width: _colGap),
+                  ...cellsFor(col),
+                ],
               ],
-            ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -1025,10 +1181,12 @@ class _LedgerColumnSettingsSheet extends StatefulWidget {
   const _LedgerColumnSettingsSheet({required this.dbProvider});
 
   @override
-  State<_LedgerColumnSettingsSheet> createState() => _LedgerColumnSettingsSheetState();
+  State<_LedgerColumnSettingsSheet> createState() =>
+      _LedgerColumnSettingsSheetState();
 }
 
-class _LedgerColumnSettingsSheetState extends State<_LedgerColumnSettingsSheet> {
+class _LedgerColumnSettingsSheetState
+    extends State<_LedgerColumnSettingsSheet> {
   late List<LedgerColumnId> _order;
   late Set<LedgerColumnId> _hidden;
 
@@ -1055,7 +1213,8 @@ class _LedgerColumnSettingsSheetState extends State<_LedgerColumnSettingsSheet> 
     // screen from an empty grid.
     if (value == false && _hidden.length >= _order.length - 1) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Au moins une colonne doit rester visible.')),
+        const SnackBar(
+            content: Text('Au moins une colonne doit rester visible.')),
       );
       return;
     }
@@ -1078,11 +1237,14 @@ class _LedgerColumnSettingsSheetState extends State<_LedgerColumnSettingsSheet> 
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Colonnes du grand livre', style: Theme.of(context).textTheme.titleLarge),
+            Text('Colonnes du grand livre',
+                style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 4),
             Text(
               'Cochez pour afficher/masquer, glissez la poignée pour réordonner.',
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 12),
             ),
             const SizedBox(height: 8),
             Flexible(
@@ -1187,7 +1349,9 @@ class _LedgerCards extends StatelessWidget {
               .pop(double.tryParse(v.replaceAll(',', '.'))),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Annuler')),
           FilledButton(
             onPressed: () => Navigator.of(context)
                 .pop(double.tryParse(controller.text.replaceAll(',', '.'))),
@@ -1233,7 +1397,8 @@ class _LedgerCards extends StatelessWidget {
     final tiers = isTransfer
         ? '${accountsById[tx.accountId]?.name ?? '?'} → ${accountsById[tx.toAccountId]?.name ?? '?'}'
         : (payeesById[tx.payeeId]?.name ?? 'Tiers inconnu');
-    final transferCategoryLabel = categoryFullPath(tx.categoryId, categoriesById);
+    final transferCategoryLabel =
+        categoryFullPath(tx.categoryId, categoriesById);
     final categorie = isTransfer
         ? (transferCategoryLabel.isEmpty ? 'Virement' : transferCategoryLabel)
         : categoryFullPath(tx.categoryId, categoriesById);
@@ -1241,146 +1406,155 @@ class _LedgerCards extends StatelessWidget {
     return Opacity(
       opacity: paused ? 0.55 : 1,
       child: Material(
-      color: Theme.of(context).cardColor,
-      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-      child: InkWell(
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        onTap: () => onTapRow(tx),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    iconSize: 20,
-                    tooltip: reconciled
-                        ? 'Pointée - toucher pour dépointer'
-                        : 'Non pointée - toucher pour pointer',
-                    icon: Icon(
-                      reconciled
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
-                      color: reconciled ? AppTheme.positive : Colors.grey[400],
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+          onTap: () => onTapRow(tx),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      iconSize: 20,
+                      tooltip: reconciled
+                          ? 'Pointée - toucher pour dépointer'
+                          : 'Non pointée - toucher pour pointer',
+                      icon: Icon(
+                        reconciled
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                        color:
+                            reconciled ? AppTheme.positive : Colors.grey[400],
+                      ),
+                      onPressed: () => onToggleReconciled(tx, !reconciled),
                     ),
-                    onPressed: () => onToggleReconciled(tx, !reconciled),
-                  ),
-                  const SizedBox(width: 4),
-                  InkWell(
-                    onTap: () => _editDate(context, tx),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
+                    const SizedBox(width: 4),
+                    InkWell(
+                      onTap: () => _editDate(context, tx),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          DateFormat('dd/MM/yy').format(tx.date),
+                          style: TextStyle(
+                              fontStyle: fontStyle,
+                              fontWeight: weight,
+                              fontSize: 13),
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    InkWell(
+                      onTap: isTransfer ? null : () => _editAmount(context, tx),
                       child: Text(
-                        DateFormat('dd/MM/yy').format(tx.date),
+                        '${debit != null ? '-' : '+'}${currency?.format(amount) ?? amount.toStringAsFixed(2)}',
                         style: TextStyle(
-                            fontStyle: fontStyle,
-                            fontWeight: weight,
-                            fontSize: 13),
+                          color: amountColor,
+                          fontWeight: FontWeight.w700,
+                          fontStyle: fontStyle,
+                        ),
                       ),
                     ),
-                  ),
-                  const Spacer(),
-                  InkWell(
-                    onTap: isTransfer ? null : () => _editAmount(context, tx),
-                    child: Text(
-                      '${debit != null ? '-' : '+'}${currency?.format(amount) ?? amount.toStringAsFixed(2)}',
-                      style: TextStyle(
-                        color: amountColor,
-                        fontWeight: FontWeight.w700,
-                        fontStyle: fontStyle,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  if (paused) ...[
-                    Tooltip(
-                      message: 'En pause - exclue du solde et des rapports',
-                      child: Icon(Icons.pause_circle_outline,
-                          size: 13, color: Theme.of(context).colorScheme.error),
-                    ),
-                    const SizedBox(width: 4),
                   ],
-                  if (recurringTxIds.contains(tx.id)) ...[
-                    Tooltip(
-                      message: recurringOccurrences[tx.id] != null
-                          ? 'Générée par une opération récurrente '
-                              '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
-                          : 'Générée par une opération récurrente',
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.autorenew, size: 13, color: Theme.of(context).colorScheme.primary),
-                          if (recurringOccurrences[tx.id] != null)
-                            Text(
-                              ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
-                              style: TextStyle(fontSize: 10, color: Theme.of(context).colorScheme.primary),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                  ],
-                  Expanded(
-                    child: Text(
-                      tiers,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontWeight: weight, fontStyle: fontStyle, fontSize: 15),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 2),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      categorie,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 12,
-                          fontStyle: fontStyle),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Solde: ${currency?.format(row.balanceAfter) ?? row.balanceAfter.toStringAsFixed(2)}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                      color: row.balanceAfter < 0
-                          ? AppTheme.negative
-                          : Colors.grey[700],
-                    ),
-                  ),
-                ],
-              ),
-              if ((tx.notes ?? '').isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  tx.notes!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      color: Colors.grey[500],
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic),
                 ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    if (paused) ...[
+                      Tooltip(
+                        message: 'En pause - exclue du solde et des rapports',
+                        child: Icon(Icons.pause_circle_outline,
+                            size: 13,
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    if (recurringTxIds.contains(tx.id)) ...[
+                      Tooltip(
+                        message: recurringOccurrences[tx.id] != null
+                            ? 'Générée par une opération récurrente '
+                                '(${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total})'
+                            : 'Générée par une opération récurrente',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.autorenew,
+                                size: 13,
+                                color: Theme.of(context).colorScheme.primary),
+                            if (recurringOccurrences[tx.id] != null)
+                              Text(
+                                ' ${recurringOccurrences[tx.id]!.index}/${recurringOccurrences[tx.id]!.total}',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color:
+                                        Theme.of(context).colorScheme.primary),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    Expanded(
+                      child: Text(
+                        tiers,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontWeight: weight,
+                            fontStyle: fontStyle,
+                            fontSize: 15),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        categorie,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                            fontStyle: fontStyle),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Solde: ${currency?.format(row.balanceAfter) ?? row.balanceAfter.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                        color: row.balanceAfter < 0
+                            ? AppTheme.negative
+                            : Colors.grey[700],
+                      ),
+                    ),
+                  ],
+                ),
+                if ((tx.notes ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    tx.notes!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -1393,6 +1567,7 @@ class _LedgerCards extends StatelessWidget {
 typedef TransactionEditorResult = ({
   CategoryChange? categoryChange,
   BillAmountChange? billAmountChange,
+
   /// Set only when "Dupliquer" was tapped - the source transaction to seed
   /// a fresh "Nouvelle transaction" sheet from (see openTransactionEditor,
   /// which reopens itself with this as [TransactionEditorSheet.duplicateFrom]
@@ -1431,8 +1606,7 @@ class TransactionEditorSheet extends StatefulWidget {
   });
 
   @override
-  State<TransactionEditorSheet> createState() =>
-      _TransactionEditorSheetState();
+  State<TransactionEditorSheet> createState() => _TransactionEditorSheetState();
 }
 
 class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
@@ -1470,11 +1644,17 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // Ignored the same way [draft] is when editing a real transaction - a
     // duplicate only ever seeds a brand-new one.
     final dup = tx == null ? widget.duplicateFrom : null;
-    _accountId = tx?.accountId ?? draft?.accountId ?? dup?.accountId ?? widget.defaultAccountId;
+    _accountId = tx?.accountId ??
+        draft?.accountId ??
+        dup?.accountId ??
+        widget.defaultAccountId;
     _toAccountId = tx?.toAccountId ?? dup?.toAccountId;
     _categoryId = tx?.categoryId ?? draft?.categoryId ?? dup?.categoryId;
     _payeeId = tx?.payeeId ?? draft?.payeeId ?? dup?.payeeId;
-    _transCode = tx?.transCode ?? draft?.transCode ?? dup?.transCode ?? TransCode.withdrawal;
+    _transCode = tx?.transCode ??
+        draft?.transCode ??
+        dup?.transCode ??
+        TransCode.withdrawal;
     // [dup]'s own date is never read here - "Dupliquer" always lands on
     // today's date, same as this falling through to DateTime.now() below.
     _date = tx?.date ?? draft?.date ?? DateTime.now();
@@ -1483,12 +1663,16 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // would read false even if it really was reconciled right before being
     // paused, so ask the remembered marker instead in that case (see
     // MmexRepository.wasReconciledBeforePause).
-    _reconciled =
-        tx == null ? false : (_paused ? widget.repo.wasReconciledBeforePause(tx.id) : tx.isReconciled);
+    _reconciled = tx == null
+        ? false
+        : (_paused
+            ? widget.repo.wasReconciledBeforePause(tx.id)
+            : tx.isReconciled);
     // [dup]'s amount is never read here either - the whole point of
     // "Dupliquer" is a fresh amount the user types in themselves.
-    _amountController.text =
-        tx != null ? tx.amount.toStringAsFixed(2) : (draft?.amount?.toStringAsFixed(2) ?? '');
+    _amountController.text = tx != null
+        ? tx.amount.toStringAsFixed(2)
+        : (draft?.amount?.toStringAsFixed(2) ?? '');
     _notesController.text = tx?.notes ?? draft?.notes ?? dup?.notes ?? '';
   }
 
@@ -1595,8 +1779,8 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                     const TextInputType.numberWithOptions(decimal: true),
                 validator: (v) =>
                     (double.tryParse((v ?? '').replaceAll(',', '.')) == null)
-                    ? 'Montant invalide'
-                    : null,
+                        ? 'Montant invalide'
+                        : null,
               ),
               const SizedBox(height: 12),
               SearchableSelectField<Category>(
@@ -1633,7 +1817,8 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                     // fallback never ran while _payeeId was still non-null.
                     // Never showed up creating a *new* transaction, where
                     // _payeeId starts null already.
-                    final selectedName = findById(payees, _payeeId, (p) => p.id)?.name;
+                    final selectedName =
+                        findById(payees, _payeeId, (p) => p.id)?.name;
                     if (selectedName != null && selectedName != text) {
                       _payeeId = null;
                     }
@@ -1700,10 +1885,11 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                         // MmexRepository.restoreTransaction's doc comment).
                         final tx = widget.existing!;
                         final billId = widget.repo.billIdForTransaction(tx.id);
-                        final occurrence =
-                            widget.repo.recurringTransactionOccurrences()[tx.id];
-                        final wasReconciledBeforePause =
-                            tx.isVoid ? widget.repo.wasReconciledBeforePause(tx.id) : null;
+                        final occurrence = widget.repo
+                            .recurringTransactionOccurrences()[tx.id];
+                        final wasReconciledBeforePause = tx.isVoid
+                            ? widget.repo.wasReconciledBeforePause(tx.id)
+                            : null;
                         widget.repo.deleteTransaction(tx.id);
                         final dbProvider = context.read<DatabaseProvider>();
                         dbProvider.touch();
@@ -1718,7 +1904,8 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                                   billId: billId,
                                   occurrenceIndex: occurrence?.index,
                                   occurrenceTotal: occurrence?.total,
-                                  wasReconciledBeforePause: wasReconciledBeforePause,
+                                  wasReconciledBeforePause:
+                                      wasReconciledBeforePause,
                                 );
                                 dbProvider.touch();
                               },
@@ -1816,14 +2003,17 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         categoryId: _categoryId,
         notes: _notesController.text,
       ));
-      widget.repo.syncPausedTracking(widget.existing!.id, paused: _paused, reconciled: _reconciled);
+      widget.repo.syncPausedTracking(widget.existing!.id,
+          paused: _paused, reconciled: _reconciled);
 
       // Only a real edit (not a brand new transaction) can have "other
       // identical" occurrences to offer fixing too - see
       // offerBulkCategoryReassign in _openEditor, which runs once this
       // sheet has actually closed.
       final oldCategoryId = widget.existing!.categoryId;
-      if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
+      if (oldCategoryId != null &&
+          _categoryId != null &&
+          _categoryId != oldCategoryId) {
         if (isTransfer && _toAccountId != null) {
           categoryChange = (
             payeeId: null,
