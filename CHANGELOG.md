@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.83] - 2026-08-27
+
+- fix(csv): fix garbled accents and multi-line notes in every CSV export
+
 ## [1.0.82] - 2026-08-27
 
 - feat(transactions): export the current ledger view to CSV
