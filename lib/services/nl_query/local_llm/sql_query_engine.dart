@@ -102,6 +102,25 @@ Règles strictes :
   (`CATEGNAME = 'Vacances'`), jamais sur la chaîne complète. Si aucune
   catégorie existante ne correspond au thème, réponds {"sql": null,
   "raison": "aucune catégorie ne correspond"} plutôt que de deviner.
+  **Second exemple, pour bien fixer le principe : "mes dépenses en
+  nourriture depuis janvier 2026, mois par mois, détail par
+  sous-catégories" - "Nourriture" a des sous-catégories ("Alimentation",
+  "Boulangerie", "Restaurant"...) dont le nom ne contient PAS "nourriture"
+  - la même jointure vers le parent s'applique, avec la même exigence de
+  parenthèses autour du OR :**
+  {"steps": [
+    {"objectif": "Total par mois", "sql":
+      "SELECT strftime('%Y-%m', T.TRANSDATE) AS mois, SUM(T.TRANSAMOUNT) AS total FROM CHECKINGACCOUNT_V1 T JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID LEFT JOIN CATEGORY_V1 P ON C.PARENTID = P.CATEGID WHERE (C.CATEGNAME LIKE '%nourriture%' OR P.CATEGNAME LIKE '%nourriture%') AND T.TRANSCODE = 'Withdrawal' AND (T.DELETEDTIME IS NULL OR T.DELETEDTIME = '') AND T.STATUS != 'V' AND T.TRANSDATE >= '2026-01-01' GROUP BY mois ORDER BY mois"},
+    {"objectif": "Détail par mois et sous-catégorie", "sql":
+      "SELECT strftime('%Y-%m', T.TRANSDATE) AS mois, C.CATEGNAME AS sous_categorie, SUM(T.TRANSAMOUNT) AS total FROM CHECKINGACCOUNT_V1 T JOIN CATEGORY_V1 C ON T.CATEGID = C.CATEGID LEFT JOIN CATEGORY_V1 P ON C.PARENTID = P.CATEGID WHERE (C.CATEGNAME LIKE '%nourriture%' OR P.CATEGNAME LIKE '%nourriture%') AND T.TRANSCODE = 'Withdrawal' AND (T.DELETEDTIME IS NULL OR T.DELETEDTIME = '') AND T.STATUS != 'V' AND T.TRANSDATE >= '2026-01-01' GROUP BY mois, sous_categorie ORDER BY mois"}
+  ]}
+  (Remarque le `C.CATEGNAME` dans le SELECT de la deuxième requête - c'est
+  lui qui donne le nom réel de la sous-catégorie, pas "Nourriture" répété
+  partout : sans cette colonne, impossible de répondre "détail par
+  sous-catégorie" même si la jointure vers le parent est correcte. Et
+  remarque que la jointure vers le parent est présente ET les parenthèses
+  autour du OR sont là dans les DEUX requêtes du plan, pas seulement la
+  première.)
 - Le vocabulaire réel de la base de l'utilisateur (comptes, catégories,
   tiers) est joint en bas de ce prompt, à titre indicatif pour savoir ce
   qui existe vraiment (et éviter de deviner un nom proche mais faux) - les

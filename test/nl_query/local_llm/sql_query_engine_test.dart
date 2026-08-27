@@ -202,6 +202,27 @@ void main() {
   });
 
   test(
+      'defaultSqlSystemPrompt includes a second, distinct worked example '
+      '("Nourriture") of the parent-join rollup, alongside the "Vacances" '
+      'one - regression test for the 2026-08-24 report that a single '
+      'worked example was not enough for the model to reliably generalize '
+      'the rule to other questions: it inconsistently dropped the parent '
+      'join (missing sub-category data entirely) or the OR-parentheses '
+      '(rejected by the ambiguity guard) depending on phrasing, until a '
+      'second concrete example - explicitly including the SELECT column '
+      'for the sub-category name, which the model was also silently '
+      'omitting - was added', () {
+    expect(defaultSqlSystemPrompt, contains('Second exemple'));
+    expect(
+        defaultSqlSystemPrompt,
+        contains(
+            "(C.CATEGNAME LIKE '%nourriture%' OR P.CATEGNAME LIKE '%nourriture%')"));
+    expect(defaultSqlSystemPrompt,
+        contains('C.CATEGNAME AS sous_categorie'));
+    expect(defaultSqlSystemPrompt, contains('GROUP BY mois, sous_categorie'));
+  });
+
+  test(
       'defaultSqlSystemPrompt requires DELETEDTIME IS NULL OR = \'\', never = '
       "'' alone - regression test for the 2026-08-23 report that a real "
       'category with real transactions ("Vacances") always came back empty: '
