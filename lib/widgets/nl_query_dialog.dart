@@ -237,7 +237,11 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     try {
       await FilePicker.saveFile(
         fileName: 'reponse_ia_$timestamp.csv',
-        bytes: Uint8List.fromList(utf8.encode(csv)),
+        // A UTF-8 BOM (2026-08-27 user report on the transactions ledger's
+        // own CSV export, same underlying issue here) - Excel does not
+        // auto-detect plain UTF-8 without one and falls back to the
+        // system's ANSI code page, mangling accented characters on open.
+        bytes: Uint8List.fromList([0xEF, 0xBB, 0xBF, ...utf8.encode(csv)]),
       );
     } catch (e) {
       if (!context.mounted) return;

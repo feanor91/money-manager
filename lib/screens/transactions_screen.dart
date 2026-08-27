@@ -673,7 +673,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     try {
       await FilePicker.saveFile(
         fileName: 'transactions_$timestamp.csv',
-        bytes: Uint8List.fromList(utf8.encode(buffer.toString())),
+        // A UTF-8 BOM (2026-08-27 user report: accented characters coming
+        // out garbled) - Excel, unlike most tools, does not auto-detect
+        // plain UTF-8 without one and falls back to the system's ANSI code
+        // page, mangling every accented character on open. The BOM costs
+        // nothing for tools that already handle UTF-8 correctly.
+        bytes: Uint8List.fromList(
+            [0xEF, 0xBB, 0xBF, ...utf8.encode(buffer.toString())]),
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -688,10 +694,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 /// identical helper for the AI chat's own CSV export; duplicated rather
 /// than shared since both are small, private, and in otherwise-unrelated
 /// files.
+///
+/// A newline inside a quoted field is technically legal CSV, but reads as
+/// a garbled/duplicated row to a human skimming the file in a plain text
+/// viewer or a naive parser (2026-08-27 user report: a multi-line Notes
+/// value - e.g. a co-op fee notice pasted across several lines - made it
+/// look like an unrelated transaction had appeared twice, further down
+/// the file). Collapsed to a single space instead, so one transaction is
+/// always exactly one line.
 String _csvField(Object? value) {
   if (value == null) return '';
-  final text = value.toString();
-  if (text.contains(RegExp('[,"\n\r]'))) {
+  final text = value.toString().replaceAll(RegExp(r'[\n\r]+'), ' ').trim();
+  if (text.contains(RegExp('[,"]'))) {
     return '"${text.replaceAll('"', '""')}"';
   }
   return text;

@@ -282,13 +282,18 @@ class SqlGroundedAnswer {
 }
 
 /// Escapes one CSV field per RFC 4180: wrap in double quotes (doubling any
-/// quote already inside) whenever the value contains a comma, quote, or
-/// newline - the three characters that would otherwise be ambiguous with
-/// the format's own delimiters.
+/// quote already inside) whenever the value contains a comma or a quote.
+///
+/// A newline inside a quoted field is technically legal CSV, but reads as
+/// a garbled/duplicated row to a human skimming the file in a plain text
+/// viewer or a naive parser (2026-08-27 user report on the transactions
+/// ledger's own CSV export, same underlying field-building shape as this
+/// one) - collapsed to a single space instead, so one result row is
+/// always exactly one line.
 String _csvField(Object? value) {
   if (value == null) return '';
-  final text = value.toString();
-  if (text.contains(RegExp('[,"\n\r]'))) {
+  final text = value.toString().replaceAll(RegExp(r'[\n\r]+'), ' ').trim();
+  if (text.contains(RegExp('[,"]'))) {
     return '"${text.replaceAll('"', '""')}"';
   }
   return text;
