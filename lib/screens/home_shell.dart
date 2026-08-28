@@ -13,6 +13,7 @@ import 'accounts_screen.dart';
 import 'budget_screen.dart';
 import 'dashboard_screen.dart';
 import 'recurring_screen.dart';
+import 'spending_explorer_screen.dart';
 import 'transactions_screen.dart';
 
 /// Bottom navigation shell holding the main sections of the app.
@@ -38,6 +39,7 @@ class _HomeShellState extends State<HomeShell> {
     BudgetScreen(),
     RecurringScreen(),
     AccountsScreen(),
+    SpendingExplorerScreen(),
   ];
 
   @override
@@ -139,6 +141,7 @@ class _HomeShellState extends State<HomeShell> {
               NavigationDestination(icon: Icon(Icons.pie_chart_outline), selectedIcon: Icon(Icons.pie_chart), label: 'Budget'),
               NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Récurrentes'),
               NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
+              NavigationDestination(icon: Icon(Icons.query_stats_outlined), selectedIcon: Icon(Icons.query_stats), label: 'Explorateur'),
             ],
           ),
           if (dbProvider.hasPendingWrite)

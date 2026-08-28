@@ -514,6 +514,61 @@ class MmexRepository {
     return (min: minYear, max: maxYear);
   }
 
+  /// Same as [transactionYearRange] but across every account at once -
+  /// used by cross-account analysis screens (e.g. the spending explorer)
+  /// that aren't scoped to a single account.
+  ({int min, int max})? transactionYearRangeAll() {
+    final row = db.query(
+      'SELECT MIN(TRANSDATE) AS minDate, MAX(TRANSDATE) AS maxDate FROM CHECKINGACCOUNT_V1 '
+      "WHERE (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ).first;
+    final minYear = DateTime.tryParse(row['minDate'] as String? ?? '')?.year;
+    final maxYear = DateTime.tryParse(row['maxDate'] as String? ?? '')?.year;
+    if (minYear == null || maxYear == null) return null;
+    return (min: minYear, max: maxYear);
+  }
+
+  /// Flexible cross-account transaction query for analysis screens: any
+  /// combination of years/categories/payees, all optional (an empty or
+  /// null list means "no filter on that dimension"). Transfers are always
+  /// excluded - they move money between the user's own accounts and don't
+  /// carry the category/payee semantics this kind of filter is built
+  /// around - as are voided transactions (`STATUS = 'V'`), same as MMEX's
+  /// own balance calculations.
+  List<MoneyTransaction> getTransactionsFiltered({
+    List<int>? years,
+    List<int>? categoryIds,
+    List<int>? payeeIds,
+    int limit = 20000,
+  }) {
+    final where = <String>[
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+      "TRANSCODE != 'Transfer'",
+      "(STATUS IS NULL OR STATUS != 'V')",
+    ];
+    final params = <Object?>[];
+    if (years != null && years.isNotEmpty) {
+      where.add(
+        "CAST(strftime('%Y', TRANSDATE) AS INTEGER) IN (${List.filled(years.length, '?').join(',')})",
+      );
+      params.addAll(years);
+    }
+    if (categoryIds != null && categoryIds.isNotEmpty) {
+      where.add('CATEGID IN (${List.filled(categoryIds.length, '?').join(',')})');
+      params.addAll(categoryIds);
+    }
+    if (payeeIds != null && payeeIds.isNotEmpty) {
+      where.add('PAYEEID IN (${List.filled(payeeIds.length, '?').join(',')})');
+      params.addAll(payeeIds);
+    }
+    final whereSql = 'WHERE ${where.join(' AND ')}';
+    final rows = db.query(
+      'SELECT * FROM CHECKINGACCOUNT_V1 $whereSql ORDER BY TRANSDATE ASC, TRANSID ASC LIMIT ?',
+      [...params, limit],
+    );
+    return rows.map(MoneyTransaction.fromRow).toList();
+  }
+
   /// Every transaction touching [accountId] within [from, to) (either or
   /// both may be omitted for "since the beginning"/"through the latest"),
   /// each paired with the running account balance immediately after it -
