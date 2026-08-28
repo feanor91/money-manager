@@ -5,13 +5,17 @@ import '../data/mmex_repository.dart';
 import '../models/payee.dart';
 import '../state/database_provider.dart';
 import '../widgets/responsive_body.dart';
+import '../widgets/searchable_select_field.dart';
 
 /// "Gestion des tiers" (Paramètres) - 2026-08-23 user request: a flat list
 /// of every payee with how many real records reference it, rename in
-/// place, and delete only when that count is exactly 0. Deliberately
-/// simpler than CategoriesScreen's equivalent (no merge, no archive/
-/// active toggle - payees don't have either concept in this app) - just
-/// the three things actually asked for: see, rename, delete-if-unused.
+/// place, and delete only when that count is exactly 0. Merge (2026-08-28
+/// user request, e.g. several statement-line payees like "CB AMINE VIANDE
+/// FACT xxxxx" all really meaning the same "Boucherie") re-points every
+/// real transaction/recurring bill to the target payee - same shape as
+/// CategoriesScreen's own merge, unlike everything else here which stays
+/// deliberately simpler (no archive/active toggle - payees don't have that
+/// concept in this app).
 class PayeesScreen extends StatefulWidget {
   const PayeesScreen({super.key});
 
@@ -72,6 +76,7 @@ class _PayeesScreenState extends State<PayeesScreen> {
                           payee: payee,
                           usageCount: repo.payeeUsageCount(payee.id),
                           repo: repo,
+                          allPayees: all,
                           onChanged: () => dbProvider.touch(),
                         );
                       },
@@ -88,6 +93,7 @@ class _PayeeRow extends StatelessWidget {
   final Payee payee;
   final int usageCount;
   final MmexRepository repo;
+  final List<Payee> allPayees;
   final VoidCallback onChanged;
 
   const _PayeeRow({
@@ -95,6 +101,7 @@ class _PayeeRow extends StatelessWidget {
     required this.payee,
     required this.usageCount,
     required this.repo,
+    required this.allPayees,
     required this.onChanged,
   });
 
@@ -113,6 +120,7 @@ class _PayeeRow extends StatelessWidget {
           onSelected: (action) => _handle(context, action),
           itemBuilder: (context) => [
             const PopupMenuItem(value: 'rename', child: Text('Renommer')),
+            const PopupMenuItem(value: 'merge', child: Text('Fusionner avec...')),
             PopupMenuItem(
               value: 'delete',
               enabled: usageCount == 0,
@@ -133,6 +141,9 @@ class _PayeeRow extends StatelessWidget {
     switch (action) {
       case 'rename':
         await _renamePayee(context, repo, payee);
+        onChanged();
+      case 'merge':
+        await _mergePayee(context, repo, payee, allPayees);
         onChanged();
       case 'delete':
         if (usageCount != 0) return;
@@ -166,6 +177,55 @@ Future<void> _renamePayee(BuildContext context, MmexRepository repo, Payee payee
   final trimmed = name?.trim();
   if (trimmed == null || trimmed.isEmpty || trimmed == payee.name) return;
   repo.renamePayee(payee.id, trimmed);
+}
+
+Future<void> _mergePayee(
+  BuildContext context,
+  MmexRepository repo,
+  Payee source,
+  List<Payee> allPayees,
+) async {
+  final options = allPayees.where((p) => p.id != source.id).toList();
+
+  Payee? target;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: Text('Fusionner "${source.name}"'),
+        content: SizedBox(
+          width: 400,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Les opérations et opérations récurrentes de "${source.name}" '
+                'seront transférées vers le tiers choisi, puis '
+                '"${source.name}" sera supprimé.',
+              ),
+              const SizedBox(height: 16),
+              SearchableSelectField<Payee>(
+                label: 'Fusionner vers',
+                options: options,
+                labelOf: (p) => p.name,
+                onSelected: (p) => setDialogState(() => target = p),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+          FilledButton(
+            onPressed: target == null ? null : () => Navigator.of(context).pop(true),
+            child: const Text('Fusionner'),
+          ),
+        ],
+      ),
+    ),
+  );
+  if (confirmed != true || target == null) return;
+  repo.mergePayees(fromId: source.id, toId: target!.id);
 }
 
 Future<void> _deletePayee(BuildContext context, MmexRepository repo, Payee payee) async {

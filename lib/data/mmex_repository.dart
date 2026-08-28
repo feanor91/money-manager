@@ -466,6 +466,28 @@ class MmexRepository {
     db.execute('DELETE FROM PAYEE_V1 WHERE PAYEEID = ?', [payeeId]);
   }
 
+  /// Re-points every real ledger transaction and recurring bill from
+  /// [fromId] to [toId] (the only two tables [payeeUsageCount] itself
+  /// counts), then deletes the now-unreferenced source payee - same shape
+  /// as [mergeCategories]. Lets several near-duplicate merchant labels an
+  /// export/import produced (e.g. several "CB AMINE VIANDE FACT xxxxx"
+  /// rows from different statement lines for the same butcher) collapse
+  /// into one real "Boucherie" payee without losing any history.
+  void mergePayees({required int fromId, required int toId}) {
+    if (fromId == toId) return;
+    db.transaction(() {
+      db.execute(
+        'UPDATE CHECKINGACCOUNT_V1 SET PAYEEID = ? WHERE PAYEEID = ?',
+        [toId, fromId],
+      );
+      db.execute(
+        'UPDATE BILLSDEPOSITS_V1 SET PAYEEID = ? WHERE PAYEEID = ?',
+        [toId, fromId],
+      );
+      db.execute('DELETE FROM PAYEE_V1 WHERE PAYEEID = ?', [fromId]);
+    });
+  }
+
   // ---- Transactions ----------------------------------------------------
 
   List<MoneyTransaction> getTransactions({
