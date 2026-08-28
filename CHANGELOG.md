@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.84] - 2026-08-28
+
+- feat(explorateur): add spending explorer with cascading filters and stacked chart
+
 ## [1.0.83] - 2026-08-27
 
 - fix(csv): fix garbled accents and multi-line notes in every CSV export
