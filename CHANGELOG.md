@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.85] - 2026-08-28
+
+- feat(tiers): add merge action to the payees screen
+
 ## [1.0.84] - 2026-08-28
 
 - feat(explorateur): add spending explorer with cascading filters and stacked chart
