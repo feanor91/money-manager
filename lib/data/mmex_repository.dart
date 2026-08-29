@@ -551,9 +551,9 @@ class MmexRepository {
   }
 
   /// Flexible cross-account transaction query for analysis screens: any
-  /// combination of years/categories/payees, all optional (an empty or
-  /// null list means "no filter on that dimension"). Transfers are always
-  /// excluded - they move money between the user's own accounts and don't
+  /// combination of years/categories/payees/accounts, all optional (an
+  /// empty or null list means "no filter on that dimension"). Transfers are
+  /// always excluded - they move money between the user's own accounts and don't
   /// carry the category/payee semantics this kind of filter is built
   /// around - as are voided transactions (`STATUS = 'V'`), same as MMEX's
   /// own balance calculations.
@@ -561,6 +561,7 @@ class MmexRepository {
     List<int>? years,
     List<int>? categoryIds,
     List<int>? payeeIds,
+    List<int>? accountIds,
     int limit = 20000,
   }) {
     final where = <String>[
@@ -582,6 +583,13 @@ class MmexRepository {
     if (payeeIds != null && payeeIds.isNotEmpty) {
       where.add('PAYEEID IN (${List.filled(payeeIds.length, '?').join(',')})');
       params.addAll(payeeIds);
+    }
+    if (accountIds != null && accountIds.isNotEmpty) {
+      // Transfers are already excluded above (TRANSCODE != 'Transfer'), so
+      // every remaining row's own account is always ACCOUNTID - never
+      // TOACCOUNTID, which only a transfer ever populates.
+      where.add('ACCOUNTID IN (${List.filled(accountIds.length, '?').join(',')})');
+      params.addAll(accountIds);
     }
     final whereSql = 'WHERE ${where.join(' AND ')}';
     final rows = db.query(

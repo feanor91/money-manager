@@ -339,14 +339,14 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
                   toY: items[i].spent,
                   color: AppTheme.negative,
                   width: barWidth,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                  borderRadius: BorderRadius.zero,
                 ),
                 if (items[i].planned > 0)
                   BarChartRodData(
                     toY: items[i].planned,
                     color: forecastColor,
                     width: barWidth,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+                    borderRadius: BorderRadius.zero,
                   ),
               ],
             ),

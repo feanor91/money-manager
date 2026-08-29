@@ -30,6 +30,7 @@ class SpendingExplorerScreen extends StatefulWidget {
 }
 
 class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
+  final Set<int> _selectedAccountIds = {};
   final Set<int> _selectedYears = {};
   final Set<int> _selectedCategoryIds = {};
   final Set<int> _selectedSubCategoryIds = {};
@@ -56,6 +57,16 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
         .toList();
     options.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return options;
+  }
+
+  void _toggleAccount(int id, bool value) {
+    setState(() {
+      if (value) {
+        _selectedAccountIds.add(id);
+      } else {
+        _selectedAccountIds.remove(id);
+      }
+    });
   }
 
   void _toggleYear(int year, bool value) {
@@ -105,8 +116,21 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     });
   }
 
+  /// Backs every filter section's "Tout" / "Aucun" pair - [target] is
+  /// whichever selection set the section owns, [options] the ids currently
+  /// offered by that section (so "Tout" only ever selects what's actually
+  /// visible, not stale ids hidden by a narrower upstream filter).
+  void _selectAll(Set<int> target, Iterable<int> options) {
+    setState(() => target.addAll(options));
+  }
+
+  void _selectNone(Set<int> target) {
+    setState(() => target.clear());
+  }
+
   void _resetFilters() {
     setState(() {
+      _selectedAccountIds.clear();
       _selectedYears.clear();
       _selectedCategoryIds.clear();
       _selectedSubCategoryIds.clear();
@@ -115,18 +139,38 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     });
   }
 
-  /// Only the categories/sub-categories the user actually checked - no
-  /// automatic roll-up to a selected parent's children. A category
-  /// checkbox alone means exactly that category's own transactions;
-  /// including a sub-category's transactions requires checking it
-  /// explicitly in the Sous-catégorie list (confirmed 2026-08-28 after a
-  /// first version auto-included every child of a checked parent, which
-  /// silently pulled in sub-categories the user never asked for).
-  void _applyFilters(MmexRepository repo) {
-    final effectiveCategoryIds = <int>{
-      ..._selectedCategoryIds,
-      ..._selectedSubCategoryIds,
-    };
+  /// A checked category with no specific sub-category checked underneath it
+  /// rolls up to that category plus all its direct children - covers the
+  /// common case ("I want everything under Boucherie") without another
+  /// click per sub-category. But if the user *has* narrowed down to
+  /// specific sub-categories of that same parent, only those specific ones
+  /// count - the other, unchecked siblings are deliberately left out
+  /// (confirmed 2026-08-28: a flat union of category+sub-category ids with
+  /// no per-parent rollup meant checking a category alone, with nothing
+  /// checked below it, matched only transactions tagged directly to the
+  /// parent itself - normally close to none, since real spending almost
+  /// always lands on a leaf sub-category - which read as "the filter does
+  /// nothing"; a straight per-parent auto-rollup regardless of sub-category
+  /// picks was rejected earlier the same day for silently including
+  /// siblings the user hadn't chosen).
+  void _applyFilters(MmexRepository repo, List<Category> allCategories) {
+    final effectiveCategoryIds = <int>{};
+    for (final catId in _selectedCategoryIds) {
+      final childIds = allCategories
+          .where((c) => c.parentId == catId)
+          .map((c) => c.id)
+          .toSet();
+      final selectedChildren = _selectedSubCategoryIds.intersection(childIds);
+      if (selectedChildren.isEmpty) {
+        effectiveCategoryIds.add(catId);
+        effectiveCategoryIds.addAll(childIds);
+      } else {
+        effectiveCategoryIds.addAll(selectedChildren);
+      }
+    }
+    // Safety net for a sub-category checked whose own parent isn't checked
+    // (possible: with no category checked, every sub-category is offered).
+    effectiveCategoryIds.addAll(_selectedSubCategoryIds);
 
     setState(() {
       _results = repo.getTransactionsFiltered(
@@ -134,6 +178,8 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
         categoryIds:
             effectiveCategoryIds.isEmpty ? null : effectiveCategoryIds.toList(),
         payeeIds: _selectedPayeeIds.isEmpty ? null : _selectedPayeeIds.toList(),
+        accountIds:
+            _selectedAccountIds.isEmpty ? null : _selectedAccountIds.toList(),
       );
     });
   }
@@ -196,7 +242,9 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     final currency = repo.getBaseCurrency();
     final allCategories = repo.getCategories(onlyActive: false);
     final allPayees = repo.getPayees(onlyActive: false);
-    final accountsById = {for (final a in repo.getAccounts()) a.id: a};
+    final accounts = repo.getAccounts()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final accountsById = {for (final a in accounts) a.id: a};
     final categoriesById = {for (final c in allCategories) c.id: c};
     final payeesById = {for (final p in allPayees) p.id: p};
 
@@ -219,9 +267,30 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
         children: [
           _filterSection(
+            title: 'Compte',
+            icon: Icons.account_balance_outlined,
+            selectedCount: _selectedAccountIds.length,
+            onSelectAll: () =>
+                _selectAll(_selectedAccountIds, accounts.map((a) => a.id)),
+            onSelectNone: () => _selectNone(_selectedAccountIds),
+            items: [
+              for (final a in accounts)
+                CheckboxListTile(
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: _selectedAccountIds.contains(a.id),
+                  onChanged: (v) => _toggleAccount(a.id, v ?? false),
+                  title: Text(a.name),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _filterSection(
             title: 'Année',
             icon: Icons.calendar_today_outlined,
             selectedCount: _selectedYears.length,
+            onSelectAll: () => _selectAll(_selectedYears, years),
+            onSelectNone: () => _selectNone(_selectedYears),
             items: [
               for (final y in years)
                 CheckboxListTile(
@@ -238,6 +307,9 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             title: 'Catégorie',
             icon: Icons.category_outlined,
             selectedCount: _selectedCategoryIds.length,
+            onSelectAll: () => _selectAll(
+                _selectedCategoryIds, parentCategories.map((c) => c.id)),
+            onSelectNone: () => _selectNone(_selectedCategoryIds),
             items: [
               for (final c in parentCategories)
                 CheckboxListTile(
@@ -255,6 +327,9 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             title: 'Sous-catégorie',
             icon: Icons.subdirectory_arrow_right,
             selectedCount: _selectedSubCategoryIds.length,
+            onSelectAll: () => _selectAll(
+                _selectedSubCategoryIds, subCategoryOptions.map((c) => c.id)),
+            onSelectNone: () => _selectNone(_selectedSubCategoryIds),
             items: [
               for (final c in subCategoryOptions)
                 CheckboxListTile(
@@ -274,6 +349,9 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             title: 'Tiers',
             icon: Icons.people_outline,
             selectedCount: _selectedPayeeIds.length,
+            onSelectAll: () =>
+                _selectAll(_selectedPayeeIds, payeeOptions.map((p) => p.id)),
+            onSelectNone: () => _selectNone(_selectedPayeeIds),
             items: [
               for (final p in payeeOptions)
                 CheckboxListTile(
@@ -293,7 +371,7 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
                 child: FilledButton.icon(
                   icon: const Icon(Icons.filter_alt_outlined),
                   label: const Text('Appliquer les filtres'),
-                  onPressed: () => _applyFilters(repo),
+                  onPressed: () => _applyFilters(repo, allCategories),
                 ),
               ),
               const SizedBox(width: 8),
@@ -380,6 +458,8 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     required IconData icon,
     required int selectedCount,
     required List<Widget> items,
+    required VoidCallback onSelectAll,
+    required VoidCallback onSelectNone,
     String? emptyLabel,
   }) {
     return Card(
@@ -397,7 +477,23 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
                 child: Text(emptyLabel, style: TextStyle(color: Colors.grey[600])),
               ),
             )
-          else
+          else ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: items.isEmpty ? null : onSelectAll,
+                    child: const Text('Tout sélectionner'),
+                  ),
+                  TextButton(
+                    onPressed: selectedCount == 0 ? null : onSelectNone,
+                    child: const Text('Aucun'),
+                  ),
+                ],
+              ),
+            ),
             SizedBox(
               height: (items.length * 48.0).clamp(48.0, 280.0),
               child: ListView(
@@ -405,6 +501,7 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
                 children: items,
               ),
             ),
+          ],
           const SizedBox(height: 8),
         ],
       ),
@@ -586,6 +683,7 @@ class _MonthlyStackedBarChartState extends State<_MonthlyStackedBarChart> {
               toY: posCum,
               rodStackItems: stackItems,
               width: barWidth,
+              borderRadius: BorderRadius.zero,
             ),
           ],
         ));
