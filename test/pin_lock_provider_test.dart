@@ -276,4 +276,65 @@ void main() {
     await provider.setLockoutMinutes(9999);
     expect(provider.lockoutMinutes, PinLockProvider.maxLockoutMinutes);
   });
+
+  group('auto-lock (InactivityLockWatcher support)', () {
+    test('defaults to defaultAutoLockMinutes and clamps to its valid range',
+        () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      expect(provider.autoLockMinutes, PinLockProvider.defaultAutoLockMinutes);
+
+      await provider.setAutoLockMinutes(0);
+      expect(provider.autoLockMinutes, PinLockProvider.minAutoLockMinutes);
+      await provider.setAutoLockMinutes(9999);
+      expect(provider.autoLockMinutes, PinLockProvider.maxAutoLockMinutes);
+    });
+
+    test('setAutoLockMinutes persists across a fresh attach to the same '
+        'companion prefs', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setAutoLockMinutes(15);
+
+      final reattached = PinLockProvider();
+      reattached.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      expect(reattached.autoLockMinutes, 15);
+    });
+
+    test('lockNow locks an unlocked session with a PIN configured', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      expect(provider.status, PinGateStatus.unlocked);
+
+      provider.lockNow();
+      expect(provider.status, PinGateStatus.locked);
+    });
+
+    test('lockNow is a no-op with no PIN configured - nothing to lock to',
+        () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      expect(provider.hasPin, isFalse);
+
+      provider.lockNow();
+      expect(provider.status, PinGateStatus.unlocked);
+    });
+
+    test('lockNow is a no-op when already locked', () async {
+      final prefs = _FakeCompanionPrefs();
+      final provider = PinLockProvider();
+      provider.attachDatabase(databaseReady: true, companionPrefs: prefs);
+      await provider.setPin('1234');
+      provider.lockNow();
+      expect(provider.status, PinGateStatus.locked);
+
+      provider.lockNow(); // already locked - stays locked, doesn't throw
+      expect(provider.status, PinGateStatus.locked);
+    });
+  });
 }

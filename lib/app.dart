@@ -12,6 +12,7 @@ import 'services/notifications/sync_notification_service.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'theme/app_theme.dart';
+import 'widgets/inactivity_lock_watcher.dart';
 import 'widgets/update_prompt.dart';
 
 class MoneyManagerApp extends StatelessWidget {
@@ -287,8 +288,16 @@ class _GateContent extends StatelessWidget {
       case PinGateStatus.locked:
         return const PinUnlockScreen();
       case PinGateStatus.none:
-      case PinGateStatus.unlocked:
         return child!;
+      case PinGateStatus.unlocked:
+        // Only worth tracking idle time when there's actually a PIN to
+        // lock back to - see InactivityLockWatcher/PinLockProvider.lockNow,
+        // which no-ops without one anyway, but this also skips mounting the
+        // pointer/keyboard listener machinery entirely when it can't do
+        // anything.
+        return pinLock.hasPin
+            ? InactivityLockWatcher(child: child!)
+            : child!;
     }
   }
 }

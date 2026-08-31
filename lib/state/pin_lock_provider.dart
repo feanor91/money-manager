@@ -12,6 +12,7 @@ const _prefsKeyFailedAttempts = 'mmex_pin_failed_attempts';
 const _prefsKeyLockedUntil = 'mmex_pin_locked_until_epoch_ms';
 const _prefsKeyMaxAttempts = 'mmex_pin_max_attempts';
 const _prefsKeyLockoutMinutes = 'mmex_pin_lockout_minutes';
+const _prefsKeyAutoLockMinutes = 'mmex_pin_autolock_minutes';
 
 /// Outcome of a [PinLockProvider.verify] call - richer than a plain bool so
 /// the lock screen can tell "wrong code, N tries left" apart from "you're
@@ -77,11 +78,20 @@ class PinLockProvider extends ChangeNotifier {
   static const minLockoutMinutes = 1;
   static const maxLockoutMinutes = 60;
 
+  /// See [InactivityLockWatcher] - how long the app can sit with no
+  /// pointer/keyboard activity anywhere before auto-locking back to the PIN
+  /// screen. Unlike [lockoutMinutes] (a penalty after failed attempts),
+  /// this fires during ordinary unattended use - user-requested 2026-08-31.
+  static const defaultAutoLockMinutes = 5;
+  static const minAutoLockMinutes = 1;
+  static const maxAutoLockMinutes = 120;
+
   AppPreferences? _prefs;
   PinGateStatus _status = PinGateStatus.none;
   bool _hasPin = false;
   int _maxAttempts = defaultMaxAttempts;
   int _lockoutMinutes = defaultLockoutMinutes;
+  int _autoLockMinutes = defaultAutoLockMinutes;
 
   PinGateStatus get status => _status;
   bool get hasPin => _hasPin;
@@ -89,6 +99,8 @@ class PinLockProvider extends ChangeNotifier {
   int get maxAttempts => _maxAttempts;
   int get lockoutMinutes => _lockoutMinutes;
   Duration get lockoutDuration => Duration(minutes: _lockoutMinutes);
+  int get autoLockMinutes => _autoLockMinutes;
+  Duration get autoLockDuration => Duration(minutes: _autoLockMinutes);
 
   /// Called by DatabaseProvider whenever the open database changes: a new
   /// one opened, the previous one closed, or (web) its companion settings
@@ -114,6 +126,7 @@ class PinLockProvider extends ChangeNotifier {
     if (!databaseReady) {
       _prefs = null;
       _hasPin = false;
+      _autoLockMinutes = defaultAutoLockMinutes;
       _status = PinGateStatus.none;
       notifyListeners();
       return;
@@ -130,6 +143,7 @@ class PinLockProvider extends ChangeNotifier {
       _hasPin = false;
       _maxAttempts = defaultMaxAttempts;
       _lockoutMinutes = defaultLockoutMinutes;
+      _autoLockMinutes = defaultAutoLockMinutes;
       _status = PinGateStatus.unlocked;
       notifyListeners();
       return;
@@ -138,6 +152,7 @@ class PinLockProvider extends ChangeNotifier {
     _hasPin = companionPrefs.getString(_prefsKeyPinHash) != null;
     _maxAttempts = companionPrefs.getInt(_prefsKeyMaxAttempts) ?? defaultMaxAttempts;
     _lockoutMinutes = companionPrefs.getInt(_prefsKeyLockoutMinutes) ?? defaultLockoutMinutes;
+    _autoLockMinutes = companionPrefs.getInt(_prefsKeyAutoLockMinutes) ?? defaultAutoLockMinutes;
     _status = _hasPin ? PinGateStatus.locked : PinGateStatus.unlocked;
     notifyListeners();
   }
@@ -160,6 +175,15 @@ class PinLockProvider extends ChangeNotifier {
     if (prefs == null) return;
     _lockoutMinutes = value.clamp(minLockoutMinutes, maxLockoutMinutes);
     await prefs.setInt(_prefsKeyLockoutMinutes, _lockoutMinutes);
+    notifyListeners();
+  }
+
+  /// See [setMaxAttempts] re: validation being the caller's job.
+  Future<void> setAutoLockMinutes(int value) async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    _autoLockMinutes = value.clamp(minAutoLockMinutes, maxAutoLockMinutes);
+    await prefs.setInt(_prefsKeyAutoLockMinutes, _autoLockMinutes);
     notifyListeners();
   }
 
@@ -271,6 +295,18 @@ class PinLockProvider extends ChangeNotifier {
     if (backgroundedAt == null) return;
     final elapsed = (now ?? DateTime.now()).difference(backgroundedAt);
     if (_hasPin && _status == PinGateStatus.unlocked && elapsed >= backgroundGracePeriod) {
+      _status = PinGateStatus.locked;
+      notifyListeners();
+    }
+  }
+
+  /// Locks immediately, with no grace period - called by
+  /// [InactivityLockWatcher] once [autoLockDuration] has passed with no
+  /// pointer/keyboard activity anywhere in the app. No-ops if no PIN is
+  /// configured (nothing to lock to) or already locked - same guard
+  /// [handleForeground] uses.
+  void lockNow() {
+    if (_hasPin && _status == PinGateStatus.unlocked) {
       _status = PinGateStatus.locked;
       notifyListeners();
     }

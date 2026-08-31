@@ -69,6 +69,33 @@ class SettingsScreen extends StatelessWidget {
                     ),
                   ),
           ),
+          // Only meaningful once a PIN actually exists to lock back to -
+          // see PinLockProvider.lockNow, which no-ops without one anyway.
+          if (pinLock.hasPin) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.timer_outlined),
+                title: const Text('Verrouillage automatique'),
+                subtitle: const Text(
+                    'Revient à l\'écran de code PIN après cette durée '
+                    'd\'inactivité'),
+                trailing: DropdownButton<int>(
+                  value: pinLock.autoLockMinutes,
+                  items: [
+                    for (final m in (<int>{1, 2, 5, 10, 15, 30, 60, pinLock.autoLockMinutes}.toList()
+                      ..sort()))
+                      DropdownMenuItem(value: m, child: Text('$m min')),
+                  ],
+                  onChanged: (m) {
+                    if (m != null) {
+                      context.read<PinLockProvider>().setAutoLockMinutes(m);
+                    }
+                  },
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           Card(
             child: ListTile(
