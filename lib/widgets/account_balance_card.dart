@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../models/account.dart';
 import '../models/currency.dart';
@@ -40,6 +41,14 @@ class AccountBalanceCard extends StatelessWidget {
   final double? forecastBalance;
   final String? forecastLabel;
 
+  /// First future date the account's projected balance is expected to dip
+  /// below zero (see [MmexRepository.forecastNegativeDate]) - null hides
+  /// the warning row entirely, whether because the projection stays
+  /// non-negative or because the account is already negative today (that's
+  /// already visible from [balance]'s own red color, so no separate date
+  /// warning is needed on top of it).
+  final DateTime? negativeDate;
+
   const AccountBalanceCard({
     super.key,
     required this.account,
@@ -49,6 +58,7 @@ class AccountBalanceCard extends StatelessWidget {
     this.onTap,
     this.forecastBalance,
     this.forecastLabel,
+    this.negativeDate,
   });
 
   @override
@@ -103,6 +113,27 @@ class AccountBalanceCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: forecastBalance! >= 0 ? AppTheme.positive : AppTheme.negative,
                       ),
+                ),
+              ],
+              if (negativeDate != null) ...[
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, size: 12, color: AppTheme.negative),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        'Négatif dès le ${DateFormat('d MMM', 'fr_FR').format(negativeDate!)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: AppTheme.negative, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ],

@@ -1277,6 +1277,39 @@ class MmexRepository {
     return total;
   }
 
+  /// First future calendar day [accountId]'s projected running balance dips
+  /// below zero, projecting forward from today with the same mechanical
+  /// simulation [forecastAccountBalance] uses (known recurring bills via
+  /// [recurringDailyNet] plus already-recorded future-dated transactions via
+  /// [futureDailyNet]), day by day up to [horizonDays] ahead. Returns null
+  /// if the balance is already negative today - that's a current fact, not
+  /// a future risk to date, same distinction [QueryKind.outlook]'s own
+  /// crossesNegativeOn draws (see query_executor.dart) - or if it stays
+  /// non-negative for the whole horizon.
+  DateTime? forecastNegativeDate(int accountId, {int horizonDays = 365}) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final current = accountBalance(accountId, asOf: today);
+    if (current < 0) return null;
+
+    final target = _addDays(today, horizonDays);
+    final recurring = recurringDailyNet(
+      anchor: target,
+      days: horizonDays + 1,
+      accountId: accountId,
+    );
+    final futureReal = futureDailyNet(after: today, end: target, accountId: accountId);
+
+    var cumulative = current;
+    var cursor = _addDays(today, 1);
+    while (!cursor.isAfter(target)) {
+      cumulative += (recurring[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
+      if (cumulative < 0) return cursor;
+      cursor = _addDays(cursor, 1);
+    }
+    return null;
+  }
+
   /// Whole calendar days from [a] to [b] (both taken as local dates,
   /// ignoring time-of-day). Computed via UTC dates - which have no DST -
   /// so a `.difference().inDays` spanning a spring-forward/fall-back

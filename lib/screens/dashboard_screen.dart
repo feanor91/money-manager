@@ -121,6 +121,9 @@ class DashboardScreen extends StatelessWidget {
       for (final a in accounts)
         a.id: repo.forecastAccountBalance(a.id, forecastDate)
     };
+    final negativeDates = {
+      for (final a in accounts) a.id: repo.forecastNegativeDate(a.id)
+    };
     final categories = {for (final c in repo.getCategories()) c.id: c};
     final recentTx =
         repo.getTransactions(accountId: selectedAccountId, limit: 6);
@@ -249,6 +252,7 @@ class DashboardScreen extends StatelessWidget {
                             .name,
                         forecastBalance: forecastBalances[selectedAccountId],
                         forecastLabel: forecastDateLabel,
+                        negativeDate: negativeDates[selectedAccountId],
                       ),
                     ),
                     const SizedBox(height: AppTheme.gridGap),
@@ -305,6 +309,8 @@ class DashboardScreen extends StatelessWidget {
                                             forecastBalance:
                                                 forecastBalances[account.id],
                                             forecastLabel: forecastDateLabel,
+                                            negativeDate:
+                                                negativeDates[account.id],
                                           ),
                                           Positioned(
                                             top: 6,
@@ -356,6 +362,7 @@ class DashboardScreen extends StatelessWidget {
                                       forecastBalance:
                                           forecastBalances[account.id],
                                       forecastLabel: forecastDateLabel,
+                                      negativeDate: negativeDates[account.id],
                                     ),
                                   ),
                               ],
@@ -547,12 +554,16 @@ class _TotalBalanceCard extends StatelessWidget {
   final double? forecastBalance;
   final String? forecastLabel;
 
+  /// See [AccountBalanceCard.negativeDate].
+  final DateTime? negativeDate;
+
   const _TotalBalanceCard({
     required this.total,
     required this.label,
     this.currency,
     this.forecastBalance,
     this.forecastLabel,
+    this.negativeDate,
   });
 
   @override
@@ -602,6 +613,30 @@ class _TotalBalanceCard extends StatelessWidget {
                 letterSpacing: -1,
               ),
             ),
+          if (negativeDate != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 14, color: Colors.white),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    'Risque de solde négatif dès le '
+                    '${DateFormat('d MMM', 'fr_FR').format(negativeDate!)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
