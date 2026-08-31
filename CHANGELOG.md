@@ -3,6 +3,14 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.87] - 2026-08-31
+
+- fix(nl-query): recognize sur N mois/ans periods and income-by-month
+- feat(ai): add interrupt button, tokens/s, and model name to question dialog
+- feat(ai): add cloud AI backend option (OpenAI-compatible endpoint)
+- feat(security): add configurable inactivity auto-lock
+- feat(dashboard): show forecasted negative-balance date per account
+
 ## [1.0.86] - 2026-08-29
 
 - feat(explorateur): add account filter, select-all/none, square bar corners
