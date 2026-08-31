@@ -17,6 +17,11 @@ import '../services/nl_query/query_executor.dart';
 import '../services/nl_query/query_intent.dart';
 import '../services/nl_query/rule_based_query_parser.dart';
 
+/// Same one-line platform-check convention as dashboard_screen.dart/
+/// transactions_screen.dart - see below for why this matters here too.
+bool get _isAndroidPlatform =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
 const _examples = [
   'Quelles ont été mes dépenses ce mois-ci ?',
   "Combien j'ai dépensé en Alimentation le mois dernier ?",
@@ -88,12 +93,23 @@ class _ChatEntry {
   /// spreadsheet, not just the model's prose).
   final String? csv;
 
+  /// Real generation throughput for a [_AnswerKind.freeform]/[sqlGrounded]
+  /// answer (2026-08-31 user request) - null whenever the backend's own
+  /// response didn't report a real generated-token count (see
+  /// LlmResponse's own doc comment) or for any other answer kind
+  /// (computed/error have no model generation to measure at all) - never
+  /// estimated from elapsed time alone.
+  final double? tokensPerSecond;
+
   const _ChatEntry.user(this.text)
       : isUser = true,
         kind = _AnswerKind.computed,
-        csv = null;
+        csv = null,
+        tokensPerSecond = null;
 
-  const _ChatEntry.assistant(this.text, this.kind, {this.csv}) : isUser = false;
+  const _ChatEntry.assistant(this.text, this.kind,
+      {this.csv, this.tokensPerSecond})
+      : isUser = false;
 }
 
 /// Opens the natural-language query tool as a dialog - same shape as
@@ -159,6 +175,27 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   final _scrollController = ScrollController();
   bool _loading = false;
   final List<_ChatEntry> _messages = [];
+
+  /// Bumped at the start of every [_ask] call and by [_cancelAsk] - see
+  /// [_ask]'s own `reply` closure, which discards a response if this no
+  /// longer matches the generation it captured when it started.
+  int _requestGeneration = 0;
+
+  /// Shown next to the dialog's title (2026-08-31 user request) - see
+  /// currentLlmModelLabel's own doc comment for when this stays null
+  /// (AI disabled, or "Mon PC" mode with no nameable model).
+  String? _modelLabel;
+
+  @override
+  void initState() {
+    super.initState();
+    if (isLocalLlmSupported) {
+      currentLlmModelLabel().then((label) {
+        if (!mounted) return;
+        setState(() => _modelLabel = label);
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -264,10 +301,38 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     );
   }
 
+  /// "Interrompre" (2026-08-31 user request) - invalidates the in-flight
+  /// [_ask] call (see [_requestGeneration]/its `reply` closure) so its
+  /// answer, whenever it eventually arrives, is silently dropped instead of
+  /// popping into the transcript after the user has moved on, and resets
+  /// the UI to ready-for-input immediately.
+  ///
+  /// This can only ever be a *client-side* cancel: every backend here
+  /// (LlamaServerClient/CloudLlmClient) sends `stream: false`, so the
+  /// server has already generated the *entire* answer before any of it
+  /// reaches this app - there is no partial response to truncate, and
+  /// closing the connection can't make already-spent server-side
+  /// compute/cost un-happen. The one case where this genuinely stops real
+  /// work is the desktop build's own spawned local `llama-server.exe`:
+  /// [shutdownLocalLlmEngine] kills that process outright, which does
+  /// immediately free the CPU/GPU it was using - worth doing regardless of
+  /// backend, since it's a no-op everywhere else and the next question
+  /// simply pays a fresh engine's startup cost instead.
+  void _cancelAsk() {
+    _requestGeneration++;
+    setState(() => _loading = false);
+    shutdownLocalLlmEngine();
+  }
+
   Future<void> _ask(String question) async {
     final trimmed = question.trim();
     if (trimmed.isEmpty || _loading) return;
     final history = _history; // captured before this turn's own question
+    // Bumped again by _cancelAsk (or a fresh _ask call) - reply() below
+    // checks this before ever touching state, so a response that arrives
+    // after the user interrupted/moved on is silently discarded instead of
+    // popping up out of nowhere.
+    final myGeneration = ++_requestGeneration;
     _controller.clear();
     setState(() {
       _loading = true;
@@ -275,10 +340,13 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     });
     _scrollToBottom();
 
-    void reply(String text, _AnswerKind kind, {String? csv}) {
+    void reply(String text, _AnswerKind kind,
+        {String? csv, double? tokensPerSecond}) {
+      if (myGeneration != _requestGeneration) return;
       setState(() {
         _loading = false;
-        _messages.add(_ChatEntry.assistant(text, kind, csv: csv));
+        _messages.add(_ChatEntry.assistant(text, kind,
+            csv: csv, tokensPerSecond: tokensPerSecond));
       });
       _scrollToBottom();
     }
@@ -320,15 +388,18 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     if (isLocalLlmSupported &&
         (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
       // dbPath (desktop: the real file path, reopened read-only by the
-      // implementation) vs repo (web: the in-memory database itself -
-      // there is no file to reopen there, see local_llm_manager_web.dart).
-      final sqlAnswer = kIsWeb
+      // implementation) vs repo (web and Android: the in-memory database
+      // itself - there is no file to reopen there, see
+      // local_llm_manager_web.dart/local_llm_manager_io.dart's Android
+      // branch).
+      final sqlAnswer = kIsWeb || _isAndroidPlatform
           ? await askLocalLlmWithFullDataAccess(trimmed,
               repo: repo, history: history)
           : await askLocalLlmWithFullDataAccess(trimmed,
               dbPath: repo.db.label, history: history);
       if (sqlAnswer != null) {
-        reply(sqlAnswer.text, _AnswerKind.sqlGrounded, csv: sqlAnswer.csv);
+        reply(sqlAnswer.text, _AnswerKind.sqlGrounded,
+            csv: sqlAnswer.csv, tokensPerSecond: sqlAnswer.tokensPerSecond);
         return;
       }
     }
@@ -350,13 +421,25 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // distinct from a real computed-from-your-data answer). Only
       // attempted when local AI is actually usable; otherwise there is no
       // model left to ask and the message below is all there is.
-      final freeform =
-          isLocalLlmSupported ? await askLocalLlmFreeform(trimmed) : null;
-      if (freeform != null) {
-        reply(freeform, _AnswerKind.freeform);
-      } else {
-        reply(_notUnderstoodMessage(trimmed, accounts: accounts),
-            _AnswerKind.error);
+      final freeform = isLocalLlmSupported
+          ? await askLocalLlmFreeform(trimmed)
+          : const LlmFreeformUnavailable();
+      switch (freeform) {
+        case LlmFreeformSuccess(:final text, :final tokensPerSecond):
+          reply(text, _AnswerKind.freeform, tokensPerSecond: tokensPerSecond);
+        case LlmFreeformError(:final message):
+          // Told apart from "not understood" (below) on purpose - found
+          // 2026-08-31 that a rate-limited cloud provider (HTTP 429) was
+          // silently swallowed into the generic "je n'ai pas compris cette
+          // question" message, actively misleading: the AI never got a
+          // chance to understand anything, the request itself was rejected.
+          reply(
+              "Le service IA a renvoyé une erreur ($message). Réessaie dans "
+              'quelques instants, ou vérifie les paramètres IA.',
+              _AnswerKind.error);
+        case LlmFreeformUnavailable():
+          reply(_notUnderstoodMessage(trimmed, accounts: accounts),
+              _AnswerKind.error);
       }
       return;
     }
@@ -569,6 +652,15 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                     ),
                 ],
               ),
+              if (entry.tokensPerSecond != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '${entry.tokensPerSecond!.toStringAsFixed(1)} tokens/s',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.colorScheme.outline),
+                  ),
+                ),
             ],
           ),
         ),
@@ -599,8 +691,27 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('Discuter avec mes finances',
-                        style: Theme.of(context).textTheme.titleLarge),
+                    child: Text.rich(
+                      TextSpan(
+                        text: 'Discuter avec mes finances',
+                        style: Theme.of(context).textTheme.titleLarge,
+                        children: _modelLabel == null
+                            ? null
+                            : [
+                                TextSpan(
+                                  text: ' ($_modelLabel)',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .titleSmall
+                                      ?.copyWith(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .outline),
+                                ),
+                              ],
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   if (_messages.isNotEmpty)
                     IconButton(
@@ -650,15 +761,31 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                     ),
             ),
             if (_loading)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text('Réflexion en cours...',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ),
+                    TextButton.icon(
+                      onPressed: _cancelAsk,
+                      icon: const Icon(Icons.stop_circle_outlined, size: 16),
+                      label: const Text('Interrompre'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             Padding(
