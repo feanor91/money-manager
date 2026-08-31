@@ -107,6 +107,16 @@ void main() {
     expect(withoutCategory.intent!.categoryId, isNull);
   });
 
+  test('income "mois par mois" -> adHoc grouped by month, summing deposits '
+      '(2026-08-31 user report: previously always fell through to plain '
+      'incomeTotal, silently ignoring "mois par mois")', () {
+    final result = parse('analyse mes revenus mois par mois sur 1 an');
+    expect(result.intent!.kind, QueryKind.adHoc);
+    expect(result.intent!.adHocGroupBy, AdHocGroupBy.month);
+    expect(result.intent!.adHocTransactionType, AdHocTransactionType.deposit);
+    expect(result.intent!.adHocMetric, AdHocMetric.sum);
+  });
+
   test('account name is resolved and attached regardless of query kind', () {
     final result = parse('mes dépenses sur mon Compte Courant ce mois-ci');
     expect(result.intent!.accountId, compteCourant.id);

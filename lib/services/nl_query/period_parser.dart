@@ -74,12 +74,29 @@ DateRange? parsePeriod(String rawText, {DateTime? now}) {
         start: start, end: start.add(const Duration(days: 7)), label: 'cette semaine');
   }
 
-  final lastNMonths = RegExp(r'(\d+)\s*derniers?\s*mois').firstMatch(text);
+  // "12 derniers mois" (original phrasing) or "sur 12 mois"/"sur 1 an(s)"
+  // (2026-08-31 user report: "analyse mes revenus sur 1 ans mois par mois"
+  // silently fell back to the current-month default, since only the
+  // "derniers" phrasing was recognized) - two separate alternatives rather
+  // than making "derniers" unconditionally optional, so this doesn't start
+  // matching an unrelated "il y a 3 mois j'ai..." kind of mention elsewhere
+  // in a longer question.
+  final lastNMonths =
+      RegExp(r'(\d+)\s*derniers?\s*mois|sur\s+(\d+)\s*mois').firstMatch(text);
   if (lastNMonths != null) {
-    final n = int.tryParse(lastNMonths.group(1)!) ?? 1;
+    final n = int.tryParse(lastNMonths.group(1) ?? lastNMonths.group(2) ?? '') ?? 1;
     final start = DateTime(today.year, today.month - n + 1, 1);
     final end = DateTime(today.year, today.month + 1, 1);
     return DateRange(start: start, end: end, label: 'les $n derniers mois');
+  }
+  final lastNYears =
+      RegExp(r'(\d+)\s*derniers?\s*ans?|sur\s+(\d+)\s*ans?').firstMatch(text);
+  if (lastNYears != null) {
+    final n = int.tryParse(lastNYears.group(1) ?? lastNYears.group(2) ?? '') ?? 1;
+    final start = DateTime(today.year, today.month - (n * 12) + 1, 1);
+    final end = DateTime(today.year, today.month + 1, 1);
+    return DateRange(
+        start: start, end: end, label: 'les $n derniers an${n > 1 ? 's' : ''}');
   }
   final lastNDays = RegExp(r'(\d+)\s*derniers?\s*jours?').firstMatch(text);
   if (lastNDays != null) {

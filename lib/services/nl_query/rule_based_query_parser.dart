@@ -53,6 +53,20 @@ import 'query_intent.dart';
     intent = QueryIntent(kind: QueryKind.balance, period: period, accountId: accountId, asOf: asOf);
   } else if (_mentionsIncome(text) && _mentionsExpense(text)) {
     intent = QueryIntent(kind: QueryKind.incomeVsExpense, period: period, accountId: accountId);
+  } else if (_mentionsIncome(text) && _mentionsPerMonth(text)) {
+    // No QueryKind.incomeByMonth counterpart to expenseByMonth below - the
+    // generic adHoc engine already covers exactly this shape (2026-08-31
+    // user report: "mes revenus mois par mois" always fell through to
+    // incomeTotal's single lump sum, silently ignoring "mois par mois"
+    // since only the expense branch checked for it).
+    intent = QueryIntent(
+      kind: QueryKind.adHoc,
+      period: period,
+      accountId: accountId,
+      adHocMetric: AdHocMetric.sum,
+      adHocTransactionType: AdHocTransactionType.deposit,
+      adHocGroupBy: AdHocGroupBy.month,
+    );
   } else if (_mentionsIncome(text)) {
     intent = QueryIntent(kind: QueryKind.incomeTotal, period: period, accountId: accountId);
   } else if (_mentionsExpense(text) && _mentionsPerMonth(text)) {

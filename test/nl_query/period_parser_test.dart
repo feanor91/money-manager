@@ -86,6 +86,32 @@ void main() {
     expect(range.end, DateTime(2026, 9, 1));
   });
 
+  test('sur 12 mois -> same rolling window as "12 derniers mois" (2026-08-31 '
+      'user report: only the "derniers" phrasing was recognized)', () {
+    final range = parsePeriod('mes revenus sur 12 mois', now: now)!;
+    expect(range.start, DateTime(2025, 9, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
+  test('sur 1 an -> rolling 12-month window', () {
+    final range = parsePeriod('mes revenus sur 1 an', now: now)!;
+    expect(range.start, DateTime(2025, 9, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
+  test('sur 1 ans (common typo, plural on a singular count) -> same as "sur 1 an"',
+      () {
+    final range = parsePeriod('mes revenus sur 1 ans', now: now)!;
+    expect(range.start, DateTime(2025, 9, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
+  test('2 derniers ans -> rolling 24-month window', () {
+    final range = parsePeriod('mes revenus sur les 2 derniers ans', now: now)!;
+    expect(range.start, DateTime(2024, 9, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
   test('les 10 derniers jours -> rolling day window including today', () {
     final range = parsePeriod('mes dépenses sur les 10 derniers jours', now: now)!;
     expect(range.start, DateTime(2026, 7, 26));
