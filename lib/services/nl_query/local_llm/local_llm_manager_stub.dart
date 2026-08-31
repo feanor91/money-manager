@@ -3,6 +3,7 @@ import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
+import 'llm_engine.dart';
 import 'model_catalog.dart';
 import 'sql_query_engine.dart'
     show ChatTurn, SqlGroundedAnswer, defaultSqlSystemPrompt;
@@ -34,6 +35,18 @@ Future<int> localLlmGpuLayers() async => 999;
 Future<void> setLocalLlmGpuLayers(int value) async {}
 Future<bool> isLocalLlmServerReachable() async => false;
 
+Future<String?> currentLlmModelLabel() async => null;
+
+Future<bool> useCloudLlm() async => false;
+Future<void> setUseCloudLlm(bool value) async {}
+
+Future<String> cloudLlmEndpoint() async => '';
+Future<void> setCloudLlmEndpoint(String value) async {}
+Future<String> cloudLlmModel() async => '';
+Future<void> setCloudLlmModel(String value) async {}
+Future<String> cloudLlmApiKey() async => '';
+Future<void> setCloudLlmApiKey(String value) async {}
+
 Future<void> shutdownLocalLlmEngine() async {}
 
 void registerLocalLlmSignalShutdownHook() {}
@@ -48,7 +61,8 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 }) async =>
         (intent: null, periodWasExplicit: false);
 
-Future<String?> askLocalLlmFreeform(String question) async => null;
+Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async =>
+    const LlmFreeformUnavailable();
 
 Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async =>
     null;

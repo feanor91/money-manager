@@ -92,7 +92,7 @@ void main() {
       });
       final client = LlamaServerClient(port);
       final result = await client.ask('quel est mon solde ?');
-      expect(result, '{"kind":"balance"}');
+      expect(result.text, '{"kind":"balance"}');
       expect(capturedBody!['grammar'], isNotEmpty);
       expect(capturedBody!['prompt'], contains('quel est mon solde ?'));
       expect(capturedBody!['prompt'], contains('<|im_start|>system'));
@@ -117,7 +117,7 @@ void main() {
         await request.response.close();
       });
       final client = LlamaServerClient(port);
-      expect(await client.ask('...'), '');
+      expect((await client.ask('...')).text, '');
       client.close();
     });
 
@@ -128,7 +128,34 @@ void main() {
         await request.response.close();
       });
       final client = LlamaServerClient(port, host: '127.0.0.1');
-      expect(await client.ask('...'), 'ok');
+      expect((await client.ask('...')).text, 'ok');
+      client.close();
+    });
+
+    test('computes tokensPerSecond from tokens_predicted and elapsed time', () async {
+      final port = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response
+            .write(jsonEncode({'content': 'ok', 'tokens_predicted': 10}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      final result = await client.ask('...');
+      expect(result.tokensPerSecond, isNotNull);
+      expect(result.tokensPerSecond!, greaterThan(0));
+      client.close();
+    });
+
+    test('tokensPerSecond is null when tokens_predicted is absent - never estimated',
+        () async {
+      final port = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'content': 'ok'}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      final result = await client.ask('...');
+      expect(result.tokensPerSecond, isNull);
       client.close();
     });
   });
@@ -147,7 +174,7 @@ void main() {
       });
       final client = LlamaServerClient(port);
       final result = await client.askFreeform('qui es-tu ?');
-      expect(result, 'Je suis un assistant.');
+      expect(result.text, 'Je suis un assistant.');
       expect(capturedBody!.containsKey('grammar'), isFalse);
       expect(capturedBody!['prompt'], contains('qui es-tu ?'));
       expect(capturedBody!['prompt'], contains('<|im_start|>system'));
@@ -172,7 +199,7 @@ void main() {
         await request.response.close();
       });
       final client = LlamaServerClient(port);
-      expect(await client.askFreeform('...'), '');
+      expect((await client.askFreeform('...')).text, '');
       client.close();
     });
   });
@@ -189,7 +216,7 @@ void main() {
       });
       final client = LlamaServerClient(port);
       final result = await client.askWithSystemPrompt('Un prompt sur mesure.', 'combien ?');
-      expect(result, '{"sql":"SELECT 1"}');
+      expect(result.text, '{"sql":"SELECT 1"}');
       expect(capturedBody!['grammar'], isNotEmpty);
       expect(capturedBody!['prompt'], contains('Un prompt sur mesure.'));
       expect(capturedBody!['prompt'], contains('combien ?'));
@@ -220,7 +247,7 @@ void main() {
       });
       final client = LlamaServerClient(port);
       final result = await client.askFreeformWithSystemPrompt('Formule la réponse.', 'résultat: 42');
-      expect(result, 'Tu as dépensé 42 €.');
+      expect(result.text, 'Tu as dépensé 42 €.');
       expect(capturedBody!.containsKey('grammar'), isFalse);
       expect(capturedBody!['prompt'], contains('Formule la réponse.'));
       expect(capturedBody!['prompt'], contains('résultat: 42'));

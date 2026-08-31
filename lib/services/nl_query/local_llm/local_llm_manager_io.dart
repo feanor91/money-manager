@@ -10,23 +10,110 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../../../state/app_preferences.dart';
 import '../query_intent.dart';
+import 'cloud_llm_client.dart';
 import 'intent_json_codec.dart';
 import 'llama_server_client.dart';
+import 'llm_engine.dart';
 import 'model_catalog.dart';
 import 'model_downloader.dart' as downloader;
 import 'sql_query_engine.dart' as sql_engine;
 
 /// Android also compiles this file (dart.library.io covers both, same
-/// reason as update_prompt_io.dart) but every function gates on
-/// Platform.isWindows first and does nothing on any other platform - this
-/// feature targets Windows desktop only for now (see CLAUDE.md/ROADMAP.md).
+/// reason as update_prompt_io.dart). Windows desktop gets the full local-
+/// model experience below (spawns its own `llama-server.exe`, gated on
+/// [Platform.isWindows] throughout, unchanged since this file's original
+/// Windows-only design) - plus, since 2026-08-31, the option to switch to
+/// the same cloud backend Android uses instead (see [useCloudLlm]).
+/// Android (2026-08-31) only ever has the cloud path - see
+/// [_isAndroid]/[_supported]/[_ensureCloudEngine] - a phone can neither
+/// download a multi-gigabyte model nor spawn a process, so it only ever
+/// talks to an external OpenAI-compatible endpoint ([CloudLlmClient]): a
+/// real hosted provider, or the user's own PC reached remotely (see
+/// cloud_llm_client.dart's doc comment). Every desktop-only setting below
+/// (model selection/download, runtime folder, spawned-server
+/// host/port/context/GPU layers) stays gated on [Platform.isWindows] alone
+/// and is simply never shown to Android by local_llm_settings_card.dart's
+/// Android variant.
+bool get _isAndroid => Platform.isAndroid;
+bool get _supported => Platform.isWindows || Platform.isAndroid;
+
 const _prefsKeyEnabled = 'mmex_local_llm_enabled';
+const _prefsKeyUseCloud = 'mmex_local_llm_use_cloud';
 const _prefsKeySelectedModel = 'mmex_local_llm_selected_model';
 const _prefsKeyServerHost = 'mmex_local_llm_server_host';
 const _prefsKeyServerPort = 'mmex_local_llm_server_port';
 const _prefsKeyContextSize = 'mmex_local_llm_context_size';
 const _prefsKeyGpuLayers = 'mmex_local_llm_gpu_layers';
 const _prefsKeySqlSystemPrompt = 'mmex_local_llm_sql_system_prompt';
+
+/// Whether "Poser une question" talks to a cloud/remote OpenAI-compatible
+/// endpoint ([CloudLlmClient]) instead of this machine's own spawned local
+/// model - always true on Android (there is no other option there, see
+/// this file's own doc comment); on Windows a genuine user choice,
+/// defaulting to false so an existing desktop setup never silently
+/// switches backend under an upgrade. False (never persisted, nothing to
+/// switch) everywhere else.
+Future<bool> useCloudLlm() async {
+  if (_isAndroid) return true;
+  if (!Platform.isWindows) return false;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyUseCloud) == 'true';
+}
+
+Future<void> setUseCloudLlm(bool value) async {
+  if (!Platform.isWindows) return; // Android has no toggle to flip
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyUseCloud, value ? 'true' : 'false');
+  await _disposeEngine();
+}
+
+/// Cloud/remote AI settings - see [useCloudLlm]/[_ensureCloudEngine].
+/// Device-local like every other setting in this file (CLAUDE.md's "must
+/// stay local" exception doesn't apply here either, same reasoning as the
+/// rest of this file: this describes a resource/credential tied to *this
+/// machine*, not a property of the database).
+const _prefsKeyCloudEndpoint = 'mmex_cloud_llm_endpoint';
+const _prefsKeyCloudModel = 'mmex_cloud_llm_model';
+const _prefsKeyCloudApiKey = 'mmex_cloud_llm_api_key';
+
+Future<String> cloudLlmEndpoint() async {
+  if (!_supported) return '';
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudEndpoint) ?? '';
+}
+
+Future<void> setCloudLlmEndpoint(String value) async {
+  if (!_supported) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudEndpoint, value);
+  await _disposeEngine();
+}
+
+Future<String> cloudLlmModel() async {
+  if (!_supported) return '';
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudModel) ?? '';
+}
+
+Future<void> setCloudLlmModel(String value) async {
+  if (!_supported) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudModel, value);
+  await _disposeEngine();
+}
+
+Future<String> cloudLlmApiKey() async {
+  if (!_supported) return '';
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudApiKey) ?? '';
+}
+
+Future<void> setCloudLlmApiKey(String value) async {
+  if (!_supported) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudApiKey, value);
+  await _disposeEngine();
+}
 
 /// Loopback-only by default (nothing outside this PC can reach it unless
 /// the user deliberately opens it up via Settings) - distinct from this
@@ -107,6 +194,15 @@ Future<void> setLocalLlmGpuLayers(int value) async {
 }
 
 Future<bool> isLocalLlmServerReachable() async {
+  if (await useCloudLlm()) {
+    final client = await _buildCloudClient();
+    if (client == null) return false;
+    try {
+      return await client.healthCheck();
+    } finally {
+      client.close();
+    }
+  }
   if (!Platform.isWindows) return false;
   final host = await localLlmServerHost();
   final port = await localLlmServerPort();
@@ -120,20 +216,40 @@ Future<bool> isLocalLlmServerReachable() async {
   }
 }
 
+/// A short human-readable label for whichever model is actually configured
+/// right now - nl_query_dialog.dart shows this next to "Discuter avec mes
+/// finances" (2026-08-31 user request) so it's clear at a glance which
+/// model is answering, especially useful after switching between local/
+/// cloud or between cloud models. Null when nothing meaningful can be
+/// named: AI disabled, or (Windows, "Mon PC" mode) pointed at a remote
+/// llama.cpp server whose model name this app was never told (it only
+/// knows a host/port, not what the user launched the server with).
+Future<String?> currentLlmModelLabel() async {
+  if (!_supported) return null;
+  if (!await isLocalLlmEnabled()) return null;
+  if (await useCloudLlm()) {
+    final model = await cloudLlmModel();
+    return model.isEmpty ? null : model;
+  }
+  if (!Platform.isWindows) return null;
+  final modelId = await selectedLocalLlmModelId();
+  return localLlmModelById(modelId ?? '')?.label;
+}
+
 /// The editable system prompt behind the full-database-access SQL query
 /// mode (see sql_query_engine.dart) - device-local like every other local-AI
 /// setting here, not the database companion file: it's about tuning this
 /// specific installed model's behavior on this machine, not a preference
 /// that should follow the database around.
 Future<String> localLlmSqlSystemPrompt() async {
-  if (!Platform.isWindows) return sql_engine.defaultSqlSystemPrompt;
+  if (!_supported) return sql_engine.defaultSqlSystemPrompt;
   final prefs = await AppPreferences.getInstance();
   return prefs.getString(_prefsKeySqlSystemPrompt) ??
       sql_engine.defaultSqlSystemPrompt;
 }
 
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {
-  if (!Platform.isWindows) return;
+  if (!_supported) return;
   final prefs = await AppPreferences.getInstance();
   final trimmed = value.trim();
   if (trimmed.isEmpty || trimmed == sql_engine.defaultSqlSystemPrompt) {
@@ -144,13 +260,13 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) async {
 }
 
 Future<bool> isLocalLlmEnabled() async {
-  if (!Platform.isWindows) return false;
+  if (!_supported) return false;
   final prefs = await AppPreferences.getInstance();
   return prefs.getString(_prefsKeyEnabled) == 'true';
 }
 
 Future<void> setLocalLlmEnabled(bool value) async {
-  if (!Platform.isWindows) return;
+  if (!_supported) return;
   final prefs = await AppPreferences.getInstance();
   await prefs.setString(_prefsKeyEnabled, value ? 'true' : 'false');
   if (!value) await _disposeEngine();
@@ -232,6 +348,13 @@ String? _engineModelPath;
 /// other way too).
 (String, int, int, int)? _engineConfig;
 
+CloudLlmClient? _cloudClient;
+
+/// (endpoint, model, apiKey) the currently-held [_cloudClient] was built
+/// from - same "notice a config change and rebuild" role as
+/// [_engineConfig] plays for the spawned local server.
+(String, String, String)? _cloudConfig;
+
 Future<void> _disposeEngine() async {
   final client = _serverClient;
   final process = _serverProcess;
@@ -244,6 +367,43 @@ Future<void> _disposeEngine() async {
     process.kill();
     await process.exitCode;
   }
+  _cloudClient?.close();
+  _cloudClient = null;
+  _cloudConfig = null;
+}
+
+/// Builds a fresh, throwaway [CloudLlmClient] from the current cloud
+/// settings - used by [isLocalLlmServerReachable]'s "Tester la connexion"
+/// button, which (unlike [_ensureCloudEngine]) deliberately never reuses
+/// or caches a client so a test always reflects whatever is in the fields
+/// right now, even before "Appliquer" is pressed. Null if either the
+/// endpoint or the model name is blank - nothing meaningful to test yet.
+Future<CloudLlmClient?> _buildCloudClient() async {
+  final endpoint = await cloudLlmEndpoint();
+  final model = await cloudLlmModel();
+  if (endpoint.isEmpty || model.isEmpty) return null;
+  return CloudLlmClient(
+      baseUrl: endpoint, apiKey: await cloudLlmApiKey(), model: model);
+}
+
+/// Android counterpart to [_ensureEngine]'s Windows spawned-server path -
+/// reuses the same [CloudLlmClient] across questions asked within one open
+/// dialog (same rationale as the local engine: no reason to pay any
+/// per-request setup cost twice), rebuilding it only when the endpoint/
+/// model/key actually changed. Null if cloud AI isn't configured yet.
+Future<CloudLlmClient?> _ensureCloudEngine() async {
+  final endpoint = await cloudLlmEndpoint();
+  final model = await cloudLlmModel();
+  if (endpoint.isEmpty || model.isEmpty) return null;
+  final apiKey = await cloudLlmApiKey();
+  final config = (endpoint, model, apiKey);
+
+  if (_cloudClient != null && _cloudConfig == config) return _cloudClient;
+  _cloudClient?.close();
+  final client = CloudLlmClient(baseUrl: endpoint, apiKey: apiKey, model: model);
+  _cloudClient = client;
+  _cloudConfig = config;
+  return client;
 }
 
 /// Called both when the "Poser une question" dialog closes
@@ -278,7 +438,8 @@ void registerLocalLlmSignalShutdownHook() {
 /// port already in use, not enough RAM, corrupt file...) - never surfaced
 /// as a crash, the caller falls back to the rule-based parser exactly as
 /// if AI were disabled.
-Future<LlamaServerClient?> _ensureEngine() async {
+Future<LlmEngine?> _ensureEngine() async {
+  if (await useCloudLlm()) return _ensureCloudEngine();
   if (!await isLocalLlmRuntimeAvailable()) return null;
   final modelId = await selectedLocalLlmModelId();
   final model = localLlmModelById(modelId ?? '') ?? localLlmModels.first;
@@ -340,7 +501,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Payee> payees,
   DateTime? now,
 }) async {
-  if (!Platform.isWindows) return (intent: null, periodWasExplicit: false);
+  if (!_supported) return (intent: null, periodWasExplicit: false);
   if (!await isLocalLlmEnabled()) {
     return (intent: null, periodWasExplicit: false);
   }
@@ -349,7 +510,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   try {
     final raw = await engine.ask(question);
     return decodeIntentJson(
-      raw,
+      raw.text,
       question: question,
       categories: categories,
       accounts: accounts,
@@ -362,22 +523,29 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 }
 
 /// Free-form fallback for a question that matched no financial intent
-/// (see [extractIntentWithLocalLlm]) and no rule-based pattern either -
-/// null under the same conditions (unsupported, disabled, not ready, or
-/// any failure), same never-throws contract, so the caller
-/// (nl_query_dialog.dart) can fall back to the "not understood" message
-/// exactly as if local AI were off.
-Future<String?> askLocalLlmFreeform(String question) async {
-  if (!Platform.isWindows) return null;
-  if (!await isLocalLlmEnabled()) return null;
+/// (see [extractIntentWithLocalLlm]) and no rule-based pattern either - see
+/// [LlmFreeformOutcome] for why this is three-way rather than a plain
+/// nullable success, same never-throws contract as ever (a failure is
+/// reported via [LlmFreeformError], never a thrown exception).
+Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async {
+  if (!_supported) return const LlmFreeformUnavailable();
+  if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
   final engine = await _ensureEngine();
-  if (engine == null) return null;
+  if (engine == null) return const LlmFreeformUnavailable();
   try {
     final raw = await engine.askFreeform(question);
-    final trimmed = raw.trim();
-    return trimmed.isEmpty ? null : trimmed;
-  } catch (_) {
-    return null;
+    final trimmed = raw.text.trim();
+    return trimmed.isEmpty
+        ? const LlmFreeformUnavailable()
+        : LlmFreeformSuccess(trimmed, tokensPerSecond: raw.tokensPerSecond);
+  } catch (e) {
+    // StateError (both backends' own "le service a répondu <code>."/
+    // "connexion impossible" text) unwrapped to its bare .message - avoids
+    // the generic "Bad state: " prefix Dart's default toString() adds,
+    // which would read oddly in a chat bubble. Any other exception type
+    // (a timeout, a socket error) falls back to its own toString() - not
+    // as polished, but still just a short description, never a stack trace.
+    return LlmFreeformError(e is StateError ? e.message : '$e');
   }
 }
 
@@ -455,12 +623,23 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
 }
 
 /// Full-database-access alternative to [extractIntentWithLocalLlm]'s closed
-/// kind/metric/groupBy vocabulary (see sql_query_engine.dart) - opens its
-/// own throwaway read-only connection to [dbPath] (same guarantee as
-/// [openReadOnlyAdHocRepository], disposed here rather than left to the
-/// caller since this function owns its whole lifetime), loads the
-/// user-editable system prompt from Settings, appends the real vocabulary
-/// of the currently-open database to it (see
+/// kind/metric/groupBy vocabulary (see sql_query_engine.dart). Two shapes,
+/// mirroring local_llm_manager_web.dart's own web/desktop split:
+///
+/// - Windows ([dbPath] required): opens its own throwaway read-only
+///   connection to [dbPath] (same guarantee as [openReadOnlyAdHocRepository],
+///   disposed here rather than left to the caller since this function owns
+///   its whole lifetime).
+/// - Android ([repo] required): there is no real filesystem path to reopen
+///   (the database lives in memory, loaded from SAF-read bytes - see
+///   CLAUDE.md's Android file-access notes), so this uses the already-open,
+///   live [repo] directly instead - same trade-off local_llm_manager_web.dart
+///   already accepts for the exact same reason, defended by
+///   sql_query_engine.dart's own SELECT-only SQL validation rather than an
+///   OS-enforced read-only connection.
+///
+/// Either way: loads the user-editable system prompt from Settings, appends
+/// the real vocabulary of the currently-open database to it (see
 /// sql_engine.buildEffectiveSqlSystemPrompt - computed fresh here, never
 /// persisted), and runs the SQL-generate-then-answer flow. Null (never
 /// throws) under the same conditions as every other local-AI entry point
@@ -471,11 +650,34 @@ Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
   MmexRepository? repo,
   List<sql_engine.ChatTurn> history = const [],
 }) async {
-  if (!Platform.isWindows) return null;
-  if (dbPath == null) return null;
+  if (!_supported) return null;
   if (!await isLocalLlmEnabled()) return null;
   final engine = await _ensureEngine();
   if (engine == null) return null;
+
+  if (_isAndroid) {
+    if (repo == null) return null;
+    try {
+      final basePrompt = await localLlmSqlSystemPrompt();
+      final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
+        basePrompt,
+        accounts: repo.getAccounts(),
+        categories: repo.getCategories(onlyActive: false),
+        payees: repo.getPayees(onlyActive: false),
+      );
+      return await sql_engine.answerViaFullSqlAccess(
+        question: question,
+        readOnlyRepo: repo,
+        systemPrompt: systemPrompt,
+        engine: engine,
+        history: history,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  if (dbPath == null) return null;
   final readOnlyRepo = await openReadOnlyAdHocRepository(dbPath);
   if (readOnlyRepo == null) return null;
   try {

@@ -4,7 +4,7 @@ import '../../../data/mmex_repository.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
-import 'llama_server_client.dart';
+import 'llm_engine.dart';
 
 /// Default value for Settings' editable "Prompt IA (accès complet aux
 /// données)" - a from-scratch schema + strict-rules prompt for the
@@ -278,7 +278,13 @@ class SqlGroundedAnswer {
   final String text;
   final String csv;
 
-  const SqlGroundedAnswer({required this.text, required this.csv});
+  /// From the final answer-formatting call's own [LlmResponse] - see
+  /// LlmEngine.askFreeformWithSystemPrompt. Null under the same conditions
+  /// as [LlmResponse.tokensPerSecond] itself (never estimated).
+  final double? tokensPerSecond;
+
+  const SqlGroundedAnswer(
+      {required this.text, required this.csv, this.tokensPerSecond});
 }
 
 /// Escapes one CSV field per RFC 4180: wrap in double quotes (doubling any
@@ -682,7 +688,7 @@ const _maxHistoryTurns = 6;
 /// Recaps the last few turns of the conversation so the model can resolve
 /// a follow-up question ("et sur les 3 dernières années ?", "et pour
 /// Boursorama ?") against what was just discussed - prepended to the new
-/// question before it ever reaches [LlamaServerClient.askWithSystemPrompt].
+/// question before it ever reaches [LlmEngine.askWithSystemPrompt].
 /// Only the SQL-writing call gets this: the answer-formatting call already
 /// receives the *current* question's real query results fresh every time,
 /// and doesn't need yesterday's numbers repeated into it too.
@@ -733,13 +739,13 @@ Future<SqlGroundedAnswer?> answerViaFullSqlAccess({
   required String question,
   required MmexRepository readOnlyRepo,
   required String systemPrompt,
-  required LlamaServerClient engine,
+  required LlmEngine engine,
   List<ChatTurn> history = const [],
 }) async {
   try {
     final rawPlan = await engine.askWithSystemPrompt(
         systemPrompt, '${_formatHistory(history)}$question');
-    final plan = extractValidatedSqlPlan(rawPlan);
+    final plan = extractValidatedSqlPlan(rawPlan.text);
     if (plan == null) return null;
 
     final results = <StepResult>[];
@@ -767,9 +773,13 @@ Future<SqlGroundedAnswer?> answerViaFullSqlAccess({
       _answerFormattingSystemPrompt,
       formattingPrompt,
     );
-    final trimmed = answer.trim();
+    final trimmed = answer.text.trim();
     if (trimmed.isEmpty) return null;
-    return SqlGroundedAnswer(text: trimmed, csv: _resultsToCsv(results));
+    return SqlGroundedAnswer(
+      text: trimmed,
+      csv: _resultsToCsv(results),
+      tokensPerSecond: answer.tokensPerSecond,
+    );
   } catch (_) {
     return null;
   }

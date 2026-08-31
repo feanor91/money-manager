@@ -56,7 +56,7 @@ import '../query_intent.dart';
   // completely different account than the one actually asked about
   // ("compte Boursorama" answered as "Crédit Agricole Compte commun"):
   // the small on-device model can mis-copy the name it's supposed to be
-  // quoting verbatim (see _systemPrompt's "recopie seulement ce que dit
+  // quoting verbatim (see intentSystemPrompt's "recopie seulement ce que dit
   // la question"), and bestNameMatch happily resolves whatever it *did*
   // write to a real, but wrong, account. The field is still used as the
   // signal for *whether* a name was mentioned at all (a null field means

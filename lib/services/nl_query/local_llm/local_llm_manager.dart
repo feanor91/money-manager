@@ -3,9 +3,12 @@ import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
+import 'llm_engine.dart' show LlmFreeformOutcome;
 import 'model_catalog.dart';
 import 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
 
+export 'llm_engine.dart'
+    show LlmFreeformOutcome, LlmFreeformSuccess, LlmFreeformUnavailable, LlmFreeformError;
 export 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
 
 import 'local_llm_manager_stub.dart'
@@ -65,6 +68,37 @@ Future<void> setLocalLlmGpuLayers(int value) =>
 /// externally-run server the user pointed at via host/port.
 Future<bool> isLocalLlmServerReachable() => impl.isLocalLlmServerReachable();
 
+/// A short human-readable label for whichever model is actually configured
+/// right now (a cloud model name, or - desktop only - the selected local
+/// GGUF model's own label) - nl_query_dialog.dart shows this next to
+/// "Discuter avec mes finances" (2026-08-31 user request). Null when AI is
+/// disabled, or the current mode has no nameable model at all (Windows/
+/// web "Mon PC" mode: a remote llama.cpp server whose model name this app
+/// was never told, only its host/port).
+Future<String?> currentLlmModelLabel() => impl.currentLlmModelLabel();
+
+/// Cloud AI settings (2026-08-31) - see cloud_llm_client.dart. On Android
+/// this is the only backend there is (no toggle needed - [useCloudLlm]
+/// always answers true there). On Windows desktop and web, [useCloudLlm]
+/// switches between this and each platform's own existing backend
+/// (desktop: spawns its own local model; web: points at a remote
+/// llama.cpp server via host/port) - defaults to false so an existing
+/// setup never silently switches backend under an upgrade.
+/// [cloudLlmEndpoint] has no trailing slash and includes any version
+/// segment the provider needs (e.g. "https://api.openai.com/v1") - see
+/// CloudLlmClient's own doc comment.
+Future<bool> useCloudLlm() => impl.useCloudLlm();
+Future<void> setUseCloudLlm(bool value) => impl.setUseCloudLlm(value);
+
+Future<String> cloudLlmEndpoint() => impl.cloudLlmEndpoint();
+Future<void> setCloudLlmEndpoint(String value) =>
+    impl.setCloudLlmEndpoint(value);
+Future<String> cloudLlmModel() => impl.cloudLlmModel();
+Future<void> setCloudLlmModel(String value) => impl.setCloudLlmModel(value);
+Future<String> cloudLlmApiKey() => impl.cloudLlmApiKey();
+Future<void> setCloudLlmApiKey(String value) =>
+    impl.setCloudLlmApiKey(value);
+
 /// Call once at app startup (see main.dart) so a still-running
 /// `llama-server.exe` never outlives the app itself - a no-op on any
 /// platform where local AI was never reachable in the first place.
@@ -97,10 +131,11 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
         );
 
 /// Free-form fallback once neither the local AI's intent extractor nor the
-/// rule-based parser recognized [question] as a financial one - null under
-/// the same conditions as [extractIntentWithLocalLlm] (unsupported,
-/// disabled, not ready, or any failure). Never throws.
-Future<String?> askLocalLlmFreeform(String question) =>
+/// rule-based parser recognized [question] as a financial one - see
+/// [LlmFreeformOutcome] for the three possible outcomes (a real answer,
+/// silently unavailable, or a genuine backend error worth telling the user
+/// about). Never throws.
+Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) =>
     impl.askLocalLlmFreeform(question);
 
 /// Opens a throwaway, OS/SQLite-enforced read-only connection to the .mmb

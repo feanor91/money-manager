@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'llm_engine.dart';
+
 /// Only ever imported from local_llm_manager_io.dart, itself only reached
 /// after that file's own `Platform.isWindows` gate - see CLAUDE.md's
 /// conditional-import-shell rule. This file has no `dart:io`/`dart:ffi` of
@@ -66,7 +68,10 @@ number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
 ws ::= | " " | "\n" [ \t]{0,20}
 ''';
 
-const _systemPrompt = '''
+/// The intent-extraction system prompt - public (not `_`-prefixed) so
+/// cloud_llm_client.dart can reuse the exact same wording rather than
+/// duplicating this carefully-tuned prose for a second backend.
+const intentSystemPrompt = '''
 Tu extrais une intention structurée d'une question posée en français sur une base de finances personnelles. Réponds UNIQUEMENT avec un objet JSON, sans aucun texte autour, au format suivant :
 {"kind": "...", "period": "...", "category": "...", "account": "...", "payee": "...", "topN": ..., "metric": "...", "transactionType": "...", "groupBy": "...", "recurringOnly": ...}
 
@@ -93,11 +98,12 @@ N'invente jamais de montant, de date précise, ou de nom de catégorie/compte/ti
 /// `ChatMLFormat()` produced. `/completion` is a raw-text endpoint with no
 /// notion of chat turns on its own, so this formatting has to happen here.
 String chatMlPrompt(String question) =>
-    '<|im_start|>system\n$_systemPrompt<|im_end|>\n'
+    '<|im_start|>system\n$intentSystemPrompt<|im_end|>\n'
     '<|im_start|>user\n$question<|im_end|>\n'
     '<|im_start|>assistant\n';
 
-const _freeformSystemPrompt = '''
+/// See [intentSystemPrompt] - public for the same reason.
+const freeformSystemPrompt = '''
 Tu es un assistant utile qui répond en français, de façon concise. Tu fais partie d'une application de gestion de finances personnelles, mais tu n'as ici accès à aucune donnée financière de l'utilisateur (ni comptes, ni transactions, ni soldes) - si la question porte sur ses dépenses, revenus ou soldes, dis-le et invite-le à la reformuler comme une question sur ses finances plutôt que d'inventer un chiffre.
 ''';
 
@@ -107,7 +113,7 @@ Tu es un assistant utile qui répond en français, de façon concise. Tu fais pa
 /// inlined) purely so it's directly unit-testable the same way
 /// [chatMlPrompt] already is.
 String freeformChatMlPrompt(String question) =>
-    '<|im_start|>system\n$_freeformSystemPrompt<|im_end|>\n'
+    '<|im_start|>system\n$freeformSystemPrompt<|im_end|>\n'
     '<|im_start|>user\n$question<|im_end|>\n'
     '<|im_start|>assistant\n';
 
@@ -126,12 +132,31 @@ String chatMlPromptWithSystem(String systemPrompt, String question) =>
 /// tests) a fake stand-in; spawning/killing the real process, and deciding
 /// what host/port it listens on, is local_llm_manager_io.dart's job, not
 /// this class's.
-class LlamaServerClient {
+class LlamaServerClient implements LlmEngine {
   final int port;
   final String host;
+
+  /// Optional bearer token, sent as `Authorization: Bearer <apiKey>` on
+  /// every request when non-null/non-empty - matches llama-server's own
+  /// `--api-key` flag. Irrelevant (and harmless to leave unset) for a
+  /// loopback-only server the desktop build spawns itself, but this is
+  /// what secures a server reached remotely (see
+  /// local_llm_settings_card.dart's web/Android variants) - without it,
+  /// anyone who finds the address could use the PC's GPU and see its
+  /// answers, since llama-server has no authentication of its own by
+  /// default.
+  final String? apiKey;
+
   final http.Client _client;
 
-  LlamaServerClient(this.port, {this.host = '127.0.0.1'}) : _client = http.Client();
+  LlamaServerClient(this.port, {this.host = '127.0.0.1', this.apiKey})
+      : _client = http.Client();
+
+  Map<String, String> get _headers => {
+        'Content-Type': 'application/json',
+        if (apiKey != null && apiKey!.isNotEmpty)
+          'Authorization': 'Bearer $apiKey',
+      };
 
   /// One-shot, non-polling health check - true only on a 200 from
   /// `/health`, false on any other status, and false on any connection
@@ -143,7 +168,7 @@ class LlamaServerClient {
   Future<bool> healthCheck() async {
     try {
       final response = await _client
-          .get(Uri.parse('http://$host:$port/health'))
+          .get(Uri.parse('http://$host:$port/health'), headers: _headers)
           .timeout(const Duration(seconds: 3));
       return response.statusCode == 200;
     } catch (_) {
@@ -168,7 +193,7 @@ class LlamaServerClient {
       }
       try {
         final response = await _client
-            .get(Uri.parse('http://$host:$port/health'))
+            .get(Uri.parse('http://$host:$port/health'), headers: _headers)
             .timeout(const Duration(seconds: 2));
         if (response.statusCode == 200) return;
       } catch (_) {
@@ -179,16 +204,36 @@ class LlamaServerClient {
     throw StateError("Le serveur n'a pas répondu à temps sur le port $port.");
   }
 
+  /// Parses a `/completion` response into an [LlmResponse] - `content` is
+  /// the generated text; `tokens_predicted` (llama.cpp's own field name for
+  /// the real generated-token count, present on every real llama-server
+  /// response) combined with [elapsedMs] (measured client-side around the
+  /// request - the response carries no server-side timing this class
+  /// currently reads) gives a genuine tokens/second figure. Null rather
+  /// than estimated whenever `tokens_predicted` is missing/zero or nothing
+  /// elapsed - never invented, same rule [LlmResponse] itself documents.
+  LlmResponse _parseResponse(http.Response response, int elapsedMs) {
+    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+    final text = decoded['content'] as String? ?? '';
+    final tokens = decoded['tokens_predicted'] as int?;
+    final tps = (tokens != null && tokens > 0 && elapsedMs > 0)
+        ? tokens / (elapsedMs / 1000)
+        : null;
+    return LlmResponse(text, tokensPerSecond: tps);
+  }
+
   /// Runs a single, stateless question through the model (this app never
   /// keeps a multi-turn chat history - each question is answered fresh)
   /// and returns its raw text response, for intent_json_codec.dart to
   /// decode. Never catches a generation failure - the caller
   /// (local_llm_manager_io.dart) is responsible for that and falling back
   /// to the rule-based parser.
-  Future<String> ask(String question) async {
+  @override
+  Future<LlmResponse> ask(String question) async {
+    final stopwatch = Stopwatch()..start();
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _headers,
       body: jsonEncode({
         'prompt': chatMlPrompt(question),
         'grammar': jsonGrammar,
@@ -198,11 +243,11 @@ class LlamaServerClient {
         'stream': false,
       }),
     );
+    stopwatch.stop();
     if (response.statusCode != 200) {
       throw StateError('llama-server a répondu ${response.statusCode}.');
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    return decoded['content'] as String? ?? '';
+    return _parseResponse(response, stopwatch.elapsedMilliseconds);
   }
 
   /// Same shape as [ask], but no JSON grammar and a plain conversational
@@ -214,10 +259,12 @@ class LlamaServerClient {
   /// [n_predict]/temperature than [ask] on purpose: that one wants a short,
   /// deterministic JSON object, this one wants a normal, natural-sounding
   /// reply.
-  Future<String> askFreeform(String question) async {
+  @override
+  Future<LlmResponse> askFreeform(String question) async {
+    final stopwatch = Stopwatch()..start();
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _headers,
       body: jsonEncode({
         'prompt': freeformChatMlPrompt(question),
         'temperature': 0.7,
@@ -226,11 +273,11 @@ class LlamaServerClient {
         'stream': false,
       }),
     );
+    stopwatch.stop();
     if (response.statusCode != 200) {
       throw StateError('llama-server a répondu ${response.statusCode}.');
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    return decoded['content'] as String? ?? '';
+    return _parseResponse(response, stopwatch.elapsedMilliseconds);
   }
 
   /// Same shape as [ask] (JSON-grammar-constrained, low temperature - a
@@ -243,10 +290,12 @@ class LlamaServerClient {
   /// JOINs/CASE expressions - or a whole multi-step plan object with
   /// several such queries - genuinely needs more tokens than a short
   /// intent JSON object does.
-  Future<String> askWithSystemPrompt(String systemPrompt, String question) async {
+  @override
+  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) async {
+    final stopwatch = Stopwatch()..start();
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _headers,
       body: jsonEncode({
         'prompt': chatMlPromptWithSystem(systemPrompt, question),
         'grammar': jsonGrammar,
@@ -256,11 +305,11 @@ class LlamaServerClient {
         'stream': false,
       }),
     );
+    stopwatch.stop();
     if (response.statusCode != 200) {
       throw StateError('llama-server a répondu ${response.statusCode}.');
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    return decoded['content'] as String? ?? '';
+    return _parseResponse(response, stopwatch.elapsedMilliseconds);
   }
 
   /// Same shape as [askFreeform] (no grammar, prose out), but with a
@@ -278,10 +327,12 @@ class LlamaServerClient {
   /// is not literally unlimited, but comfortably past what any real answer
   /// this app asks for needs, and still leaves headroom in the model's
   /// context window alongside the prompt/vocabulary/query results.
-  Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+  @override
+  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+    final stopwatch = Stopwatch()..start();
     final response = await _client.post(
       Uri.parse('http://$host:$port/completion'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _headers,
       body: jsonEncode({
         'prompt': chatMlPromptWithSystem(systemPrompt, question),
         'temperature': 0.2,
@@ -290,13 +341,14 @@ class LlamaServerClient {
         'stream': false,
       }),
     );
+    stopwatch.stop();
     if (response.statusCode != 200) {
       throw StateError('llama-server a répondu ${response.statusCode}.');
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    return decoded['content'] as String? ?? '';
+    return _parseResponse(response, stopwatch.elapsedMilliseconds);
   }
 
+  @override
   void close() => _client.close();
 }
 

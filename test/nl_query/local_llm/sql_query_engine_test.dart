@@ -7,6 +7,7 @@ import 'package:money_manager/models/account.dart';
 import 'package:money_manager/models/category.dart';
 import 'package:money_manager/models/payee.dart';
 import 'package:money_manager/services/nl_query/local_llm/llama_server_client.dart';
+import 'package:money_manager/services/nl_query/local_llm/llm_engine.dart';
 import 'package:money_manager/services/nl_query/local_llm/sql_query_engine.dart';
 
 /// The real safety boundary against a write is the OS/SQLite-enforced
@@ -663,18 +664,18 @@ class _FakeEngine extends LlamaServerClient {
   _FakeEngine({required this.responses}) : super(1);
 
   @override
-  Future<String> askWithSystemPrompt(String systemPrompt, String question) async {
+  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) async {
     systemPrompts.add(systemPrompt);
     final sep = String.fromCharCode(0);
     prompts.add('$systemPrompt$sep$question');
-    return responses[_call++];
+    return LlmResponse(responses[_call++]);
   }
 
   @override
-  Future<String> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
     final sep = String.fromCharCode(0);
     prompts.add('$systemPrompt$sep$question');
-    return responses[_call++];
+    return LlmResponse(responses[_call++]);
   }
 }
 

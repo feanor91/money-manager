@@ -4,34 +4,53 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../../../state/app_preferences.dart';
 import '../query_intent.dart';
+import 'cloud_llm_client.dart';
 import 'intent_json_codec.dart';
 import 'llama_server_client.dart';
+import 'llm_engine.dart';
 import 'model_catalog.dart';
 import 'sql_query_engine.dart' as sql_engine;
 
 /// Web's local-AI implementation: the browser cannot load a multi-gigabyte
 /// model or spawn a process, so there is no model download, no runtime
-/// folder, and no process management here - the user runs
-/// `llama-server.exe` (or any llama.cpp server build) themselves, on their
-/// PC, pointed at their model, and this file simply talks HTTP to it using
-/// the same pure-HTTP [LlamaServerClient] the desktop build already uses
-/// against its own spawned server. The server's address is the only thing
-/// this implementation needs to know, and it is remembered per browser in
-/// AppPreferences (device-local, like the web file handle itself - see
-/// CLAUDE.md's "Where app preferences/settings live" for the rule and why
-/// this is a legitimate device-local case: the server runs on *this*
-/// machine, it is not a property of the database).
+/// folder, and no process management here. Two backends instead (see
+/// [useCloudLlm]), same choice local_llm_manager_io.dart's desktop build
+/// now offers:
+///
+/// - "Mon PC" (default, unchanged since this file's original design): the
+///   user runs `llama-server.exe` (or any llama.cpp server build)
+///   themselves, on their PC, pointed at their model, and this file talks
+///   HTTP to it via [LlamaServerClient] - its address is host/port below.
+/// - "Cloud" (2026-08-31): talks to any OpenAI-compatible endpoint via
+///   [CloudLlmClient] instead - a real hosted provider, or (see that
+///   class's own doc comment) the same PC reached remotely instead of over
+///   the local network.
+///
+/// Every setting here is remembered per browser in AppPreferences (device-
+/// local, like the web file handle itself - see CLAUDE.md's "Where app
+/// preferences/settings live" for the rule and why this is a legitimate
+/// device-local case: none of this describes a property of the database).
 const _prefsKeyEnabled = 'mmex_local_llm_enabled';
+const _prefsKeyUseCloud = 'mmex_local_llm_use_cloud';
 const _prefsKeyServerHost = 'mmex_local_llm_server_host';
 const _prefsKeyServerPort = 'mmex_local_llm_server_port';
 const _prefsKeySqlSystemPrompt = 'mmex_local_llm_sql_system_prompt';
+const _prefsKeyCloudEndpoint = 'mmex_cloud_llm_endpoint';
+const _prefsKeyCloudModel = 'mmex_cloud_llm_model';
+const _prefsKeyCloudApiKey = 'mmex_cloud_llm_api_key';
 
 const _defaultServerHost = '127.0.0.1';
 const _defaultServerPort = 8792;
 
 LlamaServerClient? _client;
+CloudLlmClient? _cloudClient;
 
-Future<LlamaServerClient?> _ensureClient() async {
+/// (endpoint, model, apiKey) the currently-held [_cloudClient] was built
+/// from - same "notice a config change and rebuild" role
+/// local_llm_manager_io.dart's own `_cloudConfig` plays.
+(String, String, String)? _cloudConfig;
+
+Future<LlamaServerClient?> _ensureLocalClient() async {
   final host = await localLlmServerHost();
   final port = await localLlmServerPort();
   final existing = _client;
@@ -44,9 +63,48 @@ Future<LlamaServerClient?> _ensureClient() async {
   return client;
 }
 
+/// Builds a fresh, throwaway [CloudLlmClient] from the current cloud
+/// settings - used by [isLocalLlmServerReachable]'s "Tester la connexion"
+/// button, which deliberately never reuses or caches a client so a test
+/// always reflects whatever is in the fields right now, even before
+/// "Appliquer" is pressed. Null if either the endpoint or the model name
+/// is blank - nothing meaningful to test yet.
+Future<CloudLlmClient?> _buildCloudClient() async {
+  final endpoint = await cloudLlmEndpoint();
+  final model = await cloudLlmModel();
+  if (endpoint.isEmpty || model.isEmpty) return null;
+  return CloudLlmClient(
+      baseUrl: endpoint, apiKey: await cloudLlmApiKey(), model: model);
+}
+
+Future<CloudLlmClient?> _ensureCloudClient() async {
+  final endpoint = await cloudLlmEndpoint();
+  final model = await cloudLlmModel();
+  if (endpoint.isEmpty || model.isEmpty) return null;
+  final apiKey = await cloudLlmApiKey();
+  final config = (endpoint, model, apiKey);
+
+  if (_cloudClient != null && _cloudConfig == config) return _cloudClient;
+  _cloudClient?.close();
+  final client = CloudLlmClient(baseUrl: endpoint, apiKey: apiKey, model: model);
+  _cloudClient = client;
+  _cloudConfig = config;
+  return client;
+}
+
+/// Picks whichever backend [useCloudLlm] currently selects - the single
+/// entry point every question-answering function below goes through.
+Future<LlmEngine?> _ensureEngine() async {
+  if (await useCloudLlm()) return _ensureCloudClient();
+  return _ensureLocalClient();
+}
+
 Future<void> _disposeClient() async {
   _client?.close();
   _client = null;
+  _cloudClient?.close();
+  _cloudClient = null;
+  _cloudConfig = null;
 }
 
 Future<bool> isLocalLlmEnabled() async {
@@ -58,6 +116,22 @@ Future<void> setLocalLlmEnabled(bool value) async {
   final prefs = await AppPreferences.getInstance();
   await prefs.setString(_prefsKeyEnabled, value ? 'true' : 'false');
   if (!value) await _disposeClient();
+}
+
+/// Whether "Poser une question" talks to a cloud/remote OpenAI-compatible
+/// endpoint ([CloudLlmClient]) instead of a llama.cpp server pointed at by
+/// host/port ([LlamaServerClient]) - see this file's own doc comment.
+/// Defaults to false (unchanged pre-2026-08-31 behavior) so an existing
+/// setup never silently switches backend under an upgrade.
+Future<bool> useCloudLlm() async {
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyUseCloud) == 'true';
+}
+
+Future<void> setUseCloudLlm(bool value) async {
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyUseCloud, value ? 'true' : 'false');
+  await _disposeClient();
 }
 
 Future<String?> selectedLocalLlmModelId() async => null;
@@ -112,6 +186,15 @@ void registerLocalLlmSignalShutdownHook() {}
 /// per-request timeout is what bounds the wait, same as desktop's
 /// never-throws, fall-back-to-rule-parser contract).
 Future<bool> isLocalLlmServerReachable() async {
+  if (await useCloudLlm()) {
+    final client = await _buildCloudClient();
+    if (client == null) return false;
+    try {
+      return await client.healthCheck();
+    } finally {
+      client.close();
+    }
+  }
   final host = await localLlmServerHost();
   final port = await localLlmServerPort();
   final client = LlamaServerClient(port, host: host);
@@ -126,6 +209,55 @@ Future<bool> isLocalLlmServerReachable() async {
   }
 }
 
+/// See local_llm_manager_io.dart's own copy - null in "Mon PC" mode (a
+/// remote llama.cpp server whose model name this app was never told, only
+/// its host/port).
+Future<String?> currentLlmModelLabel() async {
+  if (!await isLocalLlmEnabled()) return null;
+  if (await useCloudLlm()) {
+    final model = await cloudLlmModel();
+    return model.isEmpty ? null : model;
+  }
+  return null;
+}
+
+/// Cloud/remote AI settings (2026-08-31) - see [useCloudLlm]/
+/// cloud_llm_client.dart. [cloudLlmEndpoint] has no trailing slash and
+/// includes any version segment the provider needs (e.g.
+/// "https://api.openai.com/v1") - see CloudLlmClient's own doc comment.
+Future<String> cloudLlmEndpoint() async {
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudEndpoint) ?? '';
+}
+
+Future<void> setCloudLlmEndpoint(String value) async {
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudEndpoint, value);
+  await _disposeClient();
+}
+
+Future<String> cloudLlmModel() async {
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudModel) ?? '';
+}
+
+Future<void> setCloudLlmModel(String value) async {
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudModel, value);
+  await _disposeClient();
+}
+
+Future<String> cloudLlmApiKey() async {
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getString(_prefsKeyCloudApiKey) ?? '';
+}
+
+Future<void> setCloudLlmApiKey(String value) async {
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setString(_prefsKeyCloudApiKey, value);
+  await _disposeClient();
+}
+
 Future<({QueryIntent? intent, bool periodWasExplicit})>
     extractIntentWithLocalLlm(
   String question, {
@@ -137,12 +269,12 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   if (!await isLocalLlmEnabled()) {
     return (intent: null, periodWasExplicit: false);
   }
-  final client = await _ensureClient();
-  if (client == null) return (intent: null, periodWasExplicit: false);
+  final engine = await _ensureEngine();
+  if (engine == null) return (intent: null, periodWasExplicit: false);
   try {
-    final raw = await client.ask(question);
+    final raw = await engine.ask(question);
     return decodeIntentJson(
-      raw,
+      raw.text,
       question: question,
       categories: categories,
       accounts: accounts,
@@ -154,16 +286,18 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   }
 }
 
-Future<String?> askLocalLlmFreeform(String question) async {
-  if (!await isLocalLlmEnabled()) return null;
-  final client = await _ensureClient();
-  if (client == null) return null;
+Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async {
+  if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
+  final engine = await _ensureEngine();
+  if (engine == null) return const LlmFreeformUnavailable();
   try {
-    final raw = await client.askFreeform(question);
-    final trimmed = raw.trim();
-    return trimmed.isEmpty ? null : trimmed;
-  } catch (_) {
-    return null;
+    final raw = await engine.askFreeform(question);
+    final trimmed = raw.text.trim();
+    return trimmed.isEmpty
+        ? const LlmFreeformUnavailable()
+        : LlmFreeformSuccess(trimmed, tokensPerSecond: raw.tokensPerSecond);
+  } catch (e) {
+    return LlmFreeformError(e is StateError ? e.message : '$e');
   }
 }
 
@@ -204,8 +338,8 @@ Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
 }) async {
   if (!await isLocalLlmEnabled()) return null;
   if (repo == null) return null;
-  final client = await _ensureClient();
-  if (client == null) return null;
+  final engine = await _ensureEngine();
+  if (engine == null) return null;
   try {
     final basePrompt = await localLlmSqlSystemPrompt();
     final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
@@ -218,7 +352,7 @@ Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
       question: question,
       readOnlyRepo: repo,
       systemPrompt: systemPrompt,
-      engine: client,
+      engine: engine,
       history: history,
     );
   } catch (_) {
