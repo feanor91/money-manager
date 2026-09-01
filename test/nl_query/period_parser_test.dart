@@ -112,6 +112,42 @@ void main() {
     expect(range.end, DateTime(2026, 9, 1));
   });
 
+  test('sur les 5 dernières années (feminine agreement with "années", the '
+      'normal French word for "years" here) -> rolling 60-month window - '
+      'regression test for the 2026-09-02 user report that this exact '
+      'phrasing silently fell back to the current month, since the old '
+      'regex only ever recognized the masculine "an(s)" unit, never '
+      '"année(s)", and only "derniers" (masculine), never "dernières"',
+      () {
+    final range = parsePeriod('analyse tout sur les 5 dernières années', now: now)!;
+    expect(range.start, DateTime(2021, 9, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
+  test('every French gender/number form of "dernier(s)/dernière(s) an(s)/'
+      'année(s)" is recognized the same way', () {
+    for (final phrase in [
+      'mes revenus sur les 3 derniers ans',
+      'mes revenus sur les 3 dernières années',
+      'mes revenus sur les 3 derniers années', // real speakers do mix these
+      'mes revenus sur les 3 dernières ans',
+      'mes revenus les 3 dernières années', // no "sur" at all
+      'mes revenus ces 3 dernières années', // "ces" instead of "sur"
+    ]) {
+      final range = parsePeriod(phrase, now: now);
+      expect(range, isNotNull, reason: '"$phrase" should be recognized');
+      expect(range!.start, DateTime(2023, 9, 1), reason: phrase);
+      expect(range.end, DateTime(2026, 9, 1), reason: phrase);
+    }
+  });
+
+  test('ces 6 derniers mois ("ces" instead of "sur"/"depuis") -> rolling '
+      '6-month window', () {
+    final range = parsePeriod('mes dépenses ces 6 derniers mois', now: now)!;
+    expect(range.start, DateTime(2026, 3, 1));
+    expect(range.end, DateTime(2026, 9, 1));
+  });
+
   test('les 10 derniers jours -> rolling day window including today', () {
     final range = parsePeriod('mes dépenses sur les 10 derniers jours', now: now)!;
     expect(range.start, DateTime(2026, 7, 26));

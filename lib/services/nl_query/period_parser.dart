@@ -84,16 +84,34 @@ DateRange? parsePeriod(String rawText, {DateTime? now}) {
   // separate alternatives rather than making "derniers" unconditionally
   // optional, so this doesn't start matching an unrelated "il y a 3 mois
   // j'ai..." kind of mention elsewhere in a longer question.
-  final lastNMonths = RegExp(r'(\d+)\s*derniers?\s*mois|(?:sur|depuis)\s+(\d+)\s*mois')
-      .firstMatch(text);
+  //
+  // 2026-09-02 user report: "sur les 5 dernières années" *still* silently
+  // fell back to the current month, despite the fix above - "dernières" is
+  // the feminine plural of "dernier" (agreeing with the feminine "années"),
+  // which `derniers?` never matched (masculine only) - and "années" itself
+  // was never recognized at all, only the masculine "an(s)" ("cinq derniers
+  // ans" is what the old regex actually required, which is not how a French
+  // speaker asking about years actually phrases it - "années" is the normal
+  // word). `derniere?s?` below covers all four forms (dernier/derniers/
+  // dernière/dernières - accents already stripped by `foldDiacritics`
+  // above, hence no "è"), and the unit alternation covers "an(s)" *and*
+  // "année(s)". Also accepts an optional "les" after "sur"/"depuis" (natural
+  // in French: "sur *les* 5 dernières années") and the standalone-with-"les"
+  // form ("les 5 dernières années" with no leading preposition at all).
+  final lastNMonths = RegExp(
+    r'(?:les\s+)?(\d+)\s*derniere?s?\s*mois'
+    r'|(?:sur|depuis|ces)\s+(?:les\s+)?(\d+)\s*(?:derniere?s?\s*)?mois',
+  ).firstMatch(text);
   if (lastNMonths != null) {
     final n = int.tryParse(lastNMonths.group(1) ?? lastNMonths.group(2) ?? '') ?? 1;
     final start = DateTime(today.year, today.month - n + 1, 1);
     final end = DateTime(today.year, today.month + 1, 1);
     return DateRange(start: start, end: end, label: 'les $n derniers mois');
   }
-  final lastNYears = RegExp(r'(\d+)\s*derniers?\s*ans?|(?:sur|depuis)\s+(\d+)\s*ans?')
-      .firstMatch(text);
+  final lastNYears = RegExp(
+    r'(?:les\s+)?(\d+)\s*derniere?s?\s*(?:annees?|ans?)'
+    r'|(?:sur|depuis|ces)\s+(?:les\s+)?(\d+)\s*(?:derniere?s?\s*)?(?:annees?|ans?)',
+  ).firstMatch(text);
   if (lastNYears != null) {
     final n = int.tryParse(lastNYears.group(1) ?? lastNYears.group(2) ?? '') ?? 1;
     final start = DateTime(today.year, today.month - (n * 12) + 1, 1);
