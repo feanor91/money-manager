@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -13,8 +14,17 @@ import 'accounts_screen.dart';
 import 'budget_screen.dart';
 import 'dashboard_screen.dart';
 import 'recurring_screen.dart';
+import 'simulation_screen.dart';
 import 'spending_explorer_screen.dart';
 import 'transactions_screen.dart';
+
+/// Same one-line platform-check convention as transactions_screen.dart/
+/// dashboard_screen.dart - gates [SimulationScreen] off Android entirely
+/// (2026-09-02 user request: "je ne vais utiliser cette fonctionnalité que
+/// sur la version web et desktop") - never added to [_HomeShellState._screens]
+/// or its nav destinations there at all, not just hidden.
+bool get _isAndroidPlatform =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
 /// Bottom navigation shell holding the main sections of the app.
 class HomeShell extends StatefulWidget {
@@ -33,14 +43,15 @@ class _HomeShellState extends State<HomeShell> {
   // a placeholder.
   String? _version;
 
-  static const _screens = [
-    DashboardScreen(),
-    TransactionsScreen(),
-    BudgetScreen(),
-    RecurringScreen(),
-    AccountsScreen(),
-    SpendingExplorerScreen(),
-  ];
+  List<Widget> get _screens => [
+        const DashboardScreen(),
+        const TransactionsScreen(),
+        const BudgetScreen(),
+        const RecurringScreen(),
+        const AccountsScreen(),
+        const SpendingExplorerScreen(),
+        if (!_isAndroidPlatform) const SimulationScreen(),
+      ];
 
   /// Same breakpoint already used elsewhere in the app (the ledger
   /// table/cards split, the category spend analyzer's stacked panels) for
@@ -59,10 +70,16 @@ class _HomeShellState extends State<HomeShell> {
 
   /// Tucked behind the "Plus" overflow item on a narrow phone - reference/
   /// analysis screens visited less often day-to-day than the four above.
-  static const _overflowNavItems = [
-    _NavItem(screenIndex: 4, icon: Icons.account_balance_outlined, selectedIcon: Icons.account_balance, label: 'Comptes'),
-    _NavItem(screenIndex: 5, icon: Icons.query_stats_outlined, selectedIcon: Icons.query_stats, label: 'Explorateur'),
-  ];
+  /// [SimulationScreen]'s own entry only exists here at all off Android
+  /// (see [_isAndroidPlatform]) - its `screenIndex` (6) is only ever valid
+  /// when [_screens] actually included it, which is exactly the same
+  /// condition.
+  List<_NavItem> get _overflowNavItems => [
+        const _NavItem(screenIndex: 4, icon: Icons.account_balance_outlined, selectedIcon: Icons.account_balance, label: 'Comptes'),
+        const _NavItem(screenIndex: 5, icon: Icons.query_stats_outlined, selectedIcon: Icons.query_stats, label: 'Explorateur'),
+        if (!_isAndroidPlatform)
+          const _NavItem(screenIndex: 6, icon: Icons.insights_outlined, selectedIcon: Icons.insights, label: 'Simulation'),
+      ];
 
   @override
   void initState() {

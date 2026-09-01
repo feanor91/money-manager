@@ -5,6 +5,15 @@ courses, pas des engagements.
 
 ## Suggestions (à valider avant de s'y lancer)
 
+- **Simulation long terme (retraite & scénarios sur les opérations
+  récurrentes)** - pouvoir ajuster de nombreux paramètres (désactiver/
+  modifier une opération récurrente réelle, en ajouter une virtuelle,
+  un événement ponctuel) et projeter le solde sur plusieurs années,
+  calcul 100% déterministe (jamais via l'IA, fiabilité explicitement
+  demandée par l'utilisateur, 2026-09-02). En phase de planification -
+  voir `PLAN_SIMULATION_LONG_TERME.md` pour le détail (ce qui existe déjà
+  et sera réutilisé, questions ouvertes, découpage proposé en plusieurs
+  sessions) avant de lancer le développement.
 - **Rappels/notifications** pour les opérations récurrentes à venir
   (notification Android le jour J plutôt que seulement à l'ouverture de
   l'app).

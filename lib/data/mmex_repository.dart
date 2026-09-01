@@ -5,6 +5,7 @@ import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
 import '../models/recurrence.dart';
+import '../models/sim_scenario.dart';
 import '../models/transaction.dart';
 import 'mmex_database.dart';
 
@@ -161,6 +162,59 @@ class MmexRepository {
     // category's id means this virtual category is an artificial
     // subdivision nested under it instead - see VirtualBudgetCategory.
     _tryAddColumn('APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES', 'PARENT_CATEGID', 'INTEGER');
+
+    // Long-term "what if" scenarios (PLAN_SIMULATION_LONG_TERME.md, phase
+    // 1, 2026-09-02) - same split as the budget scenarios above: a
+    // scenario row is just a name, everything it actually changes lives in
+    // the three tables below it. Never touches BILLSDEPOSITS_V1/
+    // CHECKINGACCOUNT_V1 - see MmexRepository.simulatedMonthlyNet.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_SCENARIOS (
+        SCENARIOID INTEGER PRIMARY KEY AUTOINCREMENT,
+        NAME TEXT NOT NULL,
+        CREATED_AT TEXT NOT NULL,
+        UPDATED_AT TEXT NOT NULL
+      )
+    ''');
+    // A scenario's change to one real recurring bill - see SimBillOverride's
+    // own doc comment for why this is two independent, composable columns
+    // rather than one "changes to X starting on date Y" field.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_BILL_OVERRIDES (
+        SCENARIOID INTEGER NOT NULL,
+        BILLID INTEGER NOT NULL,
+        DISABLED_FROM TEXT,
+        AMOUNT_OVERRIDE REAL,
+        PRIMARY KEY (SCENARIOID, BILLID)
+      )
+    ''');
+    // A recurring operation that exists only inside this scenario, never in
+    // BILLSDEPOSITS_V1 - see SimVirtualBill.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_VIRTUAL_BILLS (
+        VIRTUALBILLID INTEGER PRIMARY KEY AUTOINCREMENT,
+        SCENARIOID INTEGER NOT NULL,
+        ACCOUNTID INTEGER NOT NULL,
+        LABEL TEXT NOT NULL,
+        TRANSCODE TEXT NOT NULL,
+        AMOUNT REAL NOT NULL,
+        START_DATE TEXT NOT NULL,
+        PERIOD TEXT NOT NULL,
+        NUM_OCCURRENCES INTEGER NOT NULL DEFAULT -1
+      )
+    ''');
+    // A single hypothetical transaction (not recurring) - see SimOneOffEvent.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_ONE_OFF_EVENTS (
+        EVENTID INTEGER PRIMARY KEY AUTOINCREMENT,
+        SCENARIOID INTEGER NOT NULL,
+        ACCOUNTID INTEGER NOT NULL,
+        LABEL TEXT NOT NULL,
+        TRANSCODE TEXT NOT NULL,
+        AMOUNT REAL NOT NULL,
+        DATE TEXT NOT NULL
+      )
+    ''');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1956,12 +2010,31 @@ class MmexRepository {
   }) {
     final start = DateTime(anchor.year, anchor.month - months + 1, 1);
     final end = DateTime(anchor.year, anchor.month + 1, 0);
+    return _monthlyNetForBills(getBillDeposits(),
+        start: start, end: end, months: months, accountId: accountId);
+  }
+
+  /// Shared bucketing core behind [recurringMonthlyNet] and
+  /// [simulatedMonthlyNet] - given an already-resolved list of bill-shaped
+  /// templates (real ones for the former; real (possibly overridden) plus
+  /// virtual ones for the latter, see [_effectiveBillsForScenario]),
+  /// projects each forward and buckets signed amounts by month. One
+  /// mechanism behind both, so a fix to the projection math can never
+  /// apply to only one of them.
+  Map<DateTime, double> _monthlyNetForBills(
+    List<BillDeposit> bills, {
+    required DateTime start,
+    required DateTime end,
+    required int months,
+    int? accountId,
+    Map<int, DateTime> disabledFromByBillId = const {},
+  }) {
     final result = <DateTime, double>{
       for (var i = 0; i < months; i++)
         DateTime(start.year, start.month + i, 1): 0.0,
     };
 
-    for (final bill in getBillDeposits()) {
+    for (final bill in bills) {
       if (bill.paused) continue;
       final involvesAccount = accountId == null ||
           bill.accountId == accountId ||
@@ -1970,12 +2043,235 @@ class MmexRepository {
       if (accountId == null && bill.transCode == TransCode.transfer) continue;
 
       final signedAmount = _billSignedAmount(bill, accountId);
+      final disabledFrom = disabledFromByBillId[bill.id];
       for (final occurrence in _occurrencesInRange(bill, start, end)) {
+        if (disabledFrom != null && !occurrence.isBefore(disabledFrom)) continue;
         final bucket = DateTime(occurrence.year, occurrence.month, 1);
         final current = result[bucket];
         if (current == null) continue;
         result[bucket] = current + signedAmount;
       }
+    }
+    return result;
+  }
+
+  /// Public wrapper around the private occurrence-projection engine, for
+  /// callers outside this file that need to project a single bill-shaped
+  /// template (real or, via [SimVirtualBill.toBillDeposit], scenario-only)
+  /// without going through a whole [_monthlyNetForBills] bucketing pass -
+  /// currently unused internally, kept for future simulation UI code that
+  /// wants to show individual occurrence dates for a scenario adjustment.
+  List<DateTime> occurrencesForBill(BillDeposit bill, DateTime start, DateTime end) =>
+      _occurrencesInRange(bill, start, end);
+
+  // ---- Long-term "what if" scenarios (PLAN_SIMULATION_LONG_TERME.md,
+  // phase 1) - this app's own tables, never touching BILLSDEPOSITS_V1/
+  // CHECKINGACCOUNT_V1. Same CRUD shape as the budget scenarios above. ----
+
+  List<SimScenario> getSimScenarios() {
+    final rows = db.query('SELECT * FROM APP_SIM_SCENARIOS ORDER BY UPDATED_AT DESC');
+    return rows.map(SimScenario.fromRow).toList();
+  }
+
+  int createSimScenario(String name) {
+    final now = DateTime.now().toIso8601String();
+    return db.execute(
+      'INSERT INTO APP_SIM_SCENARIOS (NAME, CREATED_AT, UPDATED_AT) VALUES (?, ?, ?)',
+      [name, now, now],
+    );
+  }
+
+  void renameSimScenario(int scenarioId, String name) {
+    db.execute(
+      'UPDATE APP_SIM_SCENARIOS SET NAME = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [name, DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Deletes [scenarioId] and every adjustment saved under it - other
+  /// scenarios (and the real recurring bills/transactions) are untouched.
+  void deleteSimScenario(int scenarioId) {
+    db.execute('DELETE FROM APP_SIM_BILL_OVERRIDES WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
+  }
+
+  List<SimBillOverride> getSimBillOverrides(int scenarioId) {
+    final rows = db.query(
+      'SELECT * FROM APP_SIM_BILL_OVERRIDES WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return rows.map(SimBillOverride.fromRow).toList();
+  }
+
+  /// One override per (scenario, bill) - a second call for the same pair
+  /// replaces the first (`INSERT ... ON CONFLICT DO UPDATE`), never leaves
+  /// stale duplicate rows behind. Pass both [disabledFrom]/[amountOverride]
+  /// as null (both defaults) to mean "no change at all" - equivalent to,
+  /// but distinct from, [deleteSimBillOverride]: a caller can use either
+  /// depending on whether it wants to keep a "touched but reset" row
+  /// around (this) or remove the row entirely (that).
+  void upsertSimBillOverride(
+    int scenarioId,
+    int billId, {
+    DateTime? disabledFrom,
+    double? amountOverride,
+  }) {
+    db.execute(
+      'INSERT INTO APP_SIM_BILL_OVERRIDES (SCENARIOID, BILLID, DISABLED_FROM, AMOUNT_OVERRIDE) '
+      'VALUES (?, ?, ?, ?) '
+      'ON CONFLICT(SCENARIOID, BILLID) DO UPDATE SET '
+      'DISABLED_FROM = excluded.DISABLED_FROM, AMOUNT_OVERRIDE = excluded.AMOUNT_OVERRIDE',
+      [scenarioId, billId, disabledFrom?.toIso8601String(), amountOverride],
+    );
+  }
+
+  void deleteSimBillOverride(int scenarioId, int billId) {
+    db.execute(
+      'DELETE FROM APP_SIM_BILL_OVERRIDES WHERE SCENARIOID = ? AND BILLID = ?',
+      [scenarioId, billId],
+    );
+  }
+
+  List<SimVirtualBill> getSimVirtualBills(int scenarioId) {
+    final rows = db.query(
+      'SELECT * FROM APP_SIM_VIRTUAL_BILLS WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return rows.map(SimVirtualBill.fromRow).toList();
+  }
+
+  int addSimVirtualBill({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime startDate,
+    required RecurrencePeriod period,
+    int numOccurrences = -1,
+  }) {
+    return db.execute(
+      'INSERT INTO APP_SIM_VIRTUAL_BILLS '
+      '(SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, START_DATE, PERIOD, NUM_OCCURRENCES) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        scenarioId,
+        accountId,
+        label,
+        transCodeToString(transCode),
+        amount,
+        startDate.toIso8601String(),
+        period.name,
+        numOccurrences,
+      ],
+    );
+  }
+
+  void deleteSimVirtualBill(int virtualBillId) {
+    db.execute('DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE VIRTUALBILLID = ?', [virtualBillId]);
+  }
+
+  List<SimOneOffEvent> getSimOneOffEvents(int scenarioId) {
+    final rows = db.query(
+      'SELECT * FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    return rows.map(SimOneOffEvent.fromRow).toList();
+  }
+
+  int addSimOneOffEvent({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime date,
+  }) {
+    return db.execute(
+      'INSERT INTO APP_SIM_ONE_OFF_EVENTS (SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, DATE) '
+      'VALUES (?, ?, ?, ?, ?, ?)',
+      [scenarioId, accountId, label, transCodeToString(transCode), amount, date.toIso8601String()],
+    );
+  }
+
+  void deleteSimOneOffEvent(int eventId) {
+    db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE EVENTID = ?', [eventId]);
+  }
+
+  /// Merges the real recurring bills with [scenarioId]'s overrides/virtual
+  /// bills into a single bill-shaped list [_monthlyNetForBills] can project
+  /// exactly like it already does for the unmodified real schedule - a
+  /// disabled real bill is dropped from [disabledFromByBillId] (checked
+  /// per-occurrence, not per-bill, so occurrences before the disable date
+  /// still count), an amount-overridden one is swapped via
+  /// [BillDeposit.copyWith], and each virtual bill is appended via
+  /// [SimVirtualBill.toBillDeposit]. A real bill the user already paused
+  /// (see [BillDeposit.paused]) is included here unchanged - still excluded
+  /// downstream by [_monthlyNetForBills]'s own `if (bill.paused) continue`,
+  /// same as every other caller of that method.
+  ({List<BillDeposit> bills, Map<int, DateTime> disabledFromByBillId})
+      _effectiveBillsForScenario(int scenarioId) {
+    final overridesByBillId = {
+      for (final o in getSimBillOverrides(scenarioId)) o.billId: o,
+    };
+    final disabledFromByBillId = <int, DateTime>{};
+    final bills = <BillDeposit>[];
+    for (final bill in getBillDeposits()) {
+      final override = overridesByBillId[bill.id];
+      if (override == null) {
+        bills.add(bill);
+        continue;
+      }
+      if (override.disabledFrom != null) {
+        disabledFromByBillId[bill.id] = override.disabledFrom!;
+      }
+      bills.add(override.amountOverride != null
+          ? bill.copyWith(amount: override.amountOverride)
+          : bill);
+    }
+    for (final virtual in getSimVirtualBills(scenarioId)) {
+      bills.add(virtual.toBillDeposit());
+    }
+    return (bills: bills, disabledFromByBillId: disabledFromByBillId);
+  }
+
+  /// Scenario-aware counterpart to [recurringMonthlyNet] - same signature
+  /// and bucketing, but projects [scenarioId]'s effective bill set (see
+  /// [_effectiveBillsForScenario]) instead of the unmodified real one, and
+  /// also folds in the scenario's one-off events. Never writes anything -
+  /// purely a read/compute, safe to call as often as the UI needs to
+  /// re-project after an edit. 100% deterministic Dart arithmetic over
+  /// already-fetched rows, no AI involved anywhere in this path (fiabilité
+  /// explicitly requested by the user, 2026-09-02) - see
+  /// PLAN_SIMULATION_LONG_TERME.md.
+  Map<DateTime, double> simulatedMonthlyNet({
+    required int scenarioId,
+    required DateTime anchor,
+    required int months,
+    int? accountId,
+  }) {
+    final start = DateTime(anchor.year, anchor.month - months + 1, 1);
+    final end = DateTime(anchor.year, anchor.month + 1, 0);
+    final effective = _effectiveBillsForScenario(scenarioId);
+    final result = Map<DateTime, double>.from(_monthlyNetForBills(
+      effective.bills,
+      start: start,
+      end: end,
+      months: months,
+      accountId: accountId,
+      disabledFromByBillId: effective.disabledFromByBillId,
+    ));
+
+    for (final event in getSimOneOffEvents(scenarioId)) {
+      if (accountId != null && event.accountId != accountId) continue;
+      if (event.date.isBefore(start) || event.date.isAfter(end)) continue;
+      final bucket = DateTime(event.date.year, event.date.month, 1);
+      final current = result[bucket];
+      if (current == null) continue;
+      final signed = event.transCode == TransCode.deposit ? event.amount : -event.amount;
+      result[bucket] = current + signed;
     }
     return result;
   }
