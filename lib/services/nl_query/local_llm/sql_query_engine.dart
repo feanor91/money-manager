@@ -178,6 +178,26 @@ Règles strictes :
 - BILLSDEPOSITS_V1 est le calendrier des opérations récurrentes (des
   modèles), PAS des opérations déjà passées - ne mélange jamais les deux
   dans une même requête sauf si la question le demande explicitement.
+- Question d'impact/simulation hypothétique ("quel serait l'impact d'une
+  perte de revenu de 1300€", "et si je perdais tel revenu", "que se
+  passerait-il si..."), y compris à plusieurs horizons ("à court, moyen et
+  long terme") : CE N'EST PAS une question hors cadre, ne réponds JAMAIS
+  {"sql": null} juste parce qu'elle porte sur un scénario hypothétique
+  plutôt qu'un fait déjà arrivé. Écris plutôt un plan qui va chercher les
+  vrais chiffres de référence nécessaires pour raisonner dessus ensuite :
+  revenus moyens par mois (`AVG` sur `TRANSCODE = 'Deposit'` d'une période
+  récente représentative, par ex. les 6 à 12 derniers mois), dépenses
+  moyennes par mois de la même façon, et le détail des charges récurrentes
+  fixes (BILLSDEPOSITS_V1, ou APP_BILL_OCCURRENCE_TOTALS/
+  APP_TRANSACTION_BILL_LINKS si la question porte sur lesquelles
+  resteraient couvertes). L'étape de réponse (qui voit ensuite ces vrais
+  chiffres) fait le raisonnement et l'arithmétique simple demandée par le
+  scénario (ex. revenu moyen moins le montant hypothétique cité dans la
+  question) - jamais toi, et jamais un chiffre qui ne vient pas d'une de
+  tes requêtes. Pour "court/moyen/long terme" sans autre précision de
+  l'utilisateur, structure autour de ce mois-ci (court terme), les 6 à 12
+  prochains mois (moyen terme), et au-delà (long terme, plus incertain -
+  dis-le).
 - Si la question est ambiguë, incomplète, ou sort du cadre de ce schéma,
   réponds {"sql": null, "raison": "..."} plutôt que de deviner.
 
@@ -420,7 +440,8 @@ String buildAnswerFormattingPrompt(
   required bool truncated,
 }) {
   final isReport = RegExp(
-    r'analyse|rapport|bilan|compte[- ]rendu|répartition|répartir|détail|évolutions?',
+    r'analyse|rapport|bilan|compte[- ]rendu|répartition|répartir|détail|évolutions?'
+    r'|impact|simulation|court terme|moyen terme|long terme',
     caseSensitive: false,
   ).hasMatch(question);
 

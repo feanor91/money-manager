@@ -181,6 +181,18 @@ void main() {
   });
 
   test(
+      'defaultSqlSystemPrompt tells the model a hypothetical impact/'
+      'simulation question is answerable, not out of scope - 2026-09-02 '
+      "user request: \"quel serait l'impact d'une perte de revenu de "
+      '1300€"', () {
+    expect(defaultSqlSystemPrompt, contains('hypothétique'));
+    expect(defaultSqlSystemPrompt, contains("N'EST PAS une question hors cadre"));
+    expect(defaultSqlSystemPrompt, contains('court terme'));
+    expect(defaultSqlSystemPrompt, contains('moyen terme'));
+    expect(defaultSqlSystemPrompt, contains('long terme'));
+  });
+
+  test(
       'defaultSqlSystemPrompt warns against matching CATEGNAME against the full '
       '"Parent:Enfant" vocabulary path - regression test for the 2026-08-23 report of a '
       'real subcategory ("Loisirs:Vacances") never being found', () {
@@ -383,6 +395,22 @@ void main() {
         () {
       final prompt = buildAnswerFormattingPrompt(
         'analyse mes dépenses sur 3 mois',
+        oneResult,
+        truncated: false,
+      );
+      expect(prompt, contains('rapport'));
+      expect(prompt, contains('sections'));
+      expect(prompt, isNot(contains('une ou deux phrases')));
+    });
+
+    test(
+        'an impact/simulation question also gets the structured report '
+        'instruction - 2026-09-02 user request: "quel serait l\'impact à '
+        'court, moyen et long terme d\'une perte de revenu de 1300€"',
+        () {
+      final prompt = buildAnswerFormattingPrompt(
+        "Quel serait l'impact à court, moyen et long terme d'une perte de "
+        'revenu de 1300€ sur mon compte',
         oneResult,
         truncated: false,
       );
