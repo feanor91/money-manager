@@ -23,22 +23,32 @@ Future<void> openCategorySpendAnalyzer({
   required List<Category> categories,
   required CurrencyFormat? currency,
 }) {
-  final screen = MediaQuery.sizeOf(context);
-  final width = screen.width < 760 ? screen.width * 0.95 : 900.0;
-  final height = screen.height * 0.88;
   return showDialog<void>(
     context: context,
     builder: (context) => Dialog(
       insetPadding: const EdgeInsets.all(16),
-      child: SizedBox(
-        width: width,
-        height: height,
-        child: CategorySpendAnalyzer(
-          repo: repo,
-          accountId: accountId,
-          categories: categories,
-          currency: currency,
-        ),
+      // Computed inside a Builder, not hoisted above showDialog, so it
+      // re-reads MediaQuery (and resizes) on every orientation change for
+      // as long as the dialog stays open - see nl_query_dialog.dart's
+      // openNlQueryDialog, which had the exact same bug (frozen at
+      // whichever orientation the dialog happened to be opened in) fixed
+      // the same way for the same 2026-09-02 user report.
+      child: Builder(
+        builder: (context) {
+          final screen = MediaQuery.sizeOf(context);
+          final width = screen.width < 760 ? screen.width * 0.95 : 900.0;
+          final height = screen.height * 0.88;
+          return SizedBox(
+            width: width,
+            height: height,
+            child: CategorySpendAnalyzer(
+              repo: repo,
+              accountId: accountId,
+              categories: categories,
+              currency: currency,
+            ),
+          );
+        },
       ),
     ),
   );

@@ -133,21 +133,39 @@ Future<void> openNlQueryDialog({
   required int forecastDay,
   int? defaultAccountId,
 }) {
-  final screen = MediaQuery.sizeOf(context);
-  final width = screen.width < 760 ? screen.width * 0.97 : screen.width * 0.9;
-  final height = screen.height * 0.92;
   return showDialog<void>(
     context: context,
     builder: (context) => Dialog(
       insetPadding: const EdgeInsets.all(12),
-      child: SizedBox(
-        width: width,
-        height: height,
-        child: NlQueryDialog(
-          repo: repo,
-          defaultAccountId: defaultAccountId,
-          forecastDay: forecastDay,
-        ),
+      // The width/height used to be computed once, outside this builder,
+      // from the *caller's* MediaQuery at the moment the dialog opened -
+      // frozen for the dialog's whole lifetime, never revisited afterwards.
+      // 2026-09-02 user report on Android: opening it in portrait then
+      // rotating to landscape left it stuck at the portrait size (and vice
+      // versa) - rotating a *second* time, back to the orientation it was
+      // opened in, only ever looked "fixed" because the frozen size
+      // happened to match the screen again by coincidence, not because
+      // anything had actually re-adjusted. A [Builder] (rather than
+      // computing this outside the widget tree) reads MediaQuery from
+      // *inside* its own build() method, so Flutter re-runs it - recomputing
+      // width/height - every time the ambient MediaQuery actually changes,
+      // for as long as the dialog stays open, not just at the instant it
+      // was first built.
+      child: Builder(
+        builder: (context) {
+          final screen = MediaQuery.sizeOf(context);
+          final width = screen.width < 760 ? screen.width * 0.97 : screen.width * 0.9;
+          final height = screen.height * 0.92;
+          return SizedBox(
+            width: width,
+            height: height,
+            child: NlQueryDialog(
+              repo: repo,
+              defaultAccountId: defaultAccountId,
+              forecastDay: forecastDay,
+            ),
+          );
+        },
       ),
     ),
   );
