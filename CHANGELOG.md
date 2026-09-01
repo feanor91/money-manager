@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.88] - 2026-09-01
+
+- fix(transactions): show full multi-line notes in the edit form
+- fix(ai): surface cloud AI errors and fix web/Android ad-hoc dead end
+
 ## [1.0.87] - 2026-08-31
 
 - fix(nl-query): recognize sur N mois/ans periods and income-by-month
