@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.91] - 2026-09-01
+
+- feat(simulation): add long-term what if scenario simulator (phases 1+2)
+- feat(ai): teach the SQL prompt to answer hypothetical impact/simulation questions
+
 ## [1.0.90] - 2026-09-01
 
 - fix(ui): resize dialogs on orientation change instead of freezing at open
