@@ -42,6 +42,28 @@ class _HomeShellState extends State<HomeShell> {
     SpendingExplorerScreen(),
   ];
 
+  /// Same breakpoint already used elsewhere in the app (the ledger
+  /// table/cards split, the category spend analyzer's stacked panels) for
+  /// "narrow enough that a phone-oriented layout is needed instead of the
+  /// tablet/desktop/web one".
+  static const _narrowNavBreakpoint = 640.0;
+
+  /// The four most-used sections, kept directly on the bottom bar even on a
+  /// narrow phone - see [_narrowNavBreakpoint].
+  static const _primaryNavItems = [
+    _NavItem(screenIndex: 0, icon: Icons.dashboard_outlined, selectedIcon: Icons.dashboard, label: 'Accueil'),
+    _NavItem(screenIndex: 1, icon: Icons.receipt_long_outlined, selectedIcon: Icons.receipt_long, label: 'Transactions'),
+    _NavItem(screenIndex: 2, icon: Icons.pie_chart_outline, selectedIcon: Icons.pie_chart, label: 'Budget'),
+    _NavItem(screenIndex: 3, icon: Icons.autorenew, selectedIcon: Icons.autorenew, label: 'Récurrentes'),
+  ];
+
+  /// Tucked behind the "Plus" overflow item on a narrow phone - reference/
+  /// analysis screens visited less often day-to-day than the four above.
+  static const _overflowNavItems = [
+    _NavItem(screenIndex: 4, icon: Icons.account_balance_outlined, selectedIcon: Icons.account_balance, label: 'Comptes'),
+    _NavItem(screenIndex: 5, icon: Icons.query_stats_outlined, selectedIcon: Icons.query_stats, label: 'Explorateur'),
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -132,17 +154,64 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: Stack(
         alignment: Alignment.bottomRight,
         children: [
-          NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
-            destinations: const [
-              NavigationDestination(icon: Icon(Icons.dashboard_outlined), selectedIcon: Icon(Icons.dashboard), label: 'Accueil'),
-              NavigationDestination(icon: Icon(Icons.receipt_long_outlined), selectedIcon: Icon(Icons.receipt_long), label: 'Transactions'),
-              NavigationDestination(icon: Icon(Icons.pie_chart_outline), selectedIcon: Icon(Icons.pie_chart), label: 'Budget'),
-              NavigationDestination(icon: Icon(Icons.autorenew), selectedIcon: Icon(Icons.autorenew), label: 'Récurrentes'),
-              NavigationDestination(icon: Icon(Icons.account_balance_outlined), selectedIcon: Icon(Icons.account_balance), label: 'Comptes'),
-              NavigationDestination(icon: Icon(Icons.query_stats_outlined), selectedIcon: Icon(Icons.query_stats), label: 'Explorateur'),
-            ],
+          // Six labeled destinations comfortably fit a tablet/desktop/web
+          // window, but crowd a real phone width badly enough that words
+          // wrap mid-label (2026-09-01 user report, after adding
+          // "Explorateur" as the 6th) - below _narrowNavBreakpoint, only
+          // the four most-used sections stay directly on the bar; the rest
+          // move behind a "Plus" overflow sheet (see _showOverflowMenu).
+          // Same LayoutBuilder-on-width convention already used elsewhere
+          // in the app for a narrow-screen layout (transactions_screen.dart's
+          // ledger table/cards split, category_spend_analyzer.dart).
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth >= _narrowNavBreakpoint) {
+                return NavigationBar(
+                  selectedIndex: _index,
+                  onDestinationSelected: (i) => setState(() => _index = i),
+                  destinations: [
+                    for (final item in [..._primaryNavItems, ..._overflowNavItems])
+                      NavigationDestination(
+                        icon: Icon(item.icon),
+                        selectedIcon: Icon(item.selectedIcon),
+                        label: item.label,
+                      ),
+                  ],
+                );
+              }
+              final onOverflowScreen =
+                  _overflowNavItems.any((item) => item.screenIndex == _index);
+              final selectedSlot = onOverflowScreen
+                  ? _primaryNavItems.length
+                  : _primaryNavItems.indexWhere((item) => item.screenIndex == _index);
+              return NavigationBar(
+                selectedIndex: selectedSlot,
+                onDestinationSelected: (slot) {
+                  if (slot == _primaryNavItems.length) {
+                    _showOverflowMenu(context);
+                  } else {
+                    setState(() => _index = _primaryNavItems[slot].screenIndex);
+                  }
+                },
+                destinations: [
+                  for (final item in _primaryNavItems)
+                    NavigationDestination(
+                      icon: Icon(item.icon),
+                      selectedIcon: Icon(item.selectedIcon),
+                      label: item.label,
+                    ),
+                  // Highlighted (via selectedSlot above) whenever the
+                  // current screen is actually one of the overflowing
+                  // ones, so "Plus" still reflects where the user is
+                  // rather than always looking unselected.
+                  const NavigationDestination(
+                    icon: Icon(Icons.more_horiz),
+                    selectedIcon: Icon(Icons.more_horiz),
+                    label: 'Plus',
+                  ),
+                ],
+              );
+            },
           ),
           if (dbProvider.hasPendingWrite)
             const Positioned(
@@ -182,6 +251,54 @@ class _HomeShellState extends State<HomeShell> {
       ),
     );
   }
+
+  /// The "Plus" destination's target on a narrow screen - a plain modal
+  /// bottom sheet (same dismiss-on-outside-tap default used everywhere else
+  /// in the app for this kind of choice) listing whatever didn't fit
+  /// directly on the bar. Highlights whichever one is the current screen,
+  /// if any, so reopening this after already having navigated into
+  /// "Comptes"/"Explorateur" doesn't look like nothing is selected anywhere.
+  Future<void> _showOverflowMenu(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final item in _overflowNavItems)
+              ListTile(
+                leading: Icon(_index == item.screenIndex ? item.selectedIcon : item.icon),
+                title: Text(item.label),
+                selected: _index == item.screenIndex,
+                onTap: () {
+                  setState(() => _index = item.screenIndex);
+                  Navigator.of(sheetContext).pop();
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One bottom-nav destination, shared between the always-visible
+/// [_HomeShellState._primaryNavItems] and the overflowing
+/// [_HomeShellState._overflowNavItems] - [screenIndex] is the position in
+/// [_HomeShellState._screens] this destination switches to, independent of
+/// its own position on the bar (or in the overflow sheet).
+class _NavItem {
+  final int screenIndex;
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+
+  const _NavItem({
+    required this.screenIndex,
+    required this.icon,
+    required this.selectedIcon,
+    required this.label,
+  });
 }
 
 /// Shown in the bottom nav bar whenever a write-back to the real .mmb file

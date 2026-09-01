@@ -5,9 +5,6 @@ courses, pas des engagements.
 
 ## Suggestions (à valider avant de s'y lancer)
 
-- **Export CSV** des transactions (utile pour la déclaration d'impôts ou
-  un tableur externe) - relativement simple à ajouter vu que le grand
-  livre est déjà entièrement lisible via `MmexRepository`.
 - **Rappels/notifications** pour les opérations récurrentes à venir
   (notification Android le jour J plutôt que seulement à l'ouverture de
   l'app).
