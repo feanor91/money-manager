@@ -89,6 +89,75 @@ void main() {
       client.close();
     });
 
+    test('always requests reasoning exclusion, for reasoning-capable models '
+        'on providers that support it (e.g. OpenRouter)', () async {
+      Map<String, dynamic>? capturedBody;
+      final baseUrl = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'choices': [
+            {
+              'message': {'content': 'ok'}
+            }
+          ]
+        }));
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: 'x', model: 'm');
+      await client.ask('...');
+      expect(capturedBody!['reasoning'], {'exclude': true});
+      client.close();
+    });
+
+    test(
+        'strips a well-formed <think>...</think> block before it reaches the '
+        'caller - regression test for the 2026-09-01 user report of a free '
+        "reasoning model's raw internal narration (in English, revealing "
+        'the app\'s own system prompt) showing up as the actual chat answer',
+        () async {
+      final baseUrl = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'choices': [
+            {
+              'message': {
+                'content':
+                    '<think>Okay, the user is asking about their balance...</think>'
+                    'Ton solde est de 1 234,56 €.'
+              }
+            }
+          ]
+        }));
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: 'x', model: 'm');
+      final result = await client.ask('...');
+      expect(result.text, 'Ton solde est de 1 234,56 €.');
+      client.close();
+    });
+
+    test(
+        'an unterminated <think> block (cut off mid-reasoning by max_tokens) '
+        'is left as-is rather than guessed at', () async {
+      final baseUrl = await startFakeServer((request) async {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'choices': [
+            {
+              'message': {'content': '<think>Okay, the user is asking...'}
+            }
+          ]
+        }));
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: 'x', model: 'm');
+      final result = await client.ask('...');
+      expect(result.text, '<think>Okay, the user is asking...');
+      client.close();
+    });
+
     test('throws on a non-200 response', () async {
       final baseUrl = await startFakeServer((request) async {
         request.response.statusCode = 401;

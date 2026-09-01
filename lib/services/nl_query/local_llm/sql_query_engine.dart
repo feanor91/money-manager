@@ -711,7 +711,7 @@ List<SqlQueryStep>? extractValidatedSqlPlan(String rawResponse) {
 /// - the model never sees anything else about earlier turns, no chat-
 /// history feature of llama.cpp's own `/completion` endpoint is used here,
 /// just this app-owned recap prepended to the next question (see
-/// [_formatHistory]). Deliberately excludes any answer that came from the
+/// [formatChatHistory]). Deliberately excludes any answer that came from the
 /// old fixed-kind pipeline (QueryKind.balance/outlook/incomeVsExpense) or
 /// the plain rule-based parser - those never call into this file at all,
 /// so a follow-up after one of those starts this chat's history fresh.
@@ -731,11 +731,17 @@ const _maxHistoryTurns = 6;
 /// Recaps the last few turns of the conversation so the model can resolve
 /// a follow-up question ("et sur les 3 dernières années ?", "et pour
 /// Boursorama ?") against what was just discussed - prepended to the new
-/// question before it ever reaches [LlmEngine.askWithSystemPrompt].
-/// Only the SQL-writing call gets this: the answer-formatting call already
-/// receives the *current* question's real query results fresh every time,
-/// and doesn't need yesterday's numbers repeated into it too.
-String _formatHistory(List<ChatTurn> history) {
+/// question before it ever reaches [LlmEngine.askWithSystemPrompt]. Also
+/// reused by [askLocalLlmFreeform] (2026-09-01) so a follow-up that falls
+/// through to the plain-conversation fallback (the SQL-writing call
+/// declined, or found nothing to query) still knows what was just being
+/// discussed, rather than confusingly denying any financial context at all
+/// mid-conversation - see that function's own doc comment for the user
+/// report this fixes. The answer-formatting call is the one exception that
+/// does NOT get this: it already receives the *current* question's real
+/// query results fresh every time, and doesn't need yesterday's numbers
+/// repeated into it too.
+String formatChatHistory(List<ChatTurn> history) {
   if (history.isEmpty) return '';
   final recent = history.length > _maxHistoryTurns
       ? history.sublist(history.length - _maxHistoryTurns)
@@ -770,7 +776,7 @@ String _formatHistory(List<ChatTurn> history) {
 ///
 /// [history] (2026-08-23) lets a follow-up question in the same chat
 /// session ("et l'an dernier ?") be resolved against what was just asked -
-/// see [_formatHistory]. Empty by default: every existing single-question
+/// see [formatChatHistory]. Empty by default: every existing single-question
 /// caller keeps working unchanged.
 ///
 /// Returns [SqlAccessError] (never throws) whenever either HTTP call to
@@ -791,7 +797,7 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
   final LlmResponse rawPlan;
   try {
     rawPlan = await engine.askWithSystemPrompt(
-        systemPrompt, '${_formatHistory(history)}$question');
+        systemPrompt, '${formatChatHistory(history)}$question');
   } catch (e) {
     return SqlAccessError(_describeError(e));
   }

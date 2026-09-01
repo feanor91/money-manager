@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:money_manager/data/mmex_repository.dart';
 import 'package:money_manager/services/nl_query/local_llm/llama_server_client.dart';
+import 'package:money_manager/services/nl_query/local_llm/llm_engine.dart';
 import 'package:money_manager/services/nl_query/local_llm/local_llm_manager_web.dart';
 import 'package:money_manager/services/nl_query/local_llm/model_catalog.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';
@@ -177,6 +178,34 @@ void main() {
     expect(lastDecoded['prompt'], contains('combien de comptes ?'));
     expect(lastDecoded['prompt'], contains('{"n":0}'));
     expect(lastDecoded['prompt'], isNot(contains('grammar')));
+  });
+
+  test(
+      'askLocalLlmFreeform recaps the conversation history ahead of the '
+      'question - regression test for the 2026-09-01 user report of a '
+      'follow-up ("recommence mais analyse...") landing here with zero '
+      'context and confusingly denying any financial conversation had '
+      'happened at all', () async {
+    await pointAtServer();
+    await setLocalLlmEnabled(true);
+    nextResponses = ['{"content":"D\'accord, je recommence."}'];
+
+    final outcome = await askLocalLlmFreeform(
+      'recommence mais analyse tout depuis le 01/01/2024',
+      history: const [
+        sql_engine.ChatTurn(
+          question: 'Analyse mes revenus depuis 1 an',
+          answer: 'Tes revenus ont totalisé 12 000 €.',
+        ),
+      ],
+    );
+
+    expect(
+        (outcome as LlmFreeformSuccess).text, "D'accord, je recommence.");
+    final prompt = jsonDecode(receivedBodies.single)['prompt'] as String;
+    expect(prompt, contains('Analyse mes revenus depuis 1 an'));
+    expect(prompt, contains('12 000 €'));
+    expect(prompt, contains('recommence mais analyse tout depuis le 01/01/2024'));
   });
 
   test('askLocalLlmWithFullDataAccess is unavailable without a repository',

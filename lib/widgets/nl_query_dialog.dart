@@ -437,7 +437,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // attempted when local AI is actually usable; otherwise there is no
       // model left to ask and the message below is all there is.
       final freeform = isLocalLlmSupported
-          ? await askLocalLlmFreeform(trimmed)
+          ? await askLocalLlmFreeform(trimmed, history: history)
           : const LlmFreeformUnavailable();
       switch (freeform) {
         case LlmFreeformSuccess(:final text, :final tokensPerSecond):

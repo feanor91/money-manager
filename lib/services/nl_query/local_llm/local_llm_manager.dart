@@ -141,9 +141,14 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 /// rule-based parser recognized [question] as a financial one - see
 /// [LlmFreeformOutcome] for the three possible outcomes (a real answer,
 /// silently unavailable, or a genuine backend error worth telling the user
-/// about). Never throws.
-Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) =>
-    impl.askLocalLlmFreeform(question);
+/// about). Never throws. [history] (2026-09-01) - see
+/// local_llm_manager_io.dart's own copy of this function for why a
+/// follow-up needs this here too, not just in [askLocalLlmWithFullDataAccess].
+Future<LlmFreeformOutcome> askLocalLlmFreeform(
+  String question, {
+  List<ChatTurn> history = const [],
+}) =>
+    impl.askLocalLlmFreeform(question, history: history);
 
 /// Opens a throwaway, OS/SQLite-enforced read-only connection to the .mmb
 /// file at [dbPath] for running a [QueryKind.adHoc] question - null on any

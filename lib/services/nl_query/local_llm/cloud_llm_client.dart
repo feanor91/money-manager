@@ -36,6 +36,26 @@ class CloudLlmModelInfo {
   String get displayLabel => isFree ? '$id (gratuit)' : id;
 }
 
+/// Strips a reasoning model's internal chain-of-thought from [text] before
+/// it ever reaches [LlmResponse] - defense in depth alongside the
+/// `'reasoning': {'exclude': true}` request field [CloudLlmClient._chat]
+/// already sends, for a provider/model that only partially honors that flag
+/// and still wraps its narration in the (fairly standard across reasoning
+/// models) `<think>...</think>` tags. Only ever removes a *complete*
+/// `<think>...</think>` block - an *unterminated* one (the model's
+/// generation got cut off by `max_tokens` while still "thinking", so no
+/// closing tag ever arrives) is left alone rather than guessed at, since
+/// there's no reliable way to tell where reasoning ends and a real answer
+/// might have started; [maxTokens] being raised well above what reasoning
+/// alone should need (see call sites) is the actual fix for that case, this
+/// is just cleanup for the well-formed one.
+String _stripReasoning(String text) {
+  final stripped = text
+      .replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '')
+      .trim();
+  return stripped;
+}
+
 /// Reuses [intentSystemPrompt]/[freeformSystemPrompt] verbatim rather than
 /// duplicating them - the model behind this client only ever sees the same
 /// carefully-tuned instructions [LlamaServerClient] already uses, so
@@ -178,6 +198,15 @@ class CloudLlmClient implements LlmEngine {
         // "réponds UNIQUEMENT avec un objet JSON" instruction alone, the
         // way llama.cpp's GBNF grammar does for [LlamaServerClient].
         if (jsonMode) 'response_format': {'type': 'json_object'},
+        // OpenRouter's extension for reasoning-capable models (many of its
+        // free models, including the one behind the 2026-09-01 user report
+        // below, "think out loud" by default) - asks the provider to leave
+        // that internal narration out of `content` entirely, since this
+        // app has nowhere sensible to show it. Ignored (harmlessly, as an
+        // unrecognized field) by every other provider/a non-reasoning
+        // model - never errors, confirmed against OpenAI/llama-server's own
+        // OpenAI-compatible mode.
+        'reasoning': {'exclude': true},
       }),
     );
     stopwatch.stop();
@@ -197,7 +226,7 @@ class CloudLlmClient implements LlmEngine {
     final tps = (completionTokens != null && completionTokens > 0 && elapsedMs > 0)
         ? completionTokens / (elapsedMs / 1000)
         : null;
-    return LlmResponse(text, tokensPerSecond: tps);
+    return LlmResponse(_stripReasoning(text), tokensPerSecond: tps);
   }
 
   @override
@@ -214,7 +243,14 @@ class CloudLlmClient implements LlmEngine {
         systemPrompt: freeformSystemPrompt,
         question: question,
         temperature: 0.7,
-        maxTokens: 512,
+        // Raised from 512 (2026-09-01 user report: a reasoning model's
+        // internal narration ate the entire budget before ever reaching a
+        // real answer, even with 'reasoning': {'exclude': true} above -
+        // some providers still count hidden reasoning tokens against the
+        // same max_tokens ceiling as the visible answer) - this is on top
+        // of the exclude flag, not instead of it: belt and suspenders
+        // against a provider that only partially honors it.
+        maxTokens: 2048,
       );
 
   @override
@@ -223,7 +259,7 @@ class CloudLlmClient implements LlmEngine {
         systemPrompt: systemPrompt,
         question: question,
         temperature: 0.1,
-        maxTokens: 1024,
+        maxTokens: 2048,
         jsonMode: true,
       );
 

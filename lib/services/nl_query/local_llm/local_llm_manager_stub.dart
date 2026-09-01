@@ -61,7 +61,10 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 }) async =>
         (intent: null, periodWasExplicit: false);
 
-Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async =>
+Future<LlmFreeformOutcome> askLocalLlmFreeform(
+  String question, {
+  List<ChatTurn> history = const [],
+}) async =>
     const LlmFreeformUnavailable();
 
 Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async =>

@@ -286,12 +286,18 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   }
 }
 
-Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async {
+/// [history] (2026-09-01) - see local_llm_manager_io.dart's own copy of this
+/// function for why.
+Future<LlmFreeformOutcome> askLocalLlmFreeform(
+  String question, {
+  List<sql_engine.ChatTurn> history = const [],
+}) async {
   if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
   final engine = await _ensureEngine();
   if (engine == null) return const LlmFreeformUnavailable();
   try {
-    final raw = await engine.askFreeform(question);
+    final raw = await engine
+        .askFreeform('${sql_engine.formatChatHistory(history)}$question');
     final trimmed = raw.text.trim();
     return trimmed.isEmpty
         ? const LlmFreeformUnavailable()

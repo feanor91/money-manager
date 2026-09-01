@@ -527,13 +527,26 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 /// [LlmFreeformOutcome] for why this is three-way rather than a plain
 /// nullable success, same never-throws contract as ever (a failure is
 /// reported via [LlmFreeformError], never a thrown exception).
-Future<LlmFreeformOutcome> askLocalLlmFreeform(String question) async {
+///
+/// [history] (2026-09-01) is recapped ahead of [question] the same way
+/// sql_query_engine.dart's SQL-writing call already does (see
+/// [sql_engine.formatChatHistory]) - found from a real user report: a
+/// follow-up like "recommence mais analyse tout depuis le 01/01/2024"
+/// reached this path (the SQL-writing call declined that turn) and, with no
+/// history at all, answered as if no financial conversation had ever
+/// started - technically consistent with [freeformSystemPrompt]'s own "tu
+/// n'as accès à aucune donnée financière" framing, but confusing mid-chat.
+Future<LlmFreeformOutcome> askLocalLlmFreeform(
+  String question, {
+  List<sql_engine.ChatTurn> history = const [],
+}) async {
   if (!_supported) return const LlmFreeformUnavailable();
   if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
   final engine = await _ensureEngine();
   if (engine == null) return const LlmFreeformUnavailable();
   try {
-    final raw = await engine.askFreeform(question);
+    final raw = await engine
+        .askFreeform('${sql_engine.formatChatHistory(history)}$question');
     final trimmed = raw.text.trim();
     return trimmed.isEmpty
         ? const LlmFreeformUnavailable()
