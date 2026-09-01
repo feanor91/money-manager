@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.89] - 2026-09-01
+
+- fix(ai): strip reasoning-model chain-of-thought, give follow-ups history
+
 ## [1.0.88] - 2026-09-01
 
 - fix(transactions): show full multi-line notes in the edit form
