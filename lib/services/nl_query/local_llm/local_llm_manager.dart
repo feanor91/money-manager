@@ -5,11 +5,18 @@ import '../../../models/payee.dart';
 import '../query_intent.dart';
 import 'llm_engine.dart' show LlmFreeformOutcome;
 import 'model_catalog.dart';
-import 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
+import 'sql_query_engine.dart' show ChatTurn, SqlAccessOutcome;
 
 export 'llm_engine.dart'
     show LlmFreeformOutcome, LlmFreeformSuccess, LlmFreeformUnavailable, LlmFreeformError;
-export 'sql_query_engine.dart' show ChatTurn, SqlGroundedAnswer;
+export 'sql_query_engine.dart'
+    show
+        ChatTurn,
+        SqlGroundedAnswer,
+        SqlAccessOutcome,
+        SqlAccessSuccess,
+        SqlAccessUnavailable,
+        SqlAccessError;
 
 import 'local_llm_manager_stub.dart'
     if (dart.library.js_interop) 'local_llm_manager_web.dart'
@@ -159,8 +166,10 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) =>
 /// vocabulary - the model writes real SQL against the schema described in
 /// [localLlmSqlSystemPrompt], run against the database, then a second
 /// grounded call phrases the answer from the real result rows (see
-/// sql_query_engine.dart). Null (never throws) under the same conditions as
-/// every other local-AI entry point here.
+/// sql_query_engine.dart). Never throws - returns a [SqlAccessOutcome]
+/// telling a real backend failure ([SqlAccessError]) apart from "nothing to
+/// report" ([SqlAccessUnavailable]: unsupported/disabled/not configured, or
+/// the model itself declined) - see that type's own doc comment.
 ///
 /// [dbPath] is the native (desktop) way to point at the data - the
 /// implementation reopens that file with its own OS/SQLite-enforced
@@ -171,7 +180,7 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) =>
 /// [history] (2026-08-23) - the current chat's prior turns, so a follow-up
 /// question ("et l'an dernier ?") resolves against what was just asked. See
 /// sql_query_engine.dart's ChatTurn/`_formatHistory`.
-Future<SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
+Future<SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,

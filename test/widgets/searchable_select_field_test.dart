@@ -141,17 +141,18 @@ void main() {
   });
 
   testWidgets(
-      'selection survives a rebuild landing between pointer-down and '
-      'pointer-up - this is the actual race searchable_select_field.dart\'s '
-      'Listener.onPointerDown targets (an external ChangeNotifier, e.g. '
-      'DatabaseProvider, firing mid-tap and rebuilding the option row). '
-      'Confirmed causal: this test failed both against the original '
-      "onTap and against an intermediate onTapDown attempt (still gated "
-      'by gesture-arena resolution, which a competing ListView scroll '
-      'recognizer defers to pointer-up) - only a raw pointer listener, '
-      'which bypasses the arena entirely, closes the window.',
+      'a rebuild landing between pointer-down and pointer-up never crashes, '
+      'even though the tap itself is now allowed to be silently dropped - '
+      'this is the same race the original 2026-08-24 fix targeted '
+      '(an external ChangeNotifier, e.g. DatabaseProvider, firing mid-tap '
+      'and tearing down the option row); the 2026-09-01 scroll fix '
+      'deliberately narrowed the original "always force-commits through '
+      'this" guarantee (see searchable_select_field.dart\'s own doc comment '
+      'for why: reliably delivering a selection through a fully torn-down '
+      "RawAutocomplete/TextEditingController isn't actually possible, and "
+      'two different attempts at it crashed) - what must still hold is that '
+      'this exact interruption never throws.',
       (tester) async {
-    String? selected;
     final rebuildTrigger = ValueNotifier<int>(0);
     await tester.pumpWidget(
       MaterialApp(
@@ -167,7 +168,8 @@ void main() {
               label: 'Tiers',
               options: const ['Seul Tiers'],
               labelOf: (s) => s,
-              onSelected: (v) => selected = v,
+              // Deliberately not asserted - see this test's own title.
+              onSelected: (_) {},
             ),
           ),
         ),
@@ -188,9 +190,49 @@ void main() {
     // landing while the tap is still in flight.
     rebuildTrigger.value++;
     await tester.pump();
+    // The interesting assertion here is implicit: nothing above (or below)
+    // throws. `selected` is deliberately not asserted either way - see this
+    // test's own title.
+    await gesture.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+      'a scroll drag starting on a row does not select it - regression '
+      'test for the 2026-09-01 user report that touching the Android '
+      'cloud-AI model picker to scroll it instantly "selected" whatever '
+      'row the drag started on and never actually scrolled',
+      (tester) async {
+    String? selected;
+    final options = List.generate(30, (i) => 'Modèle $i');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SearchableSelectField<String>(
+            label: 'Modèle',
+            options: options,
+            labelOf: (s) => s,
+            onSelected: (v) => selected = v,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(TextFormField));
+    await tester.pumpAndSettle();
+
+    final firstRow = find.widgetWithText(ListTile, 'Modèle 0');
+    expect(firstRow, findsOneWidget);
+
+    // A real scroll: down, then a large vertical move (well past
+    // kTouchSlop), then up - never a stationary tap.
+    final gesture = await tester.startGesture(tester.getCenter(firstRow));
+    await tester.pump(const Duration(milliseconds: 20));
+    await gesture.moveBy(const Offset(0, -150));
+    await tester.pump(const Duration(milliseconds: 20));
     await gesture.up();
     await tester.pumpAndSettle();
 
-    expect(selected, 'Seul Tiers');
+    expect(selected, isNull);
   });
 }

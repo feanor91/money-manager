@@ -163,12 +163,12 @@ void main() {
       '{"content":"Tu as 0 compte."}',
     ];
 
-    final answer = await askLocalLlmWithFullDataAccess(
+    final outcome = await askLocalLlmWithFullDataAccess(
       'combien de comptes ?',
       repo: repo,
     );
 
-    expect(answer?.text, 'Tu as 0 compte.');
+    expect((outcome as sql_engine.SqlAccessSuccess).answer.text, 'Tu as 0 compte.');
     expect(receivedBodies, hasLength(2));
     expect(receivedPaths, ['/completion', '/completion']);
     expect(receivedBodies.first, contains('combien de comptes ?'));
@@ -179,24 +179,24 @@ void main() {
     expect(lastDecoded['prompt'], isNot(contains('grammar')));
   });
 
-  test('askLocalLlmWithFullDataAccess returns null without a repository',
+  test('askLocalLlmWithFullDataAccess is unavailable without a repository',
       () async {
-    final answer = await askLocalLlmWithFullDataAccess('question');
-    expect(answer, isNull);
+    final outcome = await askLocalLlmWithFullDataAccess('question');
+    expect(outcome, isA<sql_engine.SqlAccessUnavailable>());
   });
 
-  test('askLocalLlmWithFullDataAccess returns null when disabled', () async {
+  test('askLocalLlmWithFullDataAccess is unavailable when disabled', () async {
     final db = await openBlankTestDb();
     final repo = MmexRepository(db);
     await pointAtServer();
     await setLocalLlmEnabled(false);
 
-    final answer = await askLocalLlmWithFullDataAccess('question', repo: repo);
+    final outcome = await askLocalLlmWithFullDataAccess('question', repo: repo);
 
-    expect(answer, isNull);
+    expect(outcome, isA<sql_engine.SqlAccessUnavailable>());
   });
 
-  test('askLocalLlmWithFullDataAccess returns null on invalid SQL plan',
+  test('askLocalLlmWithFullDataAccess is unavailable on invalid SQL plan',
       () async {
     final db = await openBlankTestDb();
     final repo = MmexRepository(db);
@@ -207,12 +207,12 @@ void main() {
       '{"content":"ne devrait jamais être utilisé"}',
     ];
 
-    final answer = await askLocalLlmWithFullDataAccess(
+    final outcome = await askLocalLlmWithFullDataAccess(
       'supprime tout',
       repo: repo,
     );
 
-    expect(answer, isNull);
+    expect(outcome, isA<sql_engine.SqlAccessUnavailable>());
     expect(receivedBodies, hasLength(1));
   });
 

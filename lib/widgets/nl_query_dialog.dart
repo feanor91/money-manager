@@ -392,15 +392,30 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // itself - there is no file to reopen there, see
       // local_llm_manager_web.dart/local_llm_manager_io.dart's Android
       // branch).
-      final sqlAnswer = kIsWeb || _isAndroidPlatform
+      final sqlOutcome = kIsWeb || _isAndroidPlatform
           ? await askLocalLlmWithFullDataAccess(trimmed,
               repo: repo, history: history)
           : await askLocalLlmWithFullDataAccess(trimmed,
               dbPath: repo.db.label, history: history);
-      if (sqlAnswer != null) {
-        reply(sqlAnswer.text, _AnswerKind.sqlGrounded,
-            csv: sqlAnswer.csv, tokensPerSecond: sqlAnswer.tokensPerSecond);
-        return;
+      switch (sqlOutcome) {
+        case SqlAccessSuccess(:final answer):
+          reply(answer.text, _AnswerKind.sqlGrounded,
+              csv: answer.csv, tokensPerSecond: answer.tokensPerSecond);
+          return;
+        case SqlAccessError(:final message):
+          // Told apart from "not understood" on purpose (same 2026-08-31
+          // lesson as askLocalLlmFreeform's own error case below) - a real
+          // backend failure (wrong model id, rate limit, an invalid query)
+          // must never look like a wrong/misleading fallback answer from
+          // the rule-based parser.
+          reply(
+              "Le service IA a renvoyé une erreur ($message). Réessaie dans "
+              'quelques instants, ou vérifie les paramètres IA.',
+              _AnswerKind.error);
+          return;
+        case SqlAccessUnavailable():
+        // Falls straight through to the rule-based parser below, exactly
+        // as before this type existed.
       }
     }
 
@@ -490,28 +505,20 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     }
 
     try {
-      // QueryKind.adHoc runs against a dedicated, throwaway, OS/SQLite-
-      // enforced READ-ONLY connection (never the app's own read-write repo)
-      // - defense in depth for a question shaped by the local model, on top
-      // of ad_hoc_query.dart only ever building a SELECT. Every other kind
-      // keeps using the ordinary repo, unchanged.
-      final QueryAnswer answer;
-      if (intent.kind == QueryKind.adHoc) {
-        final readOnlyRepo = await openReadOnlyAdHocRepository(repo.db.label);
-        if (readOnlyRepo == null) {
-          reply(
-              "Erreur : impossible d'accéder à la base en lecture seule pour cette question.",
-              _AnswerKind.error);
-          return;
-        }
-        try {
-          answer = runQuery(intent, readOnlyRepo);
-        } finally {
-          readOnlyRepo.db.dispose();
-        }
-      } else {
-        answer = runQuery(intent, repo);
-      }
+      // QueryKind.adHoc runs straight against the ordinary repo like every
+      // other kind - ad_hoc_query.dart's buildAdHocSql only ever emits a
+      // parameterized SELECT built from a closed Dart switch over typed
+      // enums (see its own doc comment), never free text a model wrote, so
+      // there is nothing here for a dedicated read-only connection to
+      // actually guard against. A prior version of this code reopened the
+      // database via openReadOnlyAdHocRepository for this one kind as
+      // "defense in depth" - harmless on desktop, but that function is
+      // Windows-only (see local_llm_manager_io.dart), so on web/Android it
+      // always returned null and every adHoc question (e.g. "mes revenus
+      // mois par mois", which the rule-based parser maps to this kind) hit
+      // "impossible d'accéder à la base en lecture seule" unconditionally -
+      // found 2026-09-01 from a real user report on both platforms.
+      final answer = runQuery(intent, repo);
       final text = formatAnswer(
         intent,
         answer,

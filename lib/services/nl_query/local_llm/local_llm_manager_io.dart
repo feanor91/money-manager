@@ -644,42 +644,41 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async {
 /// persisted), and runs the SQL-generate-then-answer flow. Null (never
 /// throws) under the same conditions as every other local-AI entry point
 /// here - unsupported, disabled, not ready, or any failure at any step.
-Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
+Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
   List<sql_engine.ChatTurn> history = const [],
 }) async {
-  if (!_supported) return null;
-  if (!await isLocalLlmEnabled()) return null;
+  if (!_supported) return const sql_engine.SqlAccessUnavailable();
+  if (!await isLocalLlmEnabled()) return const sql_engine.SqlAccessUnavailable();
   final engine = await _ensureEngine();
-  if (engine == null) return null;
+  if (engine == null) return const sql_engine.SqlAccessUnavailable();
 
   if (_isAndroid) {
-    if (repo == null) return null;
-    try {
-      final basePrompt = await localLlmSqlSystemPrompt();
-      final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
-        basePrompt,
-        accounts: repo.getAccounts(),
-        categories: repo.getCategories(onlyActive: false),
-        payees: repo.getPayees(onlyActive: false),
-      );
-      return await sql_engine.answerViaFullSqlAccess(
-        question: question,
-        readOnlyRepo: repo,
-        systemPrompt: systemPrompt,
-        engine: engine,
-        history: history,
-      );
-    } catch (_) {
-      return null;
-    }
+    if (repo == null) return const sql_engine.SqlAccessUnavailable();
+    final basePrompt = await localLlmSqlSystemPrompt();
+    final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
+      basePrompt,
+      accounts: repo.getAccounts(),
+      categories: repo.getCategories(onlyActive: false),
+      payees: repo.getPayees(onlyActive: false),
+    );
+    return sql_engine.answerViaFullSqlAccess(
+      question: question,
+      readOnlyRepo: repo,
+      systemPrompt: systemPrompt,
+      engine: engine,
+      history: history,
+    );
   }
 
-  if (dbPath == null) return null;
+  if (dbPath == null) return const sql_engine.SqlAccessUnavailable();
   final readOnlyRepo = await openReadOnlyAdHocRepository(dbPath);
-  if (readOnlyRepo == null) return null;
+  if (readOnlyRepo == null) {
+    return const sql_engine.SqlAccessError(
+        "Impossible d'ouvrir la base de données en lecture seule pour cette question.");
+  }
   try {
     final basePrompt = await localLlmSqlSystemPrompt();
     final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(

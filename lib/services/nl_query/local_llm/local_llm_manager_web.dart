@@ -330,32 +330,28 @@ Future<void> setLocalLlmSqlSystemPrompt(String value) async {
 /// of the OS-enforced read-only connection - rather than a read-only
 /// connection, which is simply not expressible against an in-memory
 /// database.
-Future<sql_engine.SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
+Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
   List<sql_engine.ChatTurn> history = const [],
 }) async {
-  if (!await isLocalLlmEnabled()) return null;
-  if (repo == null) return null;
+  if (!await isLocalLlmEnabled()) return const sql_engine.SqlAccessUnavailable();
+  if (repo == null) return const sql_engine.SqlAccessUnavailable();
   final engine = await _ensureEngine();
-  if (engine == null) return null;
-  try {
-    final basePrompt = await localLlmSqlSystemPrompt();
-    final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
-      basePrompt,
-      accounts: repo.getAccounts(),
-      categories: repo.getCategories(onlyActive: false),
-      payees: repo.getPayees(onlyActive: false),
-    );
-    return await sql_engine.answerViaFullSqlAccess(
-      question: question,
-      readOnlyRepo: repo,
-      systemPrompt: systemPrompt,
-      engine: engine,
-      history: history,
-    );
-  } catch (_) {
-    return null;
-  }
+  if (engine == null) return const sql_engine.SqlAccessUnavailable();
+  final basePrompt = await localLlmSqlSystemPrompt();
+  final systemPrompt = sql_engine.buildEffectiveSqlSystemPrompt(
+    basePrompt,
+    accounts: repo.getAccounts(),
+    categories: repo.getCategories(onlyActive: false),
+    payees: repo.getPayees(onlyActive: false),
+  );
+  return sql_engine.answerViaFullSqlAccess(
+    question: question,
+    readOnlyRepo: repo,
+    systemPrompt: systemPrompt,
+    engine: engine,
+    history: history,
+  );
 }

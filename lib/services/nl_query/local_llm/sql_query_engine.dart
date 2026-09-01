@@ -287,6 +287,49 @@ class SqlGroundedAnswer {
       {required this.text, required this.csv, this.tokensPerSecond});
 }
 
+/// The result of [answerViaFullSqlAccess] - three distinct outcomes, same
+/// shape and same reasoning as [LlmFreeformOutcome] (2026-08-31): a real
+/// backend failure (wrong model id, rate limit, a malformed response) must
+/// never look identical to "the model looked at this and genuinely had
+/// nothing to add", or a user report like "l'IA cloud ne marche pas" is
+/// undiagnosable - the app itself can't tell those two cases apart either,
+/// so it silently falls back to the rule-based parser (sometimes producing
+/// a plausible-looking but wrong answer) instead of saying what actually
+/// happened.
+sealed class SqlAccessOutcome {
+  const SqlAccessOutcome();
+}
+
+class SqlAccessSuccess extends SqlAccessOutcome {
+  final SqlGroundedAnswer answer;
+  const SqlAccessSuccess(this.answer);
+}
+
+/// Nothing went wrong, there's just nothing to report: AI unsupported/
+/// disabled/not configured, or the model itself decided the question can't
+/// be answered from this schema (`{"sql": null, ...}`) - the caller falls
+/// through to whatever would have answered anyway (rule-based parser or the
+/// old closed adHoc vocabulary), exactly as before this type existed.
+class SqlAccessUnavailable extends SqlAccessOutcome {
+  const SqlAccessUnavailable();
+}
+
+/// The engine was reachable but the call itself failed, or the query it
+/// wrote couldn't actually run against the real schema - see this class's
+/// own doc comment above for why this is told apart from
+/// [SqlAccessUnavailable]. [message] is a short, already user-safe
+/// description (never a raw exception `toString()` that could leak an
+/// internal stack/type name into the chat transcript).
+class SqlAccessError extends SqlAccessOutcome {
+  final String message;
+  const SqlAccessError(this.message);
+}
+
+/// Same StateError-unwrapping convention as [askLocalLlmFreeform] (see
+/// local_llm_manager_io.dart) - avoids the generic "Bad state: " prefix
+/// Dart's default toString() adds, which would read oddly in a chat bubble.
+String _describeError(Object e) => e is StateError ? e.message : '$e';
+
 /// Escapes one CSV field per RFC 4180: wrap in double quotes (doubling any
 /// quote already inside) whenever the value contains a comma or a quote.
 ///
@@ -730,59 +773,73 @@ String _formatHistory(List<ChatTurn> history) {
 /// see [_formatHistory]. Empty by default: every existing single-question
 /// caller keeps working unchanged.
 ///
-/// Returns null (never throws) on any failure at either step - invalid/
-/// missing SQL in any step, a query that errors against the real schema,
-/// an empty model response - same never-throws contract as every other
-/// local-AI entry point here, so the caller (nl_query_dialog.dart) always
-/// has a safe fallback.
-Future<SqlGroundedAnswer?> answerViaFullSqlAccess({
+/// Returns [SqlAccessError] (never throws) whenever either HTTP call to
+/// [engine] itself failed, or the SQL it wrote errored against the real
+/// schema - told apart from [SqlAccessUnavailable] (invalid/declined SQL,
+/// an empty model response) so a genuine backend failure is never silently
+/// mistaken for "the AI had nothing to add" (see [SqlAccessOutcome]'s own
+/// doc comment). Same never-throws contract as every other local-AI entry
+/// point here, so the caller (nl_query_dialog.dart) always has a safe
+/// fallback either way.
+Future<SqlAccessOutcome> answerViaFullSqlAccess({
   required String question,
   required MmexRepository readOnlyRepo,
   required String systemPrompt,
   required LlmEngine engine,
   List<ChatTurn> history = const [],
 }) async {
+  final LlmResponse rawPlan;
   try {
-    final rawPlan = await engine.askWithSystemPrompt(
+    rawPlan = await engine.askWithSystemPrompt(
         systemPrompt, '${_formatHistory(history)}$question');
-    final plan = extractValidatedSqlPlan(rawPlan.text);
-    if (plan == null) return null;
+  } catch (e) {
+    return SqlAccessError(_describeError(e));
+  }
+  final plan = extractValidatedSqlPlan(rawPlan.text);
+  if (plan == null) return const SqlAccessUnavailable();
 
-    final results = <StepResult>[];
-    var anyTruncated = false;
-    for (final step in plan) {
-      final rawRows =
-          readOnlyRepo.db.query('SELECT * FROM (${step.sql}) LIMIT 5000');
-      final fit = _fitRowsToBudget(rawRows, _resultBudgetChars);
-      final truncated = fit.dropped > 0;
-      if (truncated) anyTruncated = true;
-      results.add(StepResult(
-        objectif: step.objectif,
-        rowsJson: jsonEncode(fit.rows),
-        rowCount: fit.rows.length,
-        truncated: truncated,
-      ));
+  final results = <StepResult>[];
+  var anyTruncated = false;
+  for (final step in plan) {
+    final List<Map<String, Object?>> rawRows;
+    try {
+      rawRows = readOnlyRepo.db.query('SELECT * FROM (${step.sql}) LIMIT 5000');
+    } catch (e) {
+      return SqlAccessError(
+          "La requête écrite par l'IA n'a pas pu s'exécuter (${_describeError(e)}).");
     }
+    final fit = _fitRowsToBudget(rawRows, _resultBudgetChars);
+    final truncated = fit.dropped > 0;
+    if (truncated) anyTruncated = true;
+    results.add(StepResult(
+      objectif: step.objectif,
+      rowsJson: jsonEncode(fit.rows),
+      rowCount: fit.rows.length,
+      truncated: truncated,
+    ));
+  }
 
-    final formattingPrompt = buildAnswerFormattingPrompt(
-      question,
-      results,
-      truncated: anyTruncated,
-    );
-    final answer = await engine.askFreeformWithSystemPrompt(
+  final formattingPrompt = buildAnswerFormattingPrompt(
+    question,
+    results,
+    truncated: anyTruncated,
+  );
+  final LlmResponse answer;
+  try {
+    answer = await engine.askFreeformWithSystemPrompt(
       _answerFormattingSystemPrompt,
       formattingPrompt,
     );
-    final trimmed = answer.text.trim();
-    if (trimmed.isEmpty) return null;
-    return SqlGroundedAnswer(
-      text: trimmed,
-      csv: _resultsToCsv(results),
-      tokensPerSecond: answer.tokensPerSecond,
-    );
-  } catch (_) {
-    return null;
+  } catch (e) {
+    return SqlAccessError(_describeError(e));
   }
+  final trimmed = answer.text.trim();
+  if (trimmed.isEmpty) return const SqlAccessUnavailable();
+  return SqlAccessSuccess(SqlGroundedAnswer(
+    text: trimmed,
+    csv: _resultsToCsv(results),
+    tokensPerSecond: answer.tokensPerSecond,
+  ));
 }
 
 /// How many payee names at most make it into the vocabulary appendix -

@@ -448,13 +448,14 @@ void main() {
         '{"steps":[{"objectif":"total","sql":"SELECT 1"},{"objectif":"détail","sql":"SELECT 2"}]}',
         'Réponse finale.',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'analyse mes dépenses',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer?.text, 'Réponse finale.');
+      final answer = (outcome as SqlAccessSuccess).answer;
+      expect(answer.text, 'Réponse finale.');
       expect(repo.executed, [
         'SELECT * FROM (SELECT 1) LIMIT 5000',
         'SELECT * FROM (SELECT 2) LIMIT 5000',
@@ -485,14 +486,14 @@ void main() {
         '{"steps":[{"objectif":"Total","sql":"SELECT 1"},{"objectif":"Détail","sql":"SELECT 2"}]}',
         'Réponse finale.',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'analyse mes dépenses',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, isNotNull);
-      final csv = answer!.csv;
+      expect(outcome, isA<SqlAccessSuccess>());
+      final csv = (outcome as SqlAccessSuccess).answer.csv;
       expect(csv, contains('# Total'));
       expect(csv, contains('# Détail'));
       expect(csv, contains('total\n100'));
@@ -512,13 +513,14 @@ void main() {
         '{"sql":"SELECT 1"}',
         'Réponse finale.',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'liste',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer!.csv, contains('"Un, avec virgule"'));
+      final answer = (outcome as SqlAccessSuccess).answer;
+      expect(answer.csv, contains('"Un, avec virgule"'));
       expect(answer.csv, contains('"Il a dit ""salut"""'));
     });
 
@@ -554,49 +556,68 @@ void main() {
         '{"sql":"SELECT 1"}',
         'Réponse finale.',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'combien ?',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer?.text, 'Réponse finale.');
+      expect((outcome as SqlAccessSuccess).answer.text, 'Réponse finale.');
       expect(repo.executed, ['SELECT * FROM (SELECT 1) LIMIT 5000']);
     });
 
-    test('an invalid plan fails closed without touching the database',
-        () async {
+    test('an invalid plan is reported as unavailable, not an error, without '
+        'touching the database', () async {
       final repo = _FakeRepo(perStepResults: []);
       final engine = _FakeEngine(responses: [
         '{"raison":"non"}',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'x',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, isNull);
+      expect(outcome, isA<SqlAccessUnavailable>());
       expect(repo.executed, isEmpty);
       expect(engine.systemPrompts, hasLength(1));
       // Only the SQL-generation call happened - no answer-formatting call.
       expect(engine.prompts, hasLength(1));
     });
 
-    test('a query that errors fails closed, never throws', () async {
+    test(
+        'a query that errors fails closed with a real SqlAccessError, never '
+        'throws and never silently looks like "not understood" - regression '
+        'test for the 2026-09-01 user report of a real cloud AI failure '
+        'surfacing as a misleading fallback answer instead of a real error',
+        () async {
       final repo = _FakeRepo(perStepResults: [], failOnQuery: true);
       final engine = _FakeEngine(responses: [
         '{"sql":"SELECT 1"}',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'x',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer, isNull);
+      expect(outcome, isA<SqlAccessError>());
       // Only the SQL-generation call happened - no answer-formatting call.
       expect(engine.prompts, hasLength(1));
+    });
+
+    test('the SQL-generation call itself failing is reported as a '
+        'SqlAccessError, not silently swallowed', () async {
+      final repo = _FakeRepo(perStepResults: []);
+      final engine = _FakeEngine(responses: [], failNextCall: true);
+      final outcome = await answerViaFullSqlAccess(
+        question: 'x',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect(outcome, isA<SqlAccessError>());
+      expect(repo.executed, isEmpty);
     });
 
     test('an oversized result is truncated and the notice reaches the model',
@@ -612,13 +633,13 @@ void main() {
         '{"sql":"SELECT 1"}',
         'Réponse finale.',
       ]);
-      final answer = await answerViaFullSqlAccess(
+      final outcome = await answerViaFullSqlAccess(
         question: 'analyse mes dépenses',
         readOnlyRepo: repo,
         systemPrompt: 'Prompt.',
         engine: engine,
       );
-      expect(answer?.text, 'Réponse finale.');
+      expect((outcome as SqlAccessSuccess).answer.text, 'Réponse finale.');
       // The answer-formatting call is the last one recorded.
       final formattingPrompt = engine.prompts.last;
       expect(formattingPrompt, contains('partiel'));
@@ -660,11 +681,15 @@ class _FakeEngine extends LlamaServerClient {
   final List<String> responses;
   final List<String> prompts = [];
   final List<String> systemPrompts = [];
+  final bool failNextCall;
   int _call = 0;
-  _FakeEngine({required this.responses}) : super(1);
+  _FakeEngine({required this.responses, this.failNextCall = false}) : super(1);
 
   @override
   Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) async {
+    if (failNextCall) {
+      throw StateError('Le service IA a répondu 429.');
+    }
     systemPrompts.add(systemPrompt);
     final sep = String.fromCharCode(0);
     prompts.add('$systemPrompt$sep$question');

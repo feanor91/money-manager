@@ -6,7 +6,7 @@ import '../query_intent.dart';
 import 'llm_engine.dart';
 import 'model_catalog.dart';
 import 'sql_query_engine.dart'
-    show ChatTurn, SqlGroundedAnswer, defaultSqlSystemPrompt;
+    show ChatTurn, SqlAccessOutcome, SqlAccessUnavailable, defaultSqlSystemPrompt;
 
 Future<bool> isLocalLlmEnabled() async => false;
 Future<void> setLocalLlmEnabled(bool value) async {}
@@ -70,10 +70,10 @@ Future<MmexRepository?> openReadOnlyAdHocRepository(String dbPath) async =>
 Future<String> localLlmSqlSystemPrompt() async => defaultSqlSystemPrompt;
 Future<void> setLocalLlmSqlSystemPrompt(String value) async {}
 
-Future<SqlGroundedAnswer?> askLocalLlmWithFullDataAccess(
+Future<SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String question, {
   String? dbPath,
   MmexRepository? repo,
   List<ChatTurn> history = const [],
 }) async =>
-    null;
+    const SqlAccessUnavailable();

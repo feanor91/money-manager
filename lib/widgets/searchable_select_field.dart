@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
@@ -197,44 +198,10 @@ class _SearchableSelectFieldState<T extends Object>
                       itemCount: list.length,
                       itemBuilder: (context, index) {
                         final option = list[index];
-                        // A raw Listener.onPointerDown, not
-                        // InkWell.onTap/onTapDown (2026-08-24, intermittent
-                        // "can't select an option" report, most visibly a
-                        // single filtered match on the ledger's transaction
-                        // form). Root cause, confirmed with a widget test
-                        // that reproduces it (see
-                        // searchable_select_field_test.dart's "selection
-                        // survives a rebuild landing between pointer-down
-                        // and pointer-up"): this row sits inside a
-                        // ListView, so its InkWell's TapGestureRecognizer
-                        // shares a gesture arena with the ListView's own
-                        // scroll/pan recognizer - the arena only resolves
-                        // (and only THEN does onTapDown/onTap actually
-                        // fire) once it's clear the pan recognizer won't
-                        // claim the gesture, which is deferred all the way
-                        // to pointer-up, not pointer-down as the name
-                        // suggests. If a ChangeNotifier rebuild (this form
-                        // watches DatabaseProvider, which fires for
-                        // unrelated reasons - a debounced save completing,
-                        // etc.) tears down and rebuilds this exact row
-                        // before that resolution, the tap is silently
-                        // dropped. Listener.onPointerDown bypasses the
-                        // gesture arena entirely - it fires on the raw
-                        // pointer-down event unconditionally, before any
-                        // rebuild has a chance to interrupt it. The InkWell
-                        // stays, purely for the visual tap ripple - it no
-                        // longer drives the actual selection.
-                        return Listener(
+                        return _SelectableOptionRow(
                           key: ValueKey(widget.labelOf(option)),
-                          behavior: HitTestBehavior.opaque,
-                          onPointerDown: (_) => onSelectedCallback(option),
-                          child: InkWell(
-                            onTap: () {},
-                            child: ListTile(
-                              dense: true,
-                              title: _OptionLabel(text: widget.labelOf(option)),
-                            ),
-                          ),
+                          label: widget.labelOf(option),
+                          onSelected: () => onSelectedCallback(option),
                         );
                       },
                     ),
@@ -256,6 +223,125 @@ class _SearchableSelectFieldState<T extends Object>
             },
           ),
       ],
+    );
+  }
+}
+
+/// One row of the options dropdown - a raw [Listener], not
+/// InkWell.onTap/onTapDown (2026-08-24, intermittent "can't select an
+/// option" report, most visibly a single filtered match on the ledger's
+/// transaction form). Root cause, confirmed with a widget test that
+/// reproduces it (see searchable_select_field_test.dart's "selection
+/// survives a rebuild landing between pointer-down and pointer-up"): this
+/// row sits inside a ListView, so its InkWell's TapGestureRecognizer shares
+/// a gesture arena with the ListView's own scroll/pan recognizer - the arena
+/// only resolves (and only THEN does onTapDown/onTap actually fire) once
+/// it's clear the pan recognizer won't claim the gesture, which is deferred
+/// all the way to pointer-up, not pointer-down as the name suggests. If a
+/// ChangeNotifier rebuild (this form watches DatabaseProvider, which fires
+/// for unrelated reasons - a debounced save completing, etc.) tears down and
+/// rebuilds this exact row before that resolution, the tap is silently
+/// dropped. A raw [Listener] bypasses the gesture arena entirely.
+///
+/// Selecting straight on [onPointerDown] (as the first version of this fix
+/// did) bypasses the arena but breaks scrolling instead (2026-09-01 user
+/// report on the Android cloud-AI model picker: "dès que je clique sur la
+/// liste pour faire défiler, ça me sélectionne celui sur lequel j'ai
+/// cliqué") - a scroll drag also starts with a pointer-down on whatever row
+/// is under the finger, so it was firing a selection before the ListView's
+/// own pan recognizer ever got a chance to claim the gesture as a drag
+/// instead of a tap.
+///
+/// Fixed by tracking movement instead of committing unconditionally:
+/// [onPointerMove] cancels the pending selection once the finger has moved
+/// past [kTouchSlop] (the same threshold Flutter's own gesture recognizers
+/// use to tell a tap from a drag) - a raw [Listener] keeps receiving every
+/// move of an in-progress drag regardless of the arena's own outcome
+/// (unlike InkWell/GestureDetector, which would simply lose the arena and
+/// never fire at all), so this can tell a real scroll apart from a
+/// stationary tap by actual movement. A tap commits on [onPointerUp] once
+/// it's clear the finger never moved far enough to count as a drag.
+///
+/// Trade-off, deliberately accepted: this reintroduces a narrower version
+/// of the original 2026-08-24 race - if an ancestor ChangeNotifier rebuild
+/// tears this row down between pointer-down and pointer-up before that
+/// pointer-up ever arrives, the pending selection is now silently dropped
+/// (recoverable - the user just taps again) rather than force-committed.
+/// A first attempt tried committing from [State.dispose] instead (which
+/// runs synchronously as this exact rebuild tears the row down, strictly
+/// before Flutter's eventual, by-then-already-too-late delivery of that
+/// pointer-up) - rejected after hitting two different crashes trying it:
+/// calling back into [widget.onSelected] inline from dispose() trips
+/// Flutter's own "no new build during unmount" assertion (it ultimately
+/// hides an OverlayPortal), and even deferring that same call to a
+/// microtask still crashes, because the callback's closure was already
+/// bound to the specific (now torn-down) RawAutocomplete instance whose
+/// TextEditingController is gone by the time it runs - timing the call
+/// differently can't undo that. There is no way to safely fire through a
+/// fully disposed subtree, so this bug and the everyday scroll-breaking one
+/// cannot both be fully eliminated by this widget alone; the scroll bug -
+/// guaranteed to hit every long list, not a rare timing coincidence - is
+/// the one worth keeping fixed.
+class _SelectableOptionRow extends StatefulWidget {
+  final String label;
+  final VoidCallback onSelected;
+
+  const _SelectableOptionRow({super.key, required this.label, required this.onSelected});
+
+  @override
+  State<_SelectableOptionRow> createState() => _SelectableOptionRowState();
+}
+
+class _SelectableOptionRowState extends State<_SelectableOptionRow> {
+  Offset? _downPosition;
+  bool _movedTooFar = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (event) {
+        _downPosition = event.position;
+        _movedTooFar = false;
+      },
+      // A raw Listener bypasses the gesture arena entirely (see this row's
+      // own doc comment), so - unlike a GestureDetector/InkWell competing
+      // with the enclosing ListView's own drag recognizer - it keeps
+      // receiving every move of an in-progress scroll drag regardless of
+      // which recognizer the arena eventually favors. That's what lets this
+      // distinguish a scroll from a tap by real finger movement
+      // (2026-09-01 user report: a raw onPointerDown-fires-immediately
+      // version, committing unconditionally on first touch, made every
+      // scroll attempt on this exact list instantly "select" whatever row
+      // the drag started on and never actually scroll) - kTouchSlop is the
+      // same threshold Flutter's own gesture recognizers use to tell a tap
+      // from a drag.
+      onPointerMove: (event) {
+        final start = _downPosition;
+        if (start != null && (event.position - start).distance >= kTouchSlop) {
+          _movedTooFar = true;
+        }
+      },
+      onPointerUp: (_) {
+        final pending = _downPosition != null && !_movedTooFar;
+        _downPosition = null;
+        // Flutter still *delivers* this event to a row that was torn down
+        // (disposed) between pointer-down and pointer-up - a rebuild
+        // elsewhere landing mid-tap, see this row's own doc comment -
+        // rather than dropping it, so `mounted` must be checked explicitly:
+        // calling widget.onSelected() past that point would reach into a
+        // RawAutocomplete instance whose own TextEditingController is
+        // already gone, confirmed to crash.
+        if (pending && mounted) widget.onSelected();
+      },
+      onPointerCancel: (_) => _downPosition = null,
+      child: InkWell(
+        onTap: () {},
+        child: ListTile(
+          dense: true,
+          title: _OptionLabel(text: widget.label),
+        ),
+      ),
     );
   }
 }
