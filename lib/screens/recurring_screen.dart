@@ -641,7 +641,20 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: _notesController,
-                decoration: const InputDecoration(labelText: 'Remarque'),
+                decoration: const InputDecoration(
+                  labelText: 'Remarque',
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(),
+                ),
+                // Same fix as transactions_screen.dart's own Notes field
+                // (2026-09-01 user report) - a note spanning several lines
+                // only showed its first line, with the rest silently
+                // inaccessible while editing/viewing despite being saved
+                // intact.
+                minLines: 3,
+                maxLines: null,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
               ),
               const SizedBox(height: 12),
               ListTile(

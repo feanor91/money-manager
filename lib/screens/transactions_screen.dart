@@ -1843,7 +1843,20 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
               const SizedBox(height: 12),
               TextFormField(
                 controller: _notesController,
-                decoration: const InputDecoration(labelText: 'Notes'),
+                decoration: const InputDecoration(
+                  labelText: 'Notes',
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(),
+                ),
+                // Unset (no default single-line field) - a note pasted
+                // across several lines only ever showed its first line here
+                // (2026-09-01 user report: the rest was silently
+                // inaccessible while editing/viewing, even though it was
+                // saved and intact - only the display was truncated).
+                minLines: 3,
+                maxLines: null,
+                keyboardType: TextInputType.multiline,
+                textInputAction: TextInputAction.newline,
               ),
               const SizedBox(height: 12),
               ListTile(
