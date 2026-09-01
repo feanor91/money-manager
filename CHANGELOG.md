@@ -3,6 +3,12 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.90] - 2026-09-01
+
+- fix(ui): resize dialogs on orientation change instead of freezing at open
+- fix(nl-query): recognize French gender agreement in period phrases
+- feat(nav): collapse bottom nav to 4 items + overflow menu on narrow screens
+
 ## [1.0.89] - 2026-09-01
 
 - fix(ai): strip reasoning-model chain-of-thought, give follow-ups history
