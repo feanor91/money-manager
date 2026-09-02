@@ -3,6 +3,12 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.92] - 2026-09-02
+
+- fix(ci): wrap single-statement ifs in blocks to satisfy flutter analyze
+- feat(simulation): make the projection trustworthy against real history
+- feat(ai): understand solde mois par mois and partial tiers/catégorie names
+
 ## [1.0.91] - 2026-09-01
 
 - feat(simulation): add long-term what if scenario simulator (phases 1+2)
