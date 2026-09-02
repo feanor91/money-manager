@@ -2561,8 +2561,9 @@ class MmexRepository {
       final disabledFrom = disabledFromByBillId[bill.id];
       for (final occurrence
           in _occurrencesInRange(bill, rangeStart, rangeEnd)) {
-        if (disabledFrom != null && !occurrence.isBefore(disabledFrom))
+        if (disabledFrom != null && !occurrence.isBefore(disabledFrom)) {
           continue;
+        }
         BudgetWindow? window;
         for (final w in windows) {
           if (w.contains(occurrence)) {
@@ -2748,8 +2749,9 @@ class MmexRepository {
     }
 
     final dayStep = _dayStepForBill(bill);
-    if (dayStep == null)
+    if (dayStep == null) {
       return occurrences; // RecurrencePeriod.none: one-off, not recurring.
+    }
     var cursor = bill.nextOccurrence;
     var guard = 0;
     while (!cursor.isBefore(effectiveStart) && guard < 5000) {

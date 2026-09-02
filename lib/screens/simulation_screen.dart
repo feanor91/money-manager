@@ -408,8 +408,9 @@ class _AdjustmentsPanel extends StatelessWidget {
     buffer.write('\nPériodicité : ${recurrencePeriodLabel(bill.period)}');
     buffer.write(
         '\nProchaine échéance : ${DateFormat('d MMM yyyy', 'fr_FR').format(bill.nextOccurrence)}');
-    if ((bill.notes ?? '').trim().isNotEmpty)
+    if ((bill.notes ?? '').trim().isNotEmpty) {
       buffer.write('\nNotes : ${bill.notes!.trim()}');
+    }
     return buffer.toString();
   }
 
@@ -967,8 +968,9 @@ class _VirtualBillDialogState extends State<_VirtualBillDialog> {
 
   void _submit() {
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
-    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0)
+    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0) {
       return;
+    }
     Navigator.of(context).pop(_VirtualBillFormResult(
       accountId: _accountId,
       label: _labelController.text.trim(),
@@ -1371,8 +1373,9 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 
   void _submit() {
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
-    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0)
+    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0) {
       return;
+    }
     Navigator.of(context).pop(_OneOffEventFormResult(
       accountId: _accountId,
       label: _labelController.text.trim(),
@@ -1610,8 +1613,9 @@ class _SimulationChart extends StatelessWidget {
                     interval: labelInterval,
                     getTitlesWidget: (value, meta) {
                       final i = value.round();
-                      if (i < 0 || i >= points.length)
+                      if (i < 0 || i >= points.length) {
                         return const SizedBox.shrink();
+                      }
                       return Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Text(axisFormat.format(points[i]),
