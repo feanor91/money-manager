@@ -14,6 +14,7 @@ class BillDeposit {
   final DateTime nextOccurrence;
   final RecurrencePeriod period;
   final RecurrenceAutoExecute autoExecute;
+
   /// -1 = repeats forever; otherwise the remaining occurrence count - EXCEPT
   /// when [periodUsesXParam] is true for [period], in which case this is the
   /// day/month interval X ("dans/tous les X ..."), not a count at all.
@@ -25,6 +26,15 @@ class BillDeposit {
   /// BILLSDEPOSITS_V1 - stored separately, see
   /// [MmexRepository.getPausedBillIds]/[MmexRepository.setBillPaused].
   final bool paused;
+
+  /// Meaningless for a real MMEX bill (always 0 - [fromRow] never sets it) -
+  /// only [SimVirtualBill.toBillDeposit] ever produces a non-zero value,
+  /// for the simulator's "dépenses imprévues" adjustment (2026-09-02 user
+  /// request). When > 0, [MmexRepository._monthlyNetForBills] applies a
+  /// small, deterministically-seeded random variation per occurrence
+  /// instead of the exact same amount every single month - see
+  /// `_seededMonthlyJitter`. A percentage (e.g. 10 = ±10%), never negative.
+  final double variancePercent;
 
   const BillDeposit({
     required this.id,
@@ -41,6 +51,7 @@ class BillDeposit {
     this.categoryId,
     this.notes,
     this.paused = false,
+    this.variancePercent = 0,
   });
 
   /// Mirrors [MoneyTransaction.copyWith]: a non-transfer bill always has
@@ -72,11 +83,14 @@ class BillDeposit {
       accountId: row['ACCOUNTID'] as int,
       toAccountId: row['TOACCOUNTID'] as int?,
       payeeId: row['PAYEEID'] as int? ?? -1,
-      transCode: transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
+      transCode:
+          transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
       amount: (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0,
       toAmount: (row['TOTRANSAMOUNT'] as num?)?.toDouble() ?? 0,
       categoryId: row['CATEGID'] as int?,
-      nextOccurrence: DateTime.tryParse(row['NEXTOCCURRENCEDATE'] as String? ?? '') ?? DateTime.now(),
+      nextOccurrence:
+          DateTime.tryParse(row['NEXTOCCURRENCEDATE'] as String? ?? '') ??
+              DateTime.now(),
       period: decoded.period,
       autoExecute: decoded.autoExecute,
       numOccurrences: (row['NUMOCCURRENCES'] as num?)?.toInt() ?? -1,

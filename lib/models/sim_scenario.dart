@@ -24,8 +24,10 @@ class SimScenario {
     return SimScenario(
       id: row['SCENARIOID'] as int,
       name: row['NAME'] as String? ?? '',
-      createdAt: DateTime.tryParse(row['CREATED_AT'] as String? ?? '') ?? DateTime.now(),
-      updatedAt: DateTime.tryParse(row['UPDATED_AT'] as String? ?? '') ?? DateTime.now(),
+      createdAt: DateTime.tryParse(row['CREATED_AT'] as String? ?? '') ??
+          DateTime.now(),
+      updatedAt: DateTime.tryParse(row['UPDATED_AT'] as String? ?? '') ??
+          DateTime.now(),
     );
   }
 }
@@ -100,6 +102,10 @@ class SimVirtualBill {
   /// every time a scenario is projected.
   final int numOccurrences;
 
+  /// See [BillDeposit.variancePercent] - 0 (the default) means the exact
+  /// same amount every occurrence, same as before this field existed.
+  final double variancePercent;
+
   const SimVirtualBill({
     required this.id,
     required this.scenarioId,
@@ -110,6 +116,7 @@ class SimVirtualBill {
     required this.startDate,
     required this.period,
     this.numOccurrences = -1,
+    this.variancePercent = 0,
   });
 
   /// Reuses the exact same occurrence-projection code real bills go
@@ -129,6 +136,7 @@ class SimVirtualBill {
         autoExecute: RecurrenceAutoExecute.manual,
         numOccurrences: numOccurrences,
         notes: label,
+        variancePercent: variancePercent,
       );
 
   factory SimVirtualBill.fromRow(Map<String, Object?> row) {
@@ -137,17 +145,21 @@ class SimVirtualBill {
       scenarioId: row['SCENARIOID'] as int,
       accountId: row['ACCOUNTID'] as int,
       label: row['LABEL'] as String? ?? '',
-      transCode: transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
+      transCode:
+          transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
       amount: (row['AMOUNT'] as num?)?.toDouble() ?? 0,
-      startDate: DateTime.tryParse(row['START_DATE'] as String? ?? '') ?? DateTime.now(),
+      startDate: DateTime.tryParse(row['START_DATE'] as String? ?? '') ??
+          DateTime.now(),
       // Only ever written by [MmexRepository.addSimVirtualBill] as
       // `period.name`, so a mismatch here would mean a hand-edited or
       // otherwise corrupted row - falls back to `none` rather than
       // throwing (RecurrencePeriod.values.byName throws on an unrecognized
       // name) and taking the whole screen down over one bad row.
-      period: RecurrencePeriod.values.asNameMap()[row['PERIOD'] as String? ?? ''] ??
-          RecurrencePeriod.none,
+      period:
+          RecurrencePeriod.values.asNameMap()[row['PERIOD'] as String? ?? ''] ??
+              RecurrencePeriod.none,
       numOccurrences: (row['NUM_OCCURRENCES'] as num?)?.toInt() ?? -1,
+      variancePercent: (row['VARIANCE_PERCENT'] as num?)?.toDouble() ?? 0,
     );
   }
 }
@@ -179,7 +191,8 @@ class SimOneOffEvent {
       scenarioId: row['SCENARIOID'] as int,
       accountId: row['ACCOUNTID'] as int,
       label: row['LABEL'] as String? ?? '',
-      transCode: transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
+      transCode:
+          transCodeFromString(row['TRANSCODE'] as String? ?? 'Withdrawal'),
       amount: (row['AMOUNT'] as num?)?.toDouble() ?? 0,
       date: DateTime.tryParse(row['DATE'] as String? ?? '') ?? DateTime.now(),
     );

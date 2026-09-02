@@ -1,6 +1,10 @@
+import 'dart:math';
+
 import '../models/account.dart';
 import '../models/bill_deposit.dart';
 import '../models/budget.dart';
+import '../models/budget_period.dart'
+    show BudgetWindow, budgetWindowContaining, previousBudgetWindow;
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
@@ -143,7 +147,8 @@ class MmexRepository {
     // snapshotted it automatically from that category's live suggested
     // value purely to freeze it - unfixBudgetScenario deletes exactly the
     // 0-rows, so those categories resume live tracking.
-    _tryAddColumn('APP_BUDGET_SCENARIO_AMOUNTS', 'MANUAL', 'INTEGER NOT NULL DEFAULT 1');
+    _tryAddColumn(
+        'APP_BUDGET_SCENARIO_AMOUNTS', 'MANUAL', 'INTEGER NOT NULL DEFAULT 1');
     // Budget-only categories that don't exist in CATEGORY_V1 at all - for
     // planning a spend/income that has no dedicated real category yet.
     // Referenced elsewhere (APP_BUDGET_SCENARIO_AMOUNTS.CATEGID,
@@ -161,7 +166,8 @@ class MmexRepository {
     // existed) means a top-level virtual category, same as before. A real
     // category's id means this virtual category is an artificial
     // subdivision nested under it instead - see VirtualBudgetCategory.
-    _tryAddColumn('APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES', 'PARENT_CATEGID', 'INTEGER');
+    _tryAddColumn(
+        'APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES', 'PARENT_CATEGID', 'INTEGER');
 
     // Long-term "what if" scenarios (PLAN_SIMULATION_LONG_TERME.md, phase
     // 1, 2026-09-02) - same split as the budget scenarios above: a
@@ -215,6 +221,14 @@ class MmexRepository {
         DATE TEXT NOT NULL
       )
     ''');
+    // A virtual bill's optional month-to-month random variation (2026-09-02
+    // user request: the pure-recurring-bills projection was always too
+    // smooth/optimistic, real life has non-recurring spending too) - see
+    // BillDeposit.variancePercent/MmexRepository.historicalDiscretionaryMonthlyAverage.
+    // 0 (the default) means every occurrence keeps the exact same amount,
+    // same as before this column existed.
+    _tryAddColumn(
+        'APP_SIM_VIRTUAL_BILLS', 'VARIANCE_PERCENT', 'REAL NOT NULL DEFAULT 0');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -235,7 +249,8 @@ class MmexRepository {
   /// results are matched against, and dropping that day's data entirely.
   /// Constructing a `DateTime` from adjusted year/month/day components
   /// instead sidesteps wall-clock arithmetic altogether.
-  static DateTime _addDays(DateTime date, int days) => DateTime(date.year, date.month, date.day + days);
+  static DateTime _addDays(DateTime date, int days) =>
+      DateTime(date.year, date.month, date.day + days);
 
   // ---- Accounts ----------------------------------------------------
 
@@ -266,7 +281,13 @@ class MmexRepository {
     db.execute(
       'UPDATE ACCOUNTLIST_V1 SET ACCOUNTNAME = ?, ACCOUNTTYPE = ?, STATUS = ?, INITIALBAL = ? '
       'WHERE ACCOUNTID = ?',
-      [account.name, account.type, account.status, account.initialBalance, account.id],
+      [
+        account.name,
+        account.type,
+        account.status,
+        account.initialBalance,
+        account.id
+      ],
     );
   }
 
@@ -291,7 +312,9 @@ class MmexRepository {
       'SELECT INITIALBAL FROM ACCOUNTLIST_V1 WHERE ACCOUNTID = ?',
       [accountId],
     );
-    final initial = (account.isEmpty ? 0 : account.first['INITIALBAL'] as num?)?.toDouble() ?? 0;
+    final initial = (account.isEmpty ? 0 : account.first['INITIALBAL'] as num?)
+            ?.toDouble() ??
+        0;
 
     final where = <String>[
       '(ACCOUNTID = ? OR TOACCOUNTID = ?)',
@@ -405,7 +428,8 @@ class MmexRepository {
       'SELECT COUNT(*) AS n FROM PAYEE_V1 WHERE CATEGID = ?',
       [categoryId],
     );
-    int count(List<Map<String, Object?>> rows) => (rows.first['n'] as int?) ?? 0;
+    int count(List<Map<String, Object?>> rows) =>
+        (rows.first['n'] as int?) ?? 0;
     return CategoryUsage(
       childCategoryCount: count(children),
       transactionCount: count(transactions),
@@ -453,7 +477,8 @@ class MmexRepository {
         [fromId, toId],
       );
       for (final row in conflicting) {
-        db.execute('DELETE FROM BUDGETTABLE_V1 WHERE BUDGETENTRYID = ?', [row['id']]);
+        db.execute(
+            'DELETE FROM BUDGETTABLE_V1 WHERE BUDGETENTRYID = ?', [row['id']]);
       }
       db.execute(
         'UPDATE BUDGETTABLE_V1 SET CATEGID = ? WHERE CATEGID = ?',
@@ -503,12 +528,14 @@ class MmexRepository {
   /// be deleted outright (0) or must be kept.
   int payeeUsageCount(int payeeId) {
     int count(String sql) => (db.query(sql, [payeeId]).first['n'] as int?) ?? 0;
-    return count('SELECT COUNT(*) AS n FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ?') +
+    return count(
+            'SELECT COUNT(*) AS n FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ?') +
         count('SELECT COUNT(*) AS n FROM BILLSDEPOSITS_V1 WHERE PAYEEID = ?');
   }
 
   void renamePayee(int payeeId, String newName) {
-    db.execute('UPDATE PAYEE_V1 SET PAYEENAME = ? WHERE PAYEEID = ?', [newName, payeeId]);
+    db.execute('UPDATE PAYEE_V1 SET PAYEENAME = ? WHERE PAYEEID = ?',
+        [newName, payeeId]);
   }
 
   /// Only meant to be called once [payeeUsageCount] is actually 0 - the
@@ -594,10 +621,12 @@ class MmexRepository {
   /// used by cross-account analysis screens (e.g. the spending explorer)
   /// that aren't scoped to a single account.
   ({int min, int max})? transactionYearRangeAll() {
-    final row = db.query(
-      'SELECT MIN(TRANSDATE) AS minDate, MAX(TRANSDATE) AS maxDate FROM CHECKINGACCOUNT_V1 '
-      "WHERE (DELETEDTIME IS NULL OR DELETEDTIME = '')",
-    ).first;
+    final row = db
+        .query(
+          'SELECT MIN(TRANSDATE) AS minDate, MAX(TRANSDATE) AS maxDate FROM CHECKINGACCOUNT_V1 '
+          "WHERE (DELETEDTIME IS NULL OR DELETEDTIME = '')",
+        )
+        .first;
     final minYear = DateTime.tryParse(row['minDate'] as String? ?? '')?.year;
     final maxYear = DateTime.tryParse(row['maxDate'] as String? ?? '')?.year;
     if (minYear == null || maxYear == null) return null;
@@ -631,7 +660,8 @@ class MmexRepository {
       params.addAll(years);
     }
     if (categoryIds != null && categoryIds.isNotEmpty) {
-      where.add('CATEGID IN (${List.filled(categoryIds.length, '?').join(',')})');
+      where.add(
+          'CATEGID IN (${List.filled(categoryIds.length, '?').join(',')})');
       params.addAll(categoryIds);
     }
     if (payeeIds != null && payeeIds.isNotEmpty) {
@@ -642,7 +672,8 @@ class MmexRepository {
       // Transfers are already excluded above (TRANSCODE != 'Transfer'), so
       // every remaining row's own account is always ACCOUNTID - never
       // TOACCOUNTID, which only a transfer ever populates.
-      where.add('ACCOUNTID IN (${List.filled(accountIds.length, '?').join(',')})');
+      where.add(
+          'ACCOUNTID IN (${List.filled(accountIds.length, '?').join(',')})');
       params.addAll(accountIds);
     }
     final whereSql = 'WHERE ${where.join(' AND ')}';
@@ -684,8 +715,13 @@ class MmexRepository {
     DateTime? from,
     DateTime? to,
   }) {
-    final accountRows = db.query('SELECT INITIALBAL FROM ACCOUNTLIST_V1 WHERE ACCOUNTID = ?', [accountId]);
-    var running = (accountRows.isEmpty ? 0 : accountRows.first['INITIALBAL'] as num?)?.toDouble() ?? 0;
+    final accountRows = db.query(
+        'SELECT INITIALBAL FROM ACCOUNTLIST_V1 WHERE ACCOUNTID = ?',
+        [accountId]);
+    var running =
+        (accountRows.isEmpty ? 0 : accountRows.first['INITIALBAL'] as num?)
+                ?.toDouble() ??
+            0;
 
     if (from != null) {
       // Mirrors MoneyTransaction.signedAmountFor's sign rules exactly (see
@@ -796,8 +832,10 @@ class MmexRepository {
 
   void deleteTransaction(int transId) {
     db.execute('DELETE FROM CHECKINGACCOUNT_V1 WHERE TRANSID = ?', [transId]);
-    db.execute('DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
-    db.execute('DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
+    db.execute(
+        'DELETE FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+    db.execute(
+        'DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
   }
 
   /// Recreates [tx] as a brand-new transaction with the same field values,
@@ -833,8 +871,10 @@ class MmexRepository {
     // ('V', "en pause") needs a direct follow-up write, same as
     // TransactionEditorSheet._save's own status handling.
     if (tx.isVoid) {
-      db.execute('UPDATE CHECKINGACCOUNT_V1 SET STATUS = ? WHERE TRANSID = ?', ['V', newId]);
-      syncPausedTracking(newId, paused: true, reconciled: wasReconciledBeforePause ?? false);
+      db.execute('UPDATE CHECKINGACCOUNT_V1 SET STATUS = ? WHERE TRANSID = ?',
+          ['V', newId]);
+      syncPausedTracking(newId,
+          paused: true, reconciled: wasReconciledBeforePause ?? false);
     }
     if (billId != null) {
       _linkTransactionToBill(newId, billId,
@@ -860,14 +900,16 @@ class MmexRepository {
   /// [TransactionEditorSheet._save] just wrote to STATUS itself (that save
   /// already computes and writes the real 'V'/'R'/'' value in one go, so
   /// this is bookkeeping only, never a second STATUS write).
-  void syncPausedTracking(int transId, {required bool paused, required bool reconciled}) {
+  void syncPausedTracking(int transId,
+      {required bool paused, required bool reconciled}) {
     if (paused) {
       db.execute(
         'INSERT OR REPLACE INTO APP_PAUSED_TRANSACTIONS (TRANSID, WAS_RECONCILED) VALUES (?, ?)',
         [transId, reconciled ? 1 : 0],
       );
     } else {
-      db.execute('DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
+      db.execute(
+          'DELETE FROM APP_PAUSED_TRANSACTIONS WHERE TRANSID = ?', [transId]);
     }
   }
 
@@ -876,8 +918,9 @@ class MmexRepository {
   /// offer syncing an amount edit back to the template (see
   /// bill_amount_sync.dart).
   int? billIdForTransaction(int transId) {
-    final rows =
-        db.query('SELECT BILLID FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?', [transId]);
+    final rows = db.query(
+        'SELECT BILLID FROM APP_TRANSACTION_BILL_LINKS WHERE TRANSID = ?',
+        [transId]);
     return rows.isEmpty ? null : rows.first['BILLID'] as int;
   }
 
@@ -888,7 +931,8 @@ class MmexRepository {
   /// normally stable across both (groceries vary in amount every time but
   /// stay the same category; the same payee can pay from more than one of
   /// the user's own accounts).
-  int countTransactionsMatching({required int payeeId, required int categoryId}) {
+  int countTransactionsMatching(
+      {required int payeeId, required int categoryId}) {
     final rows = db.query(
       'SELECT COUNT(*) AS c FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ? AND CATEGID = ? '
       "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
@@ -1023,7 +1067,10 @@ class MmexRepository {
       "UPPER(TRIM(STATUS)) != 'V'",
       "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
     ];
-    final params = <Object?>[_isoDate(start), _isoDate(DateTime(anchor.year, anchor.month + 1, 1))];
+    final params = <Object?>[
+      _isoDate(start),
+      _isoDate(DateTime(anchor.year, anchor.month + 1, 1))
+    ];
     if (accountId != null) {
       where.add('(ACCOUNTID = ? OR TOACCOUNTID = ?)');
       params.addAll([accountId, accountId]);
@@ -1166,7 +1213,10 @@ class MmexRepository {
       "UPPER(TRIM(STATUS)) != 'V'",
       "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
     ];
-    final params = <Object?>[_isoDate(start), _isoDateExclusiveUpper(anchorDay)];
+    final params = <Object?>[
+      _isoDate(start),
+      _isoDateExclusiveUpper(anchorDay)
+    ];
     if (accountId != null) {
       where.add('(ACCOUNTID = ? OR TOACCOUNTID = ?)');
       params.addAll([accountId, accountId]);
@@ -1236,11 +1286,64 @@ class MmexRepository {
   }) {
     final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
     final start = _addDays(anchorDay, -(days - 1));
+    return _dailyNetForBills(getBillDeposits(),
+        start: start, end: anchorDay, days: days, accountId: accountId);
+  }
+
+  /// Scenario-aware counterpart to [recurringDailyNet] - same signature and
+  /// bucketing, but projects [scenarioId]'s effective bill set (see
+  /// [_effectiveBillsForScenario]) instead of the unmodified real one, and
+  /// also folds in the scenario's one-off events. Day-level counterpart to
+  /// [simulatedMonthlyNet]/[simulatedPeriodNet] - see
+  /// [_SimulationChart]'s own doc comment for why the chart wants day
+  /// granularity at all (2026-09-02 user request: match the dashboard's own
+  /// day-by-day forecast chart instead of a monthly-bucketed one).
+  Map<DateTime, double> simulatedDailyNet({
+    required int scenarioId,
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+  }) {
+    final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
+    final start = _addDays(anchorDay, -(days - 1));
+    final effective = _effectiveBillsForScenario(scenarioId);
+    final result = Map<DateTime, double>.from(_dailyNetForBills(
+      effective.bills,
+      start: start,
+      end: anchorDay,
+      days: days,
+      accountId: accountId,
+      disabledFromByBillId: effective.disabledFromByBillId,
+    ));
+
+    for (final event in getSimOneOffEvents(scenarioId)) {
+      if (accountId != null && event.accountId != accountId) continue;
+      final bucket = DateTime(event.date.year, event.date.month, event.date.day);
+      final current = result[bucket];
+      if (current == null) continue;
+      final signed =
+          event.transCode == TransCode.deposit ? event.amount : -event.amount;
+      result[bucket] = current + signed;
+    }
+    return result;
+  }
+
+  /// Shared bucketing core behind [recurringDailyNet] and [simulatedDailyNet] -
+  /// same role as [_monthlyNetForBills], just bucketed by calendar day
+  /// instead of month.
+  Map<DateTime, double> _dailyNetForBills(
+    List<BillDeposit> bills, {
+    required DateTime start,
+    required DateTime end,
+    required int days,
+    int? accountId,
+    Map<int, DateTime> disabledFromByBillId = const {},
+  }) {
     final result = <DateTime, double>{
       for (var i = 0; i < days; i++) _addDays(start, i): 0.0,
     };
 
-    for (final bill in getBillDeposits()) {
+    for (final bill in bills) {
       if (bill.paused) continue;
       final involvesAccount = accountId == null ||
           bill.accountId == accountId ||
@@ -1249,11 +1352,19 @@ class MmexRepository {
       if (accountId == null && bill.transCode == TransCode.transfer) continue;
 
       final signedAmount = _billSignedAmount(bill, accountId);
-      for (final occurrence in _occurrencesInRange(bill, start, anchorDay)) {
-        final bucket = DateTime(occurrence.year, occurrence.month, occurrence.day);
+      final disabledFrom = disabledFromByBillId[bill.id];
+      for (final occurrence in _occurrencesInRange(bill, start, end)) {
+        if (disabledFrom != null && !occurrence.isBefore(disabledFrom)) {
+          continue;
+        }
+        final bucket =
+            DateTime(occurrence.year, occurrence.month, occurrence.day);
         final current = result[bucket];
         if (current == null) continue;
-        result[bucket] = current + signedAmount;
+        final jitter = bill.variancePercent > 0
+            ? _seededMonthlyJitter(bill.id, bucket, bill.variancePercent)
+            : 0.0;
+        result[bucket] = current + signedAmount * (1 + jitter);
       }
     }
     return result;
@@ -1285,7 +1396,8 @@ class MmexRepository {
       final occurrenceCount = _occurrencesInRange(bill, start, end).length;
       if (occurrenceCount == 0) continue;
       final signedAmount = _billSignedAmount(bill, accountId);
-      result[categoryId] = (result[categoryId] ?? 0) + signedAmount * occurrenceCount;
+      result[categoryId] =
+          (result[categoryId] ?? 0) + signedAmount * occurrenceCount;
     }
     return result;
   }
@@ -1321,7 +1433,8 @@ class MmexRepository {
       days: _daysBetween(today, target) + 1,
       accountId: accountId,
     );
-    final futureReal = futureDailyNet(after: today, end: target, accountId: accountId);
+    final futureReal =
+        futureDailyNet(after: today, end: target, accountId: accountId);
     var total = todayBalance;
     var cursor = _addDays(today, 1);
     while (!cursor.isAfter(target)) {
@@ -1352,7 +1465,8 @@ class MmexRepository {
       days: horizonDays + 1,
       accountId: accountId,
     );
-    final futureReal = futureDailyNet(after: today, end: target, accountId: accountId);
+    final futureReal =
+        futureDailyNet(after: today, end: target, accountId: accountId);
 
     var cumulative = current;
     var cursor = _addDays(today, 1);
@@ -1402,7 +1516,8 @@ class MmexRepository {
           : (payees[bill.payeeId]?.name ?? 'Tiers inconnu');
 
       for (final occurrence in _occurrencesInRange(bill, start, end)) {
-        result.add(RecurringOccurrence(date: occurrence, label: label, signedAmount: signedAmount));
+        result.add(RecurringOccurrence(
+            date: occurrence, label: label, signedAmount: signedAmount));
       }
     }
     result.sort((a, b) => a.date.compareTo(b.date));
@@ -1476,7 +1591,8 @@ class MmexRepository {
   /// Same as [categorySpendForMonth] but over an arbitrary [start, end)
   /// window instead of a fixed calendar month - e.g. a budget window that
   /// starts mid-month, see BudgetScreen and models/budget_period.dart.
-  Map<int, double> categorySpendForPeriod(DateTime start, DateTime end, {int? accountId}) {
+  Map<int, double> categorySpendForPeriod(DateTime start, DateTime end,
+      {int? accountId}) {
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
@@ -1546,7 +1662,8 @@ class MmexRepository {
     var cursor = DateTime(start.year, start.month, 1);
     while (cursor.isBefore(end)) {
       final monthEnd = DateTime(cursor.year, cursor.month + 1, 1);
-      final totals = categorySpendForPeriod(cursor, monthEnd, accountId: accountId);
+      final totals =
+          categorySpendForPeriod(cursor, monthEnd, accountId: accountId);
       result[cursor] = categoryId == null
           ? totals.values.fold(0.0, (a, b) => a + b)
           : rolledUpSpend(categoryId, totals, categories);
@@ -1558,7 +1675,8 @@ class MmexRepository {
   /// Same idea as [categorySpendForPeriod] but for a single payee instead
   /// of every category - "combien j'ai dépensé chez X" (natural-language
   /// query feature). Withdrawals only, same exclusions (voided, deleted).
-  double payeeSpendForPeriod(int payeeId, DateTime start, DateTime end, {int? accountId}) {
+  double payeeSpendForPeriod(int payeeId, DateTime start, DateTime end,
+      {int? accountId}) {
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
@@ -1655,7 +1773,8 @@ class MmexRepository {
   /// evidence is stale (see BudgetScreen's suggestions dialog): a category
   /// that hasn't seen a real transaction in months is a weaker basis for
   /// "budget this much every month" than one spent in recently.
-  Map<int, DateTime> lastSpendDatePerCategory(DateTime start, DateTime end, {int? accountId}) {
+  Map<int, DateTime> lastSpendDatePerCategory(DateTime start, DateTime end,
+      {int? accountId}) {
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
@@ -1687,10 +1806,12 @@ class MmexRepository {
   // ---- Recurring transactions (bills/deposits) ----------------------
 
   List<BillDeposit> getBillDeposits() {
-    final rows = db.query('SELECT * FROM BILLSDEPOSITS_V1 ORDER BY NEXTOCCURRENCEDATE ASC');
+    final rows = db.query(
+        'SELECT * FROM BILLSDEPOSITS_V1 ORDER BY NEXTOCCURRENCEDATE ASC');
     final pausedIds = getPausedBillIds();
     return rows
-        .map((row) => BillDeposit.fromRow(row, paused: pausedIds.contains(row['BDID'] as int)))
+        .map((row) => BillDeposit.fromRow(row,
+            paused: pausedIds.contains(row['BDID'] as int)))
         .toList();
   }
 
@@ -1704,7 +1825,8 @@ class MmexRepository {
   /// .mmb file stays a plain, portable MMEX database - opening it in the
   /// real MMEX desktop app just ignores this extra row.
   Set<int> getPausedBillIds() {
-    final rows = db.query("SELECT INFOVALUE FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
+    final rows = db.query(
+        "SELECT INFOVALUE FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
     if (rows.isEmpty) return {};
     final value = rows.first['INFOVALUE'] as String? ?? '';
     return value.split(',').map(int.tryParse).whereType<int>().toSet();
@@ -1718,7 +1840,8 @@ class MmexRepository {
       ids.remove(billId);
     }
     final value = ids.join(',');
-    final existing = db.query("SELECT INFOID FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
+    final existing = db.query(
+        "SELECT INFOID FROM INFOTABLE_V1 WHERE INFONAME = '$_pausedBillsInfoName'");
     if (existing.isEmpty) {
       db.execute(
         'INSERT INTO INFOTABLE_V1 (INFONAME, INFOVALUE) VALUES (?, ?)',
@@ -1792,7 +1915,8 @@ class MmexRepository {
 
   void deleteBillDeposit(int bdId) {
     db.execute('DELETE FROM BILLSDEPOSITS_V1 WHERE BDID = ?', [bdId]);
-    db.execute('DELETE FROM APP_BILL_OCCURRENCE_TOTALS WHERE BILLID = ?', [bdId]);
+    db.execute(
+        'DELETE FROM APP_BILL_OCCURRENCE_TOTALS WHERE BILLID = ?', [bdId]);
   }
 
   /// Remembers [total] as the original occurrence count for [billId] the
@@ -1811,7 +1935,8 @@ class MmexRepository {
   /// keyed by bill id - only present for bills that have had a limited
   /// duration since this feature was added.
   Map<int, int> billOccurrenceTotals() {
-    final rows = db.query('SELECT BILLID, TOTAL FROM APP_BILL_OCCURRENCE_TOTALS');
+    final rows =
+        db.query('SELECT BILLID, TOTAL FROM APP_BILL_OCCURRENCE_TOTALS');
     return {
       for (final row in rows) row['BILLID'] as int: row['TOTAL'] as int,
     };
@@ -1830,7 +1955,8 @@ class MmexRepository {
   /// [date], then advances the template's next-occurrence date to the first
   /// cycle date after [date] (deleting the template if it has just run out
   /// of remaining occurrences).
-  int recordBillOccurrence(BillDeposit bill, {required DateTime date, bool reconciled = false}) {
+  int recordBillOccurrence(BillDeposit bill,
+      {required DateTime date, bool reconciled = false}) {
     final transId = insertTransaction(
       accountId: bill.accountId,
       payeeId: bill.payeeId,
@@ -1844,18 +1970,22 @@ class MmexRepository {
       reconciled: reconciled,
     );
     final total = billOccurrenceTotals()[bill.id];
-    final hasFixedCount = !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
+    final hasFixedCount =
+        !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
     _linkTransactionToBill(
       transId,
       bill.id,
-      occurrenceIndex: (hasFixedCount && total != null) ? total - bill.numOccurrences + 1 : null,
+      occurrenceIndex: (hasFixedCount && total != null)
+          ? total - bill.numOccurrences + 1
+          : null,
       occurrenceTotal: hasFixedCount ? total : null,
     );
     // The recorded date may be earlier than the template's own scheduled
     // occurrence (recording a bill a little early/late) - always advance
     // from at least the template's own anchor so the schedule can't get
     // stuck repeating the same "next occurrence" forever.
-    final advanceFrom = date.isAfter(bill.nextOccurrence) ? date : bill.nextOccurrence;
+    final advanceFrom =
+        date.isAfter(bill.nextOccurrence) ? date : bill.nextOccurrence;
     _applyScheduleAdvance(bill, _advanceSchedule(bill, advanceFrom));
     return transId;
   }
@@ -1869,11 +1999,13 @@ class MmexRepository {
   /// a limited ("durée limitée") bill stops exactly at its remaining count
   /// even when [asOf] is far enough in the future to otherwise cover more
   /// cycle dates - see [_advanceSchedule].
-  List<int> catchUpBillDeposit(BillDeposit bill, DateTime asOf, {bool reconciled = false}) {
+  List<int> catchUpBillDeposit(BillDeposit bill, DateTime asOf,
+      {bool reconciled = false}) {
     final advance = _advanceSchedule(bill, asOf);
     final ids = <int>[];
     final total = billOccurrenceTotals()[bill.id];
-    final hasFixedCount = !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
+    final hasFixedCount =
+        !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
     // Catching up several missed occurrences in one call still assigns
     // each a distinct, increasing index (1st, 2nd, ...) - bill.numOccurrences
     // itself only updates once at the end (see _applyScheduleAdvance
@@ -1896,7 +2028,8 @@ class MmexRepository {
       _linkTransactionToBill(
         transId,
         bill.id,
-        occurrenceIndex: (hasFixedCount && total != null) ? total - remaining + 1 : null,
+        occurrenceIndex:
+            (hasFixedCount && total != null) ? total - remaining + 1 : null,
         occurrenceTotal: hasFixedCount ? total : null,
       );
       if (hasFixedCount) remaining--;
@@ -1956,16 +2089,22 @@ class MmexRepository {
       guard++;
       occurrences.add(cursor);
 
-      if (period == RecurrencePeriod.inXDays || period == RecurrencePeriod.inXMonths) {
+      if (period == RecurrencePeriod.inXDays ||
+          period == RecurrencePeriod.inXMonths) {
         final x = count > 0 ? count : 1;
-        cursor = period == RecurrencePeriod.inXDays ? _addDays(cursor, x) : _addMonths(cursor, x);
+        cursor = period == RecurrencePeriod.inXDays
+            ? _addDays(cursor, x)
+            : _addMonths(cursor, x);
         period = RecurrencePeriod.none;
         count = 1;
         continue;
       }
-      if (period == RecurrencePeriod.everyXDays || period == RecurrencePeriod.everyXMonths) {
+      if (period == RecurrencePeriod.everyXDays ||
+          period == RecurrencePeriod.everyXMonths) {
         final x = count > 0 ? count : 1;
-        cursor = period == RecurrencePeriod.everyXDays ? _addDays(cursor, x) : _addMonths(cursor, x);
+        cursor = period == RecurrencePeriod.everyXDays
+            ? _addDays(cursor, x)
+            : _addMonths(cursor, x);
         continue; // always infinite - count keeps holding the interval X.
       }
 
@@ -2014,6 +2153,50 @@ class MmexRepository {
         start: start, end: end, months: months, accountId: accountId);
   }
 
+  /// Average pay-cycle amount of real cash flow the recurring-bill schedule
+  /// alone never explains, over the last [months] pay cycles up to
+  /// [anchor] - what actually happened minus what the recurring schedule
+  /// alone would have predicted for those same cycles, averaged. Grounds a
+  /// simulation's "dépenses imprévues" adjustment in this account's own
+  /// real history instead of a guessed number (2026-09-02 user report: a
+  /// projection built purely from known recurring bills was consistently
+  /// too optimistic - real life always has some non-recurring spending/
+  /// income, groceries fluctuating, unplanned repairs..., that no bill
+  /// schedule predicts). Negative when history shows more unplanned
+  /// spending than the recurring schedule accounts for (the common case);
+  /// positive if this account tends to end up better off than the
+  /// schedule alone suggests. 0 if [months] <= 0.
+  ///
+  /// [startDay] required, not defaulted to the calendar month's 1st -
+  /// **must** be the same "Jour de prévision du solde" [_SimulationChart]
+  /// itself buckets by (see [recurringPeriodNet]'s own doc comment for
+  /// why). Found 2026-09-02 comparing a user's real multi-year balance
+  /// history against this figure: computing the "real" and "recurring"
+  /// sides on plain calendar months here, while the chart itself had
+  /// already moved to pay-cycle buckets, meant a bill landing near the
+  /// pay-cycle boundary (salary, in this case) could fall in a different
+  /// bucket on each side of the subtraction - silently skewing the
+  /// suggested adjustment for accounts whose real "month" doesn't start on
+  /// the 1st, exactly the situation this setting exists to describe.
+  double historicalDiscretionaryMonthlyAverage({
+    int? accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) {
+    if (months <= 0) return 0;
+    final windows = _consecutiveWindowsEndingAt(anchor, months, startDay);
+    final real = _realNetByWindows(windows, accountId: accountId);
+    final recurring =
+        _netForBillsByWindows(getBillDeposits(), windows, accountId: accountId);
+    var totalResidual = 0.0;
+    for (final w in windows) {
+      final key = w.lastIncludedDay;
+      totalResidual += (real[key] ?? 0) - (recurring[key] ?? 0);
+    }
+    return totalResidual / months;
+  }
+
   /// Shared bucketing core behind [recurringMonthlyNet] and
   /// [simulatedMonthlyNet] - given an already-resolved list of bill-shaped
   /// templates (real ones for the former; real (possibly overridden) plus
@@ -2045,14 +2228,35 @@ class MmexRepository {
       final signedAmount = _billSignedAmount(bill, accountId);
       final disabledFrom = disabledFromByBillId[bill.id];
       for (final occurrence in _occurrencesInRange(bill, start, end)) {
-        if (disabledFrom != null && !occurrence.isBefore(disabledFrom)) continue;
+        if (disabledFrom != null && !occurrence.isBefore(disabledFrom)) {
+          continue;
+        }
         final bucket = DateTime(occurrence.year, occurrence.month, 1);
         final current = result[bucket];
         if (current == null) continue;
-        result[bucket] = current + signedAmount;
+        final jitter = bill.variancePercent > 0
+            ? _seededMonthlyJitter(bill.id, bucket, bill.variancePercent)
+            : 0.0;
+        result[bucket] = current + signedAmount * (1 + jitter);
       }
     }
     return result;
+  }
+
+  /// Deterministic, reproducible "noise" for [BillDeposit.variancePercent] -
+  /// the same (billId, month) always yields the same jitter, so re-running
+  /// the exact same projection (a screen rebuild, reopening the app) never
+  /// silently redraws a different curve - only an actual change to the
+  /// scenario's own settings does, preserving the "100% reliable" property
+  /// the rest of this simulation engine is explicitly built for. Uniformly
+  /// distributed in [-variancePercent/100, +variancePercent/100] - applied
+  /// as a multiplier on the occurrence's own signed amount, never on its
+  /// own an invented number (it's proportional to a real configured value).
+  double _seededMonthlyJitter(
+      int billId, DateTime month, double variancePercent) {
+    final seed = billId * 1000003 + month.year * 100 + month.month;
+    final fraction = Random(seed).nextDouble() * 2 - 1; // [-1, 1)
+    return fraction * (variancePercent / 100);
   }
 
   /// Public wrapper around the private occurrence-projection engine, for
@@ -2061,7 +2265,8 @@ class MmexRepository {
   /// without going through a whole [_monthlyNetForBills] bucketing pass -
   /// currently unused internally, kept for future simulation UI code that
   /// wants to show individual occurrence dates for a scenario adjustment.
-  List<DateTime> occurrencesForBill(BillDeposit bill, DateTime start, DateTime end) =>
+  List<DateTime> occurrencesForBill(
+          BillDeposit bill, DateTime start, DateTime end) =>
       _occurrencesInRange(bill, start, end);
 
   // ---- Long-term "what if" scenarios (PLAN_SIMULATION_LONG_TERME.md,
@@ -2069,7 +2274,8 @@ class MmexRepository {
   // CHECKINGACCOUNT_V1. Same CRUD shape as the budget scenarios above. ----
 
   List<SimScenario> getSimScenarios() {
-    final rows = db.query('SELECT * FROM APP_SIM_SCENARIOS ORDER BY UPDATED_AT DESC');
+    final rows =
+        db.query('SELECT * FROM APP_SIM_SCENARIOS ORDER BY UPDATED_AT DESC');
     return rows.map(SimScenario.fromRow).toList();
   }
 
@@ -2091,10 +2297,14 @@ class MmexRepository {
   /// Deletes [scenarioId] and every adjustment saved under it - other
   /// scenarios (and the real recurring bills/transactions) are untouched.
   void deleteSimScenario(int scenarioId) {
-    db.execute('DELETE FROM APP_SIM_BILL_OVERRIDES WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_SIM_BILL_OVERRIDES WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
   }
 
   List<SimBillOverride> getSimBillOverrides(int scenarioId) {
@@ -2151,11 +2361,12 @@ class MmexRepository {
     required DateTime startDate,
     required RecurrencePeriod period,
     int numOccurrences = -1,
+    double variancePercent = 0,
   }) {
     return db.execute(
       'INSERT INTO APP_SIM_VIRTUAL_BILLS '
-      '(SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, START_DATE, PERIOD, NUM_OCCURRENCES) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      '(SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, START_DATE, PERIOD, NUM_OCCURRENCES, VARIANCE_PERCENT) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         scenarioId,
         accountId,
@@ -2165,12 +2376,14 @@ class MmexRepository {
         startDate.toIso8601String(),
         period.name,
         numOccurrences,
+        variancePercent,
       ],
     );
   }
 
   void deleteSimVirtualBill(int virtualBillId) {
-    db.execute('DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE VIRTUALBILLID = ?', [virtualBillId]);
+    db.execute('DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE VIRTUALBILLID = ?',
+        [virtualBillId]);
   }
 
   List<SimOneOffEvent> getSimOneOffEvents(int scenarioId) {
@@ -2192,12 +2405,20 @@ class MmexRepository {
     return db.execute(
       'INSERT INTO APP_SIM_ONE_OFF_EVENTS (SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, DATE) '
       'VALUES (?, ?, ?, ?, ?, ?)',
-      [scenarioId, accountId, label, transCodeToString(transCode), amount, date.toIso8601String()],
+      [
+        scenarioId,
+        accountId,
+        label,
+        transCodeToString(transCode),
+        amount,
+        date.toIso8601String()
+      ],
     );
   }
 
   void deleteSimOneOffEvent(int eventId) {
-    db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE EVENTID = ?', [eventId]);
+    db.execute(
+        'DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE EVENTID = ?', [eventId]);
   }
 
   /// Merges the real recurring bills with [scenarioId]'s overrides/virtual
@@ -2270,8 +2491,209 @@ class MmexRepository {
       final bucket = DateTime(event.date.year, event.date.month, 1);
       final current = result[bucket];
       if (current == null) continue;
-      final signed = event.transCode == TransCode.deposit ? event.amount : -event.amount;
+      final signed =
+          event.transCode == TransCode.deposit ? event.amount : -event.amount;
       result[bucket] = current + signed;
+    }
+    return result;
+  }
+
+  // ---- Pay-cycle ("Jour de prévision du solde") bucketing for the
+  // simulation screen only (2026-09-02 user request) - a parallel set of
+  // methods, deliberately never replacing the calendar-month ones above:
+  // the user asked to try this scoped to just the simulation chart first,
+  // to see whether it actually explains the "uneven" curve they noticed,
+  // before deciding whether it's worth applying anywhere else
+  // (recurringMonthlyNet/simulatedMonthlyNet/monthlyNetTotals keep every
+  // other caller - the dashboard forecast chart, "opérations récurrentes"
+  // totals - on calendar months, unchanged). See budget_period.dart's
+  // BudgetWindow, already built for exactly this "month starts on a chosen
+  // day, not the 1st" concept (reused here rather than reinvented).
+
+  /// [count] consecutive [BudgetWindow]s, oldest first, the last one being
+  /// whichever contains [anchor].
+  List<BudgetWindow> _consecutiveWindowsEndingAt(
+      DateTime anchor, int count, int startDay) {
+    final windows = <BudgetWindow>[budgetWindowContaining(anchor, startDay)];
+    for (var i = 1; i < count; i++) {
+      windows.insert(0, previousBudgetWindow(windows.first, startDay));
+    }
+    return windows;
+  }
+
+  /// Pay-cycle counterpart to [_monthlyNetForBills] - same role, just
+  /// bucketed by arbitrary consecutive [windows] instead of fixed calendar
+  /// months.
+  ///
+  /// Keyed by each window's [BudgetWindow.lastIncludedDay], **not**
+  /// [BudgetWindow.start] - found 2026-09-02 comparing the simulation chart
+  /// against the dashboard's own day-by-day forecast: [_SimulationChart]
+  /// plots a *cumulative* running balance, so the value at a given bucket
+  /// already includes that whole window's cash flow - it's the balance
+  /// *as of the window's last day*, not its first. Keying by [start]
+  /// instead would label that cumulative value with a date up to a whole
+  /// pay-cycle too early (e.g. a window running 24 Oct-23 Nov keyed "24
+  /// Oct" while showing the balance as of ~23 Nov) - barely noticeable
+  /// with calendar months (both ends fall in the same named month) but a
+  /// full, confusing month off with a custom [startDay].
+  Map<DateTime, double> _netForBillsByWindows(
+    List<BillDeposit> bills,
+    List<BudgetWindow> windows, {
+    int? accountId,
+    Map<int, DateTime> disabledFromByBillId = const {},
+  }) {
+    if (windows.isEmpty) return {};
+    final result = <DateTime, double>{
+      for (final w in windows) w.lastIncludedDay: 0.0,
+    };
+    final rangeStart = windows.first.start;
+    final rangeEnd = windows.last.lastIncludedDay;
+
+    for (final bill in bills) {
+      if (bill.paused) continue;
+      final involvesAccount = accountId == null ||
+          bill.accountId == accountId ||
+          bill.toAccountId == accountId;
+      if (!involvesAccount) continue;
+      if (accountId == null && bill.transCode == TransCode.transfer) continue;
+
+      final signedAmount = _billSignedAmount(bill, accountId);
+      final disabledFrom = disabledFromByBillId[bill.id];
+      for (final occurrence
+          in _occurrencesInRange(bill, rangeStart, rangeEnd)) {
+        if (disabledFrom != null && !occurrence.isBefore(disabledFrom))
+          continue;
+        BudgetWindow? window;
+        for (final w in windows) {
+          if (w.contains(occurrence)) {
+            window = w;
+            break;
+          }
+        }
+        if (window == null) continue;
+        final key = window.lastIncludedDay;
+        final jitter = bill.variancePercent > 0
+            ? _seededMonthlyJitter(bill.id, key, bill.variancePercent)
+            : 0.0;
+        result[key] = result[key]! + signedAmount * (1 + jitter);
+      }
+    }
+    return result;
+  }
+
+  /// Pay-cycle counterpart to [monthlyNetTotals] - real transaction totals
+  /// (not projected recurring bills) bucketed by arbitrary consecutive
+  /// [windows] instead of calendar months, keyed the same way
+  /// [_netForBillsByWindows] is (each window's [BudgetWindow.lastIncludedDay]).
+  /// Backs [historicalDiscretionaryMonthlyAverage]'s "what actually
+  /// happened" side.
+  Map<DateTime, double> _realNetByWindows(
+    List<BudgetWindow> windows, {
+    int? accountId,
+  }) {
+    if (windows.isEmpty) return {};
+    final where = <String>[
+      'TRANSDATE >= ?',
+      'TRANSDATE < ?',
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[
+      _isoDate(windows.first.start),
+      _isoDate(windows.last.end),
+    ];
+    if (accountId != null) {
+      where.add('(ACCOUNTID = ? OR TOACCOUNTID = ?)');
+      params.addAll([accountId, accountId]);
+    } else {
+      where.add('TRANSCODE != ?');
+      params.add('Transfer');
+    }
+    final rows = db.query(
+      'SELECT TRANSDATE, TRANSCODE, TRANSAMOUNT, TOTRANSAMOUNT, ACCOUNTID FROM CHECKINGACCOUNT_V1 '
+      'WHERE ${where.join(' AND ')}',
+      params,
+    );
+    final result = <DateTime, double>{
+      for (final w in windows) w.lastIncludedDay: 0.0,
+    };
+    for (final row in rows) {
+      final date = DateTime.tryParse(row['TRANSDATE'] as String? ?? '');
+      if (date == null) continue;
+      BudgetWindow? window;
+      for (final w in windows) {
+        if (w.contains(date)) {
+          window = w;
+          break;
+        }
+      }
+      if (window == null) continue;
+      final amount = (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      final toAmount = (row['TOTRANSAMOUNT'] as num?)?.toDouble() ?? amount;
+      final code = row['TRANSCODE'] as String?;
+      double signed;
+      if (code == 'Deposit') {
+        signed = amount;
+      } else if (code == 'Withdrawal') {
+        signed = -amount;
+      } else {
+        // Transfer: only reachable when filtering to a single account.
+        final from = row['ACCOUNTID'] as int?;
+        signed = from == accountId ? -amount : toAmount;
+      }
+      final key = window.lastIncludedDay;
+      result[key] = (result[key] ?? 0) + signed;
+    }
+    return result;
+  }
+
+  /// Pay-cycle counterpart to [recurringMonthlyNet] - see this section's
+  /// own header comment.
+  Map<DateTime, double> recurringPeriodNet({
+    required DateTime anchor,
+    required int periods,
+    required int startDay,
+    int? accountId,
+  }) {
+    final windows = _consecutiveWindowsEndingAt(anchor, periods, startDay);
+    return _netForBillsByWindows(getBillDeposits(), windows,
+        accountId: accountId);
+  }
+
+  /// Pay-cycle counterpart to [simulatedMonthlyNet] - see this section's
+  /// own header comment.
+  Map<DateTime, double> simulatedPeriodNet({
+    required int scenarioId,
+    required DateTime anchor,
+    required int periods,
+    required int startDay,
+    int? accountId,
+  }) {
+    final windows = _consecutiveWindowsEndingAt(anchor, periods, startDay);
+    final effective = _effectiveBillsForScenario(scenarioId);
+    final result = Map<DateTime, double>.from(_netForBillsByWindows(
+      effective.bills,
+      windows,
+      accountId: accountId,
+      disabledFromByBillId: effective.disabledFromByBillId,
+    ));
+
+    for (final event in getSimOneOffEvents(scenarioId)) {
+      if (accountId != null && event.accountId != accountId) continue;
+      BudgetWindow? window;
+      for (final w in windows) {
+        if (w.contains(event.date)) {
+          window = w;
+          break;
+        }
+      }
+      if (window == null) continue;
+      final key = window.lastIncludedDay;
+      final current = result[key];
+      if (current == null) continue;
+      final signed =
+          event.transCode == TransCode.deposit ? event.amount : -event.amount;
+      result[key] = current + signed;
     }
     return result;
   }
@@ -2282,10 +2704,12 @@ class MmexRepository {
   /// this floor, walking backward to cover [rangeStart] would regenerate
   /// the most recently completed occurrence as if it were still pending -
   /// double-counting it once as real history and once as a projection.
-  List<DateTime> _occurrencesInRange(BillDeposit bill, DateTime rangeStart, DateTime rangeEnd) {
+  List<DateTime> _occurrencesInRange(
+      BillDeposit bill, DateTime rangeStart, DateTime rangeEnd) {
     final occurrences = <DateTime>[];
-    final effectiveStart =
-        rangeStart.isBefore(bill.nextOccurrence) ? bill.nextOccurrence : rangeStart;
+    final effectiveStart = rangeStart.isBefore(bill.nextOccurrence)
+        ? bill.nextOccurrence
+        : rangeStart;
     if (effectiveStart.isAfter(rangeEnd)) return occurrences;
 
     // "Dans X jours/mois": always exactly 2 firings, X apart, then done -
@@ -2297,7 +2721,8 @@ class MmexRepository {
           ? _addDays(bill.nextOccurrence, x)
           : _addMonths(bill.nextOccurrence, x);
       for (final occurrence in [bill.nextOccurrence, second]) {
-        if (!occurrence.isBefore(effectiveStart) && !occurrence.isAfter(rangeEnd)) {
+        if (!occurrence.isBefore(effectiveStart) &&
+            !occurrence.isAfter(rangeEnd)) {
           occurrences.add(occurrence);
         }
       }
@@ -2323,7 +2748,8 @@ class MmexRepository {
     }
 
     final dayStep = _dayStepForBill(bill);
-    if (dayStep == null) return occurrences; // RecurrencePeriod.none: one-off, not recurring.
+    if (dayStep == null)
+      return occurrences; // RecurrencePeriod.none: one-off, not recurring.
     var cursor = bill.nextOccurrence;
     var guard = 0;
     while (!cursor.isBefore(effectiveStart) && guard < 5000) {
@@ -2401,7 +2827,8 @@ class MmexRepository {
     final year = total ~/ 12;
     final month = total % 12 + 1;
     final lastDayOfMonth = DateTime(year, month + 1, 0).day;
-    return DateTime(year, month, date.day > lastDayOfMonth ? lastDayOfMonth : date.day);
+    return DateTime(
+        year, month, date.day > lastDayOfMonth ? lastDayOfMonth : date.day);
   }
 
   /// Steps [date] forward (or back, for negative [months]) by [months]
@@ -2426,7 +2853,8 @@ class MmexRepository {
     return next;
   }
 
-  DateTime _lastDayOfMonth(DateTime date) => DateTime(date.year, date.month + 1, 0);
+  DateTime _lastDayOfMonth(DateTime date) =>
+      DateTime(date.year, date.month + 1, 0);
 
   DateTime _lastBusinessDay(DateTime date) {
     var d = date;
@@ -2461,7 +2889,9 @@ class MmexRepository {
   }) {
     if (id != null) {
       if (identical(name, _unset)) {
-        db.execute('UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?', [amount, id]);
+        db.execute(
+            'UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?',
+            [amount, id]);
       } else {
         db.execute(
           'UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ?, NAME = ? WHERE ENVELOPEID = ?',
@@ -2489,7 +2919,8 @@ class MmexRepository {
   /// are untouched, since envelopes are scoped per account (see
   /// getBudgetEnvelopes).
   void resetBudgetEnvelopes(int accountId) {
-    db.execute('DELETE FROM APP_BUDGET_ENVELOPES WHERE ACCOUNTID = ?', [accountId]);
+    db.execute(
+        'DELETE FROM APP_BUDGET_ENVELOPES WHERE ACCOUNTID = ?', [accountId]);
   }
 
   // ---- Budget scenarios (named "what if" simulations, this app's own
@@ -2533,10 +2964,16 @@ class MmexRepository {
   /// Deletes [scenarioId] and every simulated amount saved under it - other
   /// scenarios (and the real APP_BUDGET_ENVELOPES budget) are untouched.
   void deleteBudgetScenario(int scenarioId) {
-    db.execute('DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_BUDGET_SCENARIO_CATEGORIES WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES WHERE SCENARIOID = ?', [scenarioId]);
-    db.execute('DELETE FROM APP_BUDGET_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
+    db.execute('DELETE FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_BUDGET_SCENARIO_CATEGORIES WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_BUDGET_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);
   }
 
   /// categoryId -> simulated monthly amount saved under [scenarioId] - a
@@ -2548,7 +2985,10 @@ class MmexRepository {
       'SELECT CATEGID, AMOUNT FROM APP_BUDGET_SCENARIO_AMOUNTS WHERE SCENARIOID = ?',
       [scenarioId],
     );
-    return {for (final row in rows) row['CATEGID'] as int: (row['AMOUNT'] as num).toDouble()};
+    return {
+      for (final row in rows)
+        row['CATEGID'] as int: (row['AMOUNT'] as num).toDouble()
+    };
   }
 
   /// Always saved as MANUAL=1 - this is only ever called from a deliberate
@@ -2592,7 +3032,11 @@ class MmexRepository {
     }
     db.execute(
       'UPDATE APP_BUDGET_SCENARIOS SET FIXED_AT = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
-      [DateTime.now().toIso8601String(), DateTime.now().toIso8601String(), scenarioId],
+      [
+        DateTime.now().toIso8601String(),
+        DateTime.now().toIso8601String(),
+        scenarioId
+      ],
     );
   }
 
@@ -2627,10 +3071,14 @@ class MmexRepository {
       'SELECT CATEGID, VISIBLE FROM APP_BUDGET_SCENARIO_CATEGORIES WHERE SCENARIOID = ?',
       [scenarioId],
     );
-    return {for (final row in rows) row['CATEGID'] as int: (row['VISIBLE'] as int) == 1};
+    return {
+      for (final row in rows)
+        row['CATEGID'] as int: (row['VISIBLE'] as int) == 1
+    };
   }
 
-  void setBudgetScenarioCategoryVisible(int scenarioId, int categoryId, bool visible) {
+  void setBudgetScenarioCategoryVisible(
+      int scenarioId, int categoryId, bool visible) {
     db.execute(
       'INSERT INTO APP_BUDGET_SCENARIO_CATEGORIES (SCENARIOID, CATEGID, VISIBLE) VALUES (?, ?, ?) '
       'ON CONFLICT(SCENARIOID, CATEGID) DO UPDATE SET VISIBLE = excluded.VISIBLE',
@@ -2665,7 +3113,8 @@ class MmexRepository {
   /// CATEGID would go in the scenario tables. [parentCategId] nests it
   /// under a real category as an artificial subdivision instead of making
   /// it a top-level category of its own - see VirtualBudgetCategory.
-  int createVirtualBudgetCategory(int scenarioId, String name, {int? parentCategId}) {
+  int createVirtualBudgetCategory(int scenarioId, String name,
+      {int? parentCategId}) {
     final id = db.execute(
       'INSERT INTO APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES (SCENARIOID, NAME, PARENT_CATEGID) '
       'VALUES (?, ?, ?)',
@@ -2696,7 +3145,8 @@ class MmexRepository {
     final totals = <int, double>{};
     for (final row in rows) {
       final tx = MoneyTransaction.fromRow(row);
-      totals[tx.categoryId!] = (totals[tx.categoryId!] ?? 0) + tx.signedAmountFor(accountId);
+      totals[tx.categoryId!] =
+          (totals[tx.categoryId!] ?? 0) + tx.signedAmountFor(accountId);
     }
     return totals;
   }
@@ -2714,7 +3164,8 @@ class MmexRepository {
       if (accountId != null && bill.accountId != accountId) continue;
       final categoryId = bill.categoryId;
       if (categoryId == null) continue;
-      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      final factor =
+          recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
       if (factor <= 0) continue;
       totals[categoryId] = (totals[categoryId] ?? 0) + bill.amount * factor;
     }
@@ -2746,7 +3197,8 @@ class MmexRepository {
     final category = categoriesById[categoryId];
     if (category == null) return false;
     if (_isSavingsCategoryName(category.name)) return true;
-    final parent = category.parentId == null ? null : categoriesById[category.parentId];
+    final parent =
+        category.parentId == null ? null : categoriesById[category.parentId];
     return parent != null && _isSavingsCategoryName(parent.name);
   }
 
@@ -2794,7 +3246,9 @@ class MmexRepository {
       'FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')}',
       params,
     );
-    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+    final categoriesById = {
+      for (final c in getCategories(onlyActive: false)) c.id: c
+    };
 
     var total = 0.0;
     for (final row in rows) {
@@ -2816,7 +3270,9 @@ class MmexRepository {
   /// instead of spending (and not broken down by category - income isn't
   /// budgeted per category here, just as a single expected total).
   double monthlyRecurringIncome({int? accountId}) {
-    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+    final categoriesById = {
+      for (final c in getCategories(onlyActive: false)) c.id: c
+    };
     var total = 0.0;
     for (final bill in getBillDeposits()) {
       if (bill.paused) continue;
@@ -2825,12 +3281,17 @@ class MmexRepository {
           (bill.transCode == TransCode.transfer &&
               (accountId == null || bill.toAccountId == accountId));
       if (!isIncoming) continue;
-      if (bill.transCode == TransCode.deposit && accountId != null && bill.accountId != accountId) {
+      if (bill.transCode == TransCode.deposit &&
+          accountId != null &&
+          bill.accountId != accountId) {
         continue;
       }
-      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      final factor =
+          recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
       if (factor <= 0) continue;
-      total += (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) * factor;
+      total +=
+          (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) *
+              factor;
     }
     return total;
   }
@@ -2844,7 +3305,9 @@ class MmexRepository {
   /// there the same way a recurring bill already does for expenses (see
   /// [categoryMonthlyRecurringTotals]).
   Map<int, double> categoryMonthlyRecurringIncomeTotals({int? accountId}) {
-    final categoriesById = {for (final c in getCategories(onlyActive: false)) c.id: c};
+    final categoriesById = {
+      for (final c in getCategories(onlyActive: false)) c.id: c
+    };
     final totals = <int, double>{};
     for (final bill in getBillDeposits()) {
       if (bill.paused) continue;
@@ -2855,13 +3318,17 @@ class MmexRepository {
           (bill.transCode == TransCode.transfer &&
               (accountId == null || bill.toAccountId == accountId));
       if (!isIncoming) continue;
-      if (bill.transCode == TransCode.deposit && accountId != null && bill.accountId != accountId) {
+      if (bill.transCode == TransCode.deposit &&
+          accountId != null &&
+          bill.accountId != accountId) {
         continue;
       }
-      final factor = recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
+      final factor =
+          recurrencePeriodToMonthlyFactor(bill.period, bill.numOccurrences);
       if (factor <= 0) continue;
       totals[categoryId] = (totals[categoryId] ?? 0) +
-          (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) * factor;
+          (bill.transCode == TransCode.transfer ? bill.toAmount : bill.amount) *
+              factor;
     }
     return totals;
   }
@@ -2869,13 +3336,15 @@ class MmexRepository {
   // ---- Currencies ----------------------------------------------------
 
   CurrencyFormat? getCurrency(int currencyId) {
-    final rows = db.query('SELECT * FROM CURRENCYFORMATS_V1 WHERE CURRENCYID = ?', [currencyId]);
+    final rows = db.query(
+        'SELECT * FROM CURRENCYFORMATS_V1 WHERE CURRENCYID = ?', [currencyId]);
     if (rows.isEmpty) return null;
     return CurrencyFormat.fromRow(rows.first);
   }
 
   CurrencyFormat? getBaseCurrency() {
-    final infoRows = db.query("SELECT INFOVALUE FROM INFOTABLE_V1 WHERE INFONAME = 'BASECURRENCYID'");
+    final infoRows = db.query(
+        "SELECT INFOVALUE FROM INFOTABLE_V1 WHERE INFONAME = 'BASECURRENCYID'");
     if (infoRows.isEmpty) return getDefaultCurrency();
     final id = int.tryParse(infoRows.first['INFOVALUE'] as String? ?? '');
     if (id == null) return getDefaultCurrency();
@@ -2898,7 +3367,6 @@ class MmexRepository {
   /// dated on the 25th itself. `TRANSDATE < isoDateExclusiveUpper(day)`
   /// avoids that entirely.
   String _isoDateExclusiveUpper(DateTime date) => _isoDate(_addDays(date, 1));
-
 }
 
 /// A single dated, labelled, signed occurrence of a recurring transaction -
@@ -2908,7 +3376,8 @@ class RecurringOccurrence {
   final String label;
   final double signedAmount;
 
-  RecurringOccurrence({required this.date, required this.label, required this.signedAmount});
+  RecurringOccurrence(
+      {required this.date, required this.label, required this.signedAmount});
 }
 
 /// One occurrence of a recurring bill, shaped like a CHECKINGACCOUNT_V1 row

@@ -404,4 +404,262 @@ void main() {
       expect(result.values.every((v) => v == 0.0), isTrue);
     });
   });
+
+  group('variancePercent (2026-09-02, "dépenses imprévues" jitter)', () {
+    test('0 (the default) behaves exactly like before this field existed - '
+        'the exact same amount every occurrence', () {
+      final id = repo.createSimScenario('S');
+      repo.addSimVirtualBill(
+        scenarioId: id,
+        accountId: accountId,
+        label: 'Dépenses imprévues (historique)',
+        transCode: TransCode.withdrawal,
+        amount: 200,
+        startDate: DateTime(2026, 1, 1),
+        period: RecurrencePeriod.monthly,
+      );
+
+      final result = repo.simulatedMonthlyNet(
+          scenarioId: id, anchor: DateTime(2026, 6, 1), months: 6, accountId: accountId);
+
+      expect(result.values.every((v) => v == -200.0), isTrue);
+    });
+
+    test('a positive variance makes at least one month differ from the flat '
+        'amount, while staying deterministic across repeated calls', () {
+      final id = repo.createSimScenario('S');
+      repo.addSimVirtualBill(
+        scenarioId: id,
+        accountId: accountId,
+        label: 'Dépenses imprévues (historique)',
+        transCode: TransCode.withdrawal,
+        amount: 200,
+        // Well before the projected window below, so every bucket in it
+        // has an occurrence - a start date falling mid-window would
+        // legitimately leave earlier buckets at 0 (no occurrence yet),
+        // which isn't what this test is checking.
+        startDate: DateTime(2020, 1, 1),
+        period: RecurrencePeriod.monthly,
+        variancePercent: 20,
+      );
+
+      final first = repo.simulatedMonthlyNet(
+          scenarioId: id, anchor: DateTime(2027, 1, 1), months: 24, accountId: accountId);
+      final second = repo.simulatedMonthlyNet(
+          scenarioId: id, anchor: DateTime(2027, 1, 1), months: 24, accountId: accountId);
+
+      // Deterministic/reproducible - the whole point of seeding on
+      // (billId, month) rather than a fresh Random() each call.
+      expect(first, second);
+      // With ±20% jitter over 24 months, at least one month must differ
+      // from the flat -200 baseline, and every value must stay within the
+      // configured bound.
+      expect(first.values.any((v) => v != -200.0), isTrue);
+      for (final v in first.values) {
+        expect(v, inInclusiveRange(-240.0, -160.0));
+      }
+    });
+
+    test('a real bill (never assigned a variance) is never jittered', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2026, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      final id = repo.createSimScenario('S');
+
+      final result = repo.simulatedMonthlyNet(
+          scenarioId: id, anchor: DateTime(2026, 12, 1), months: 12, accountId: accountId);
+
+      expect(result.values.every((v) => v == 3000.0), isTrue);
+    });
+  });
+
+  group('historicalDiscretionaryMonthlyAverage', () {
+    test('0 when real history exactly matches the recurring schedule '
+        '(nothing discretionary happened)', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2025, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      for (var m = 1; m <= 12; m++) {
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.deposit,
+          amount: 3000,
+          date: DateTime(2025, m, 1),
+        );
+      }
+
+      final average = repo.historicalDiscretionaryMonthlyAverage(
+          accountId: accountId,
+          anchor: DateTime(2025, 12, 1),
+          months: 12,
+          startDay: 1);
+
+      expect(average, 0.0);
+    });
+
+    test('negative when real spending exceeds what the recurring schedule '
+        'alone explains - the common "dépenses imprévues" case', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2025, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      for (var m = 1; m <= 12; m++) {
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.deposit,
+          amount: 3000,
+          date: DateTime(2025, m, 1),
+        );
+        // 150 of real, unplanned spending every month, on top of the
+        // recurring 3000 income - never in BILLSDEPOSITS_V1.
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.withdrawal,
+          amount: 150,
+          date: DateTime(2025, m, 15),
+        );
+      }
+
+      final average = repo.historicalDiscretionaryMonthlyAverage(
+          accountId: accountId,
+          anchor: DateTime(2025, 12, 1),
+          months: 12,
+          startDay: 1);
+
+      expect(average, -150.0);
+    });
+
+    test('0 when months <= 0, never divides by zero', () {
+      expect(
+          repo.historicalDiscretionaryMonthlyAverage(
+              accountId: accountId,
+              anchor: DateTime(2025, 12, 1),
+              months: 0,
+              startDay: 1),
+          0.0);
+    });
+  });
+
+  group('recurringPeriodNet / simulatedPeriodNet (pay-cycle bucketing, '
+      '2026-09-02 - "mon mois se termine le 24")', () {
+    test('startDay: 1 sums to the exact same per-period totals as the '
+        'calendar-month version, in order (keys differ on purpose - see '
+        '_netForBillsByWindows: each is now the window\'s *last* day, not '
+        'its first, so a chart plotting a cumulative running balance labels '
+        'each point with the date that balance is actually as of)', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2026, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+
+      final calendar = repo.recurringMonthlyNet(
+          anchor: DateTime(2026, 6, 1), months: 6, accountId: accountId);
+      final period = repo.recurringPeriodNet(
+          anchor: DateTime(2026, 6, 1), periods: 6, startDay: 1, accountId: accountId);
+
+      List<double> valuesInOrder(Map<DateTime, double> m) =>
+          (m.entries.toList()..sort((a, b) => a.key.compareTo(b.key)))
+              .map((e) => e.value)
+              .toList();
+
+      expect(valuesInOrder(period), valuesInOrder(calendar));
+      // With startDay 1, a calendar month's *last* day and a pay-cycle
+      // window's *last included day* are the exact same date.
+      expect(period.keys.toSet(), calendar.keys.map((k) {
+        final lastDay = DateTime(k.year, k.month + 1, 0).day;
+        return DateTime(k.year, k.month, lastDay);
+      }).toSet());
+    });
+
+    test('an occurrence before startDay counts in the previous pay-cycle '
+        'window, not the calendar month it falls in - keyed by that '
+        "window's last included day", () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.withdrawal,
+        amount: 100,
+        nextOccurrence: DateTime(2026, 3, 20),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+
+      final result = repo.recurringPeriodNet(
+          anchor: DateTime(2026, 3, 20), periods: 1, startDay: 25, accountId: accountId);
+
+      // The pay-cycle window containing 20 March runs 25 Feb - 24 Mar
+      // (since 20 March is before this month's own 25th) - keyed by its
+      // last included day, 24 March.
+      expect(result.keys.single, DateTime(2026, 3, 24));
+      expect(result.values.single, -100.0);
+    });
+
+    test('an occurrence on/after startDay counts in that month\'s own '
+        "pay-cycle window, keyed by that window's last included day", () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.withdrawal,
+        amount: 100,
+        nextOccurrence: DateTime(2026, 3, 25),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+
+      final result = repo.recurringPeriodNet(
+          anchor: DateTime(2026, 3, 25), periods: 1, startDay: 25, accountId: accountId);
+
+      // Window runs 25 March - 24 April - keyed by 24 April.
+      expect(result.keys.single, DateTime(2026, 4, 24));
+      expect(result.values.single, -100.0);
+    });
+
+    test('simulatedPeriodNet buckets a one-off event into the correct '
+        "pay-cycle window, keyed by that window's last included day", () {
+      final id = repo.createSimScenario('S');
+      repo.addSimOneOffEvent(
+        scenarioId: id,
+        accountId: accountId,
+        label: 'Prime',
+        transCode: TransCode.deposit,
+        amount: 500,
+        date: DateTime(2026, 3, 22),
+      );
+
+      final result = repo.simulatedPeriodNet(
+          scenarioId: id,
+          anchor: DateTime(2026, 3, 22),
+          periods: 1,
+          startDay: 25,
+          accountId: accountId);
+
+      expect(result.keys.single, DateTime(2026, 3, 24));
+      expect(result.values.single, 500.0);
+    });
+  });
 }

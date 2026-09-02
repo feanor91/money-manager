@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
@@ -23,17 +24,21 @@ import '../utils/date_picker.dart';
 /// realistically useful for retirement planning is offered, and the choice
 /// is remembered per session (not persisted - a cheap, purely client-side
 /// setting, same tier as [ForecastDuration] in forecast_chart.dart).
-enum _Horizon { fiveYears, tenYears, twentyYears, thirtyYears, fortyYears }
+/// [oneYear] added 2026-09-02 specifically to match the dashboard's own
+/// forecast chart's horizon ([ForecastDuration.oneYear]) - lets the user
+/// compare the two side by side over the exact same window.
+enum _Horizon { oneYear, fiveYears, tenYears, twentyYears, thirtyYears, fortyYears }
 
 extension on _Horizon {
   int get years => switch (this) {
+        _Horizon.oneYear => 1,
         _Horizon.fiveYears => 5,
         _Horizon.tenYears => 10,
         _Horizon.twentyYears => 20,
         _Horizon.thirtyYears => 30,
         _Horizon.fortyYears => 40,
       };
-  String get label => '$years ans';
+  String get label => '$years an${years > 1 ? 's' : ''}';
 }
 
 /// The handful of recurrence periods that actually make sense to type in by
@@ -72,18 +77,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
   int? _scenarioId;
   _Horizon _horizon = _Horizon.tenYears;
 
-  /// null = every account combined - see PLAN_SIMULATION_LONG_TERME.md's
-  /// open "un compte ou tous les comptes" question: rather than pick one
-  /// answer up front, both are offered and the choice is just a filter on
-  /// already-scenario-agnostic computations
-  /// ([MmexRepository.simulatedMonthlyNet]/[MmexRepository.accountBalance]
-  /// already accept a nullable accountId).
-  int? _accountId;
-
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _selectMostRecentScenario());
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _selectMostRecentScenario());
   }
 
   void _selectMostRecentScenario() {
@@ -96,30 +94,38 @@ class _SimulationScreenState extends State<SimulationScreen> {
   void _touch() => context.read<DatabaseProvider>().touch();
 
   Future<void> _createScenario(MmexRepository repo) async {
-    final name = await _promptText(context, title: 'Nouveau scénario', label: 'Nom');
+    final name =
+        await _promptText(context, title: 'Nouveau scénario', label: 'Nom');
     if (name == null || name.trim().isEmpty) return;
     final id = repo.createSimScenario(name.trim());
     _touch();
     setState(() => _scenarioId = id);
   }
 
-  Future<void> _renameScenario(MmexRepository repo, SimScenario scenario) async {
+  Future<void> _renameScenario(
+      MmexRepository repo, SimScenario scenario) async {
     final name = await _promptText(context,
-        title: 'Renommer le scénario', label: 'Nom', initialValue: scenario.name);
+        title: 'Renommer le scénario',
+        label: 'Nom',
+        initialValue: scenario.name);
     if (name == null || name.trim().isEmpty) return;
     repo.renameSimScenario(scenario.id, name.trim());
     _touch();
     setState(() {});
   }
 
-  Future<void> _deleteScenario(MmexRepository repo, SimScenario scenario) async {
+  Future<void> _deleteScenario(
+      MmexRepository repo, SimScenario scenario) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Supprimer ce scénario ?'),
-        content: Text('"${scenario.name}" et tous ses ajustements seront supprimés.'),
+        content: Text(
+            '"${scenario.name}" et tous ses ajustements seront supprimés.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Annuler')),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: FilledButton.styleFrom(backgroundColor: AppTheme.negative),
@@ -150,9 +156,21 @@ class _SimulationScreenState extends State<SimulationScreen> {
     // an account the user hid elsewhere in the app (Comptes) has no place
     // in a *new* planning tool either (2026-09-02 user report: it was
     // showing up in every account dropdown here).
-    final accounts =
-        repo.getAccounts().where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final accounts = repo
+        .getAccounts()
+        .where((a) => !dbProvider.isAccountHidden(a.id))
+        .toList();
     final currency = repo.getBaseCurrency();
+    // Same account "in focus" every other screen (dashboard, ledger,
+    // budget...) shows and switches via [DatabaseProvider.selectAccount] -
+    // 2026-09-02 user request: this screen used to keep its own separate,
+    // never-persisted selection (always starting back at "Tous les
+    // comptes"), the one place in the app that didn't match. Falls back to
+    // "Tous les comptes" (null) if the globally selected account is hidden
+    // or gone, same as the scenario fallback above.
+    final rawAccountId = dbProvider.selectedAccountId;
+    final accountId =
+        accounts.any((a) => a.id == rawAccountId) ? rawAccountId : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -165,7 +183,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
                 value: _scenarioId,
                 underline: const SizedBox.shrink(),
                 items: [
-                  for (final s in scenarios) DropdownMenuItem(value: s.id, child: Text(s.name)),
+                  for (final s in scenarios)
+                    DropdownMenuItem(value: s.id, child: Text(s.name)),
                 ],
                 onChanged: (id) => setState(() => _scenarioId = id),
               ),
@@ -193,20 +212,23 @@ class _SimulationScreenState extends State<SimulationScreen> {
           ),
           const SizedBox(width: 8),
           DropdownButton<int?>(
-            value: _accountId,
+            value: accountId,
             underline: const SizedBox.shrink(),
             items: [
-              const DropdownMenuItem(value: null, child: Text('Tous les comptes')),
-              for (final a in accounts) DropdownMenuItem(value: a.id, child: Text(a.name)),
+              const DropdownMenuItem(
+                  value: null, child: Text('Tous les comptes')),
+              for (final a in accounts)
+                DropdownMenuItem(value: a.id, child: Text(a.name)),
             ],
-            onChanged: (id) => setState(() => _accountId = id),
+            onChanged: (id) => dbProvider.selectAccount(id),
           ),
           const SizedBox(width: 8),
           DropdownButton<_Horizon>(
             value: _horizon,
             underline: const SizedBox.shrink(),
             items: [
-              for (final h in _Horizon.values) DropdownMenuItem(value: h, child: Text(h.label)),
+              for (final h in _Horizon.values)
+                DropdownMenuItem(value: h, child: Text(h.label)),
             ],
             onChanged: (h) => setState(() => _horizon = h!),
           ),
@@ -222,9 +244,10 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   key: ValueKey(scenario.id),
                   repo: repo,
                   scenario: scenario,
-                  accountId: _accountId,
+                  accountId: accountId,
                   accounts: accounts,
                   currency: currency,
+                  startDay: dbProvider.forecastDay,
                   onChanged: () {
                     _touch();
                     setState(() {});
@@ -233,10 +256,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
                 final chart = _SimulationChart(
                   repo: repo,
                   scenarioId: scenario.id,
-                  accountId: _accountId,
+                  accountId: accountId,
                   accounts: accounts,
                   horizonMonths: _horizon.years * 12,
                   currency: currency,
+                  startDay: dbProvider.forecastDay,
                 );
                 if (wide) {
                   return Row(
@@ -244,7 +268,9 @@ class _SimulationScreenState extends State<SimulationScreen> {
                     children: [
                       SizedBox(width: 420, child: panel),
                       const VerticalDivider(width: 1),
-                      Expanded(child: Padding(padding: const EdgeInsets.all(16), child: chart)),
+                      Expanded(
+                          child: Padding(
+                              padding: const EdgeInsets.all(16), child: chart)),
                     ],
                   );
                 }
@@ -265,9 +291,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.insights_outlined, size: 64, color: Theme.of(context).colorScheme.outline),
+          Icon(Icons.insights_outlined,
+              size: 64, color: Theme.of(context).colorScheme.outline),
           const SizedBox(height: 16),
-          Text('Aucun scénario pour l\'instant', style: Theme.of(context).textTheme.titleMedium),
+          Text('Aucun scénario pour l\'instant',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           const Text(
             'Un scénario te permet de simuler l\'impact d\'un changement\n'
@@ -305,7 +333,9 @@ Future<String?> _promptText(
         onSubmitted: (v) => Navigator.of(context).pop(v),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
         FilledButton(
           onPressed: () => Navigator.of(context).pop(controller.text),
           child: const Text('Valider'),
@@ -332,6 +362,7 @@ class _AdjustmentsPanel extends StatelessWidget {
   final List<Account> accounts;
   final CurrencyFormat? currency;
   final VoidCallback onChanged;
+  final int startDay;
 
   const _AdjustmentsPanel({
     super.key,
@@ -341,6 +372,7 @@ class _AdjustmentsPanel extends StatelessWidget {
     required this.accounts,
     required this.currency,
     required this.onChanged,
+    required this.startDay,
   });
 
   /// The date a limited-duration bill (a fixed remaining occurrence count,
@@ -355,7 +387,8 @@ class _AdjustmentsPanel extends StatelessWidget {
   DateTime? _naturalEndDate(BillDeposit bill) {
     if (periodUsesXParam(bill.period) || bill.numOccurrences <= 0) return null;
     final farFuture = DateTime(DateTime.now().year + 60);
-    final occurrences = repo.occurrencesForBill(bill, bill.nextOccurrence, farFuture);
+    final occurrences =
+        repo.occurrencesForBill(bill, bill.nextOccurrence, farFuture);
     if (occurrences.length < bill.numOccurrences) return null;
     return occurrences[bill.numOccurrences - 1];
   }
@@ -367,22 +400,31 @@ class _AdjustmentsPanel extends StatelessWidget {
     Map<int, Account> accountsById,
   ) {
     final buffer = StringBuffer(label);
-    buffer.write(bill.transCode == TransCode.deposit ? ' (revenu)' : ' (dépense)');
+    buffer.write(
+        bill.transCode == TransCode.deposit ? ' (revenu)' : ' (dépense)');
     final categoryPath = categoryFullPath(bill.categoryId, categoriesById);
     if (categoryPath.isNotEmpty) buffer.write('\nCatégorie : $categoryPath');
     buffer.write('\nCompte : ${accountsById[bill.accountId]?.name ?? "?"}');
     buffer.write('\nPériodicité : ${recurrencePeriodLabel(bill.period)}');
-    buffer.write('\nProchaine échéance : ${DateFormat('d MMM yyyy', 'fr_FR').format(bill.nextOccurrence)}');
-    if ((bill.notes ?? '').trim().isNotEmpty) buffer.write('\nNotes : ${bill.notes!.trim()}');
+    buffer.write(
+        '\nProchaine échéance : ${DateFormat('d MMM yyyy', 'fr_FR').format(bill.nextOccurrence)}');
+    if ((bill.notes ?? '').trim().isNotEmpty)
+      buffer.write('\nNotes : ${bill.notes!.trim()}');
     return buffer.toString();
   }
 
   @override
   Widget build(BuildContext context) {
-    final payeesById = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final payeesById = {
+      for (final p in repo.getPayees(onlyActive: false)) p.id: p
+    };
     final accountsById = {for (final a in accounts) a.id: a};
-    final categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
-    final overridesByBillId = {for (final o in repo.getSimBillOverrides(scenario.id)) o.billId: o};
+    final categoriesById = {
+      for (final c in repo.getCategories(onlyActive: false)) c.id: c
+    };
+    final overridesByBillId = {
+      for (final o in repo.getSimBillOverrides(scenario.id)) o.billId: o
+    };
     final realBills = repo.getBillDeposits().where((b) {
       if (b.paused) return false;
       if (accountId == null) return b.transCode != TransCode.transfer;
@@ -403,14 +445,26 @@ class _AdjustmentsPanel extends StatelessWidget {
         Row(
           children: [
             Expanded(
-                child:
-                    Text('Opérations virtuelles', style: Theme.of(context).textTheme.titleSmall)),
+                child: Text('Opérations virtuelles',
+                    style: Theme.of(context).textTheme.titleSmall)),
+            IconButton(
+              tooltip: accounts.isEmpty
+                  ? 'Crée d\'abord un compte'
+                  : 'Ajustement réaliste (dépenses imprévues, calculé depuis '
+                      'l\'historique)',
+              icon: const Icon(Icons.auto_graph),
+              onPressed: accounts.isEmpty
+                  ? null
+                  : () => _openDiscretionaryAdjustmentDialog(context),
+            ),
             IconButton(
               tooltip: accounts.isEmpty
                   ? 'Crée d\'abord un compte'
                   : 'Ajouter une opération virtuelle',
               icon: const Icon(Icons.add_circle_outline),
-              onPressed: accounts.isEmpty ? null : () => _openVirtualBillDialog(context),
+              onPressed: accounts.isEmpty
+                  ? null
+                  : () => _openVirtualBillDialog(context),
             ),
           ],
         ),
@@ -421,15 +475,21 @@ class _AdjustmentsPanel extends StatelessWidget {
           ),
         for (final v in virtualBills)
           Tooltip(
-            message: '${v.label} (${v.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
+            message:
+                '${v.label} (${v.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
                 'Compte : ${accountsById[v.accountId]?.name ?? "?"}\n'
                 'Périodicité : ${recurrencePeriodLabel(v.period)}\n'
-                'À partir du : ${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}',
+                'À partir du : ${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}'
+                '${v.variancePercent > 0 ? '\nVariation aléatoire : ±${v.variancePercent.round()} %' : ''}',
             child: ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(
-                v.transCode == TransCode.deposit ? Icons.south_west : Icons.north_east,
-                color: v.transCode == TransCode.deposit ? AppTheme.positive : AppTheme.negative,
+                v.transCode == TransCode.deposit
+                    ? Icons.south_west
+                    : Icons.north_east,
+                color: v.transCode == TransCode.deposit
+                    ? AppTheme.positive
+                    : AppTheme.negative,
               ),
               title: Text(v.label),
               subtitle: Text(
@@ -449,7 +509,8 @@ class _AdjustmentsPanel extends StatelessWidget {
             ),
           ),
         const Divider(height: 32),
-        Text('Opérations récurrentes réelles', style: Theme.of(context).textTheme.titleSmall),
+        Text('Opérations récurrentes réelles',
+            style: Theme.of(context).textTheme.titleSmall),
         const SizedBox(height: 4),
         const Text(
           'Laisse vide pour ne rien changer. "Arrêt le" exclut cette opération '
@@ -469,12 +530,16 @@ class _AdjustmentsPanel extends StatelessWidget {
             bill: bill,
             label: _billLabel(bill, payeesById, accountsById),
             tooltip: _billTooltip(
-                bill, _billLabel(bill, payeesById, accountsById), categoriesById, accountsById),
+                bill,
+                _billLabel(bill, payeesById, accountsById),
+                categoriesById,
+                accountsById),
             naturalEndDate: _naturalEndDate(bill),
             currency: currency,
             savedOverride: overridesByBillId[bill.id],
             onChanged: (disabledFrom, amountOverride) {
-              final hasNoOverride = disabledFrom == null && amountOverride == null;
+              final hasNoOverride =
+                  disabledFrom == null && amountOverride == null;
               if (hasNoOverride) {
                 repo.deleteSimBillOverride(scenario.id, bill.id);
               } else {
@@ -488,13 +553,16 @@ class _AdjustmentsPanel extends StatelessWidget {
         Row(
           children: [
             Expanded(
-                child: Text('Événements ponctuels', style: Theme.of(context).textTheme.titleSmall)),
+                child: Text('Événements ponctuels',
+                    style: Theme.of(context).textTheme.titleSmall)),
             IconButton(
               tooltip: accounts.isEmpty
                   ? 'Crée d\'abord un compte'
                   : 'Ajouter un événement ponctuel',
               icon: const Icon(Icons.add_circle_outline),
-              onPressed: accounts.isEmpty ? null : () => _openOneOffEventDialog(context),
+              onPressed: accounts.isEmpty
+                  ? null
+                  : () => _openOneOffEventDialog(context),
             ),
           ],
         ),
@@ -505,14 +573,19 @@ class _AdjustmentsPanel extends StatelessWidget {
           ),
         for (final e in events)
           Tooltip(
-            message: '${e.label} (${e.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
+            message:
+                '${e.label} (${e.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
                 'Compte : ${accountsById[e.accountId]?.name ?? "?"}\n'
                 'Date : ${DateFormat('d MMM yyyy', 'fr_FR').format(e.date)}',
             child: ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(
-                e.transCode == TransCode.deposit ? Icons.south_west : Icons.north_east,
-                color: e.transCode == TransCode.deposit ? AppTheme.positive : AppTheme.negative,
+                e.transCode == TransCode.deposit
+                    ? Icons.south_west
+                    : Icons.north_east,
+                color: e.transCode == TransCode.deposit
+                    ? AppTheme.positive
+                    : AppTheme.negative,
               ),
               title: Text(e.label),
               subtitle: Text(
@@ -533,7 +606,8 @@ class _AdjustmentsPanel extends StatelessWidget {
     );
   }
 
-  String _billLabel(BillDeposit bill, Map<int, Payee> payeesById, Map<int, Account> accountsById) {
+  String _billLabel(BillDeposit bill, Map<int, Payee> payeesById,
+      Map<int, Account> accountsById) {
     if (bill.transCode == TransCode.transfer) {
       return '${accountsById[bill.accountId]?.name ?? "?"} → '
           '${accountsById[bill.toAccountId]?.name ?? "?"}';
@@ -541,10 +615,12 @@ class _AdjustmentsPanel extends StatelessWidget {
     return payeesById[bill.payeeId]?.name ?? 'Tiers inconnu';
   }
 
-  Future<void> _openVirtualBillDialog(BuildContext context, {SimVirtualBill? existing}) async {
+  Future<void> _openVirtualBillDialog(BuildContext context,
+      {SimVirtualBill? existing}) async {
     final result = await showDialog<_VirtualBillFormResult>(
       context: context,
-      builder: (context) => _VirtualBillDialog(accounts: accounts, existing: existing),
+      builder: (context) =>
+          _VirtualBillDialog(accounts: accounts, existing: existing),
     );
     if (result == null) return;
     if (existing != null) repo.deleteSimVirtualBill(existing.id);
@@ -556,6 +632,50 @@ class _AdjustmentsPanel extends StatelessWidget {
       amount: result.amount,
       startDate: result.startDate,
       period: result.period,
+      variancePercent: result.variancePercent,
+    );
+    onChanged();
+  }
+
+  /// Same recognizable label every time, so re-opening this guided dialog
+  /// for the same account replaces its previous adjustment (delete then
+  /// recreate, same convention [_openVirtualBillDialog]'s own edit path
+  /// already uses) instead of accumulating duplicates.
+  static const _discretionaryAdjustmentLabel =
+      'Dépenses imprévues (historique)';
+
+  Future<void> _openDiscretionaryAdjustmentDialog(BuildContext context) async {
+    final result = await showDialog<_DiscretionaryAdjustmentResult>(
+      context: context,
+      builder: (context) => _DiscretionaryAdjustmentDialog(
+        repo: repo,
+        accounts: accounts,
+        currency: currency,
+        initialAccountId: accountId,
+        startDay: startDay,
+        existingByAccountId: {
+          for (final v in repo.getSimVirtualBills(scenario.id))
+            if (v.label == _discretionaryAdjustmentLabel) v.accountId: v,
+        },
+      ),
+    );
+    if (result == null) return;
+    final existing = repo
+        .getSimVirtualBills(scenario.id)
+        .where((v) =>
+            v.accountId == result.accountId &&
+            v.label == _discretionaryAdjustmentLabel)
+        .firstOrNull;
+    if (existing != null) repo.deleteSimVirtualBill(existing.id);
+    repo.addSimVirtualBill(
+      scenarioId: scenario.id,
+      accountId: result.accountId,
+      label: _discretionaryAdjustmentLabel,
+      transCode: result.amount >= 0 ? TransCode.deposit : TransCode.withdrawal,
+      amount: result.amount.abs(),
+      startDate: DateTime.now(),
+      period: RecurrencePeriod.monthly,
+      variancePercent: result.variancePercent,
     );
     onChanged();
   }
@@ -631,9 +751,10 @@ class _RealBillRow extends StatefulWidget {
 }
 
 class _RealBillRowState extends State<_RealBillRow> {
-  late DateTime? _disabledFrom = widget.savedOverride?.disabledFrom ?? widget.naturalEndDate;
-  late final _amountController =
-      TextEditingController(text: widget.savedOverride?.amountOverride?.toStringAsFixed(2) ?? '');
+  late DateTime? _disabledFrom =
+      widget.savedOverride?.disabledFrom ?? widget.naturalEndDate;
+  late final _amountController = TextEditingController(
+      text: widget.savedOverride?.amountOverride?.toStringAsFixed(2) ?? '');
   Timer? _debounce;
 
   bool get _fullyExcluded =>
@@ -677,7 +798,9 @@ class _RealBillRowState extends State<_RealBillRow> {
   Future<void> _pickStopDate() async {
     final picked = await pickDate(
       context: context,
-      initialDate: (_disabledFrom == null || _fullyExcluded) ? DateTime.now() : _disabledFrom!,
+      initialDate: (_disabledFrom == null || _fullyExcluded)
+          ? DateTime.now()
+          : _disabledFrom!,
       firstDate: DateTime.now(),
       lastDate: DateTime(DateTime.now().year + 60),
       helpText: 'Arrêt de "${widget.label}"',
@@ -703,7 +826,8 @@ class _RealBillRowState extends State<_RealBillRow> {
   @override
   Widget build(BuildContext context) {
     final bill = widget.bill;
-    final realAmountLabel = widget.currency?.format(bill.amount) ?? bill.amount.toStringAsFixed(2);
+    final realAmountLabel =
+        widget.currency?.format(bill.amount) ?? bill.amount.toStringAsFixed(2);
     return Tooltip(
       message: widget.tooltip,
       child: Padding(
@@ -714,14 +838,20 @@ class _RealBillRowState extends State<_RealBillRow> {
             Row(
               children: [
                 Icon(
-                  bill.transCode == TransCode.deposit ? Icons.south_west : Icons.north_east,
+                  bill.transCode == TransCode.deposit
+                      ? Icons.south_west
+                      : Icons.north_east,
                   size: 16,
-                  color: bill.transCode == TransCode.deposit ? AppTheme.positive : AppTheme.negative,
+                  color: bill.transCode == TransCode.deposit
+                      ? AppTheme.positive
+                      : AppTheme.negative,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(widget.label,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
                 ),
                 Text(
                   '$realAmountLabel - ${recurrencePeriodLabel(bill.period)}',
@@ -759,7 +889,8 @@ class _RealBillRowState extends State<_RealBillRow> {
                           child: Text(
                             _disabledFrom == null
                                 ? ''
-                                : DateFormat('d MMM yyyy', 'fr_FR').format(_disabledFrom!),
+                                : DateFormat('d MMM yyyy', 'fr_FR')
+                                    .format(_disabledFrom!),
                             style: const TextStyle(fontSize: 13),
                           ),
                         ),
@@ -772,8 +903,10 @@ class _RealBillRowState extends State<_RealBillRow> {
             const SizedBox(height: 4),
             TextField(
               controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(isDense: true, labelText: 'Nouveau montant'),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                  isDense: true, labelText: 'Nouveau montant'),
               onChanged: _commitAmount,
             ),
           ],
@@ -790,6 +923,7 @@ class _VirtualBillFormResult {
   final double amount;
   final DateTime startDate;
   final RecurrencePeriod period;
+  final double variancePercent;
 
   const _VirtualBillFormResult({
     required this.accountId,
@@ -798,6 +932,7 @@ class _VirtualBillFormResult {
     required this.amount,
     required this.startDate,
     required this.period,
+    this.variancePercent = 0,
   });
 }
 
@@ -812,13 +947,16 @@ class _VirtualBillDialog extends StatefulWidget {
 }
 
 class _VirtualBillDialogState extends State<_VirtualBillDialog> {
-  late final _labelController = TextEditingController(text: widget.existing?.label ?? '');
-  late final _amountController =
-      TextEditingController(text: widget.existing?.amount.toStringAsFixed(2) ?? '');
+  late final _labelController =
+      TextEditingController(text: widget.existing?.label ?? '');
+  late final _amountController = TextEditingController(
+      text: widget.existing?.amount.toStringAsFixed(2) ?? '');
   late int _accountId = widget.existing?.accountId ?? widget.accounts.first.id;
   late TransCode _transCode = widget.existing?.transCode ?? TransCode.deposit;
   late DateTime _startDate = widget.existing?.startDate ?? DateTime.now();
-  late RecurrencePeriod _period = widget.existing?.period ?? RecurrencePeriod.monthly;
+  late RecurrencePeriod _period =
+      widget.existing?.period ?? RecurrencePeriod.monthly;
+  late double _variancePercent = widget.existing?.variancePercent ?? 0;
 
   @override
   void dispose() {
@@ -829,7 +967,8 @@ class _VirtualBillDialogState extends State<_VirtualBillDialog> {
 
   void _submit() {
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
-    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0) return;
+    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0)
+      return;
     Navigator.of(context).pop(_VirtualBillFormResult(
       accountId: _accountId,
       label: _labelController.text.trim(),
@@ -837,6 +976,7 @@ class _VirtualBillDialogState extends State<_VirtualBillDialog> {
       amount: amount,
       startDate: _startDate,
       period: _period,
+      variancePercent: _variancePercent,
     ));
   }
 
@@ -848,77 +988,343 @@ class _VirtualBillDialogState extends State<_VirtualBillDialog> {
           : 'Modifier l\'opération virtuelle'),
       content: SizedBox(
         width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _labelController,
-              autofocus: true,
-              decoration: const InputDecoration(labelText: 'Libellé (ex. Pension de retraite)'),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: SegmentedButton<TransCode>(
-                    segments: const [
-                      ButtonSegment(value: TransCode.deposit, label: Text('Revenu')),
-                      ButtonSegment(value: TransCode.withdrawal, label: Text('Dépense')),
-                    ],
-                    selected: {_transCode},
-                    onSelectionChanged: (s) => setState(() => _transCode = s.first),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Montant'),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<int>(
-              initialValue: _accountId,
-              decoration: const InputDecoration(labelText: 'Compte'),
-              items: [
-                for (final a in widget.accounts) DropdownMenuItem(value: a.id, child: Text(a.name)),
-              ],
-              onChanged: (id) => setState(() => _accountId = id!),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<RecurrencePeriod>(
-              initialValue: _period,
-              decoration: const InputDecoration(labelText: 'Périodicité'),
-              items: [
-                for (final p in _simplePeriods)
-                  DropdownMenuItem(value: p, child: Text(recurrencePeriodLabel(p))),
-              ],
-              onChanged: (p) => setState(() => _period = p!),
-            ),
-            const SizedBox(height: 12),
-            InkWell(
-              onTap: () async {
-                final picked = await pickDate(
-                  context: context,
-                  initialDate: _startDate,
-                  firstDate: DateTime.now().subtract(const Duration(days: 1)),
-                  lastDate: DateTime(DateTime.now().year + 60),
-                  helpText: 'Date de départ',
-                );
-                if (picked != null) setState(() => _startDate = picked);
-              },
-              child: InputDecorator(
-                decoration: const InputDecoration(labelText: 'À partir du'),
-                child: Text(DateFormat('d MMM yyyy', 'fr_FR').format(_startDate)),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _labelController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                    labelText: 'Libellé (ex. Pension de retraite)'),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: SegmentedButton<TransCode>(
+                      segments: const [
+                        ButtonSegment(
+                            value: TransCode.deposit, label: Text('Revenu')),
+                        ButtonSegment(
+                            value: TransCode.withdrawal,
+                            label: Text('Dépense')),
+                      ],
+                      selected: {_transCode},
+                      onSelectionChanged: (s) =>
+                          setState(() => _transCode = s.first),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _amountController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Montant'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _accountId,
+                decoration: const InputDecoration(labelText: 'Compte'),
+                items: [
+                  for (final a in widget.accounts)
+                    DropdownMenuItem(value: a.id, child: Text(a.name)),
+                ],
+                onChanged: (id) => setState(() => _accountId = id!),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<RecurrencePeriod>(
+                initialValue: _period,
+                decoration: const InputDecoration(labelText: 'Périodicité'),
+                items: [
+                  for (final p in _simplePeriods)
+                    DropdownMenuItem(
+                        value: p, child: Text(recurrencePeriodLabel(p))),
+                ],
+                onChanged: (p) => setState(() => _period = p!),
+              ),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: () async {
+                  final picked = await pickDate(
+                    context: context,
+                    initialDate: _startDate,
+                    firstDate: DateTime.now().subtract(const Duration(days: 1)),
+                    lastDate: DateTime(DateTime.now().year + 60),
+                    helpText: 'Date de départ',
+                  );
+                  if (picked != null) setState(() => _startDate = picked);
+                },
+                child: InputDecorator(
+                  decoration: const InputDecoration(labelText: 'À partir du'),
+                  child: Text(
+                      DateFormat('d MMM yyyy', 'fr_FR').format(_startDate)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  _variancePercent == 0
+                      ? 'Montant identique à chaque échéance'
+                      : 'Variation aléatoire d\'une échéance à l\'autre : '
+                          '±${_variancePercent.round()} %',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+              Slider(
+                value: _variancePercent,
+                min: 0,
+                max: 50,
+                divisions: 50,
+                label: '±${_variancePercent.round()} %',
+                onChanged: (v) => setState(() => _variancePercent = v),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
         FilledButton(onPressed: _submit, child: const Text('Valider')),
+      ],
+    );
+  }
+}
+
+class _DiscretionaryAdjustmentResult {
+  final int accountId;
+  final double amount;
+  final double variancePercent;
+
+  const _DiscretionaryAdjustmentResult({
+    required this.accountId,
+    required this.amount,
+    required this.variancePercent,
+  });
+}
+
+/// Guided flow for a scenario's "dépenses imprévues" adjustment
+/// (2026-09-02 user request) - unlike [_VirtualBillDialog], this doesn't
+/// ask the user to invent a number from scratch: it computes a real,
+/// data-derived starting point ([MmexRepository.historicalDiscretionaryMonthlyAverage])
+/// from this account's own transaction history, then lets a
+/// [Slider] adjust it and another control the month-to-month random
+/// variation, before saving it as an ordinary [SimVirtualBill] (see
+/// _AdjustmentsPanel._openDiscretionaryAdjustmentDialog) - the underlying
+/// mechanism is exactly the same one "pension de retraite" or any other
+/// virtual bill uses, just reached through a different door.
+class _DiscretionaryAdjustmentDialog extends StatefulWidget {
+  final MmexRepository repo;
+  final List<Account> accounts;
+  final CurrencyFormat? currency;
+  final int? initialAccountId;
+  final int startDay;
+
+  /// This scenario's existing discretionary-adjustment bill per account (if
+  /// any) - re-opening this dialog for an account that already has one
+  /// starts the sliders from its saved values instead of silently
+  /// discarding a previous manual tweak in favor of the freshly-computed
+  /// suggestion.
+  final Map<int, SimVirtualBill> existingByAccountId;
+
+  const _DiscretionaryAdjustmentDialog({
+    required this.repo,
+    required this.accounts,
+    required this.currency,
+    required this.existingByAccountId,
+    required this.startDay,
+    this.initialAccountId,
+  });
+
+  @override
+  State<_DiscretionaryAdjustmentDialog> createState() =>
+      _DiscretionaryAdjustmentDialogState();
+}
+
+class _DiscretionaryAdjustmentDialogState
+    extends State<_DiscretionaryAdjustmentDialog> {
+  late int _accountId = widget.initialAccountId ?? widget.accounts.first.id;
+  int _historyMonths = 12;
+  late double _suggested = _computeSuggested(_accountId);
+  late double _amount = _initialAmount(_accountId);
+  late double _variancePercent =
+      widget.existingByAccountId[_accountId]?.variancePercent ?? 10;
+
+  double _initialAmount(int accountId) {
+    final existing = widget.existingByAccountId[accountId];
+    if (existing == null) return _suggested;
+    return existing.transCode == TransCode.deposit
+        ? existing.amount
+        : -existing.amount;
+  }
+
+  double _computeSuggested(int accountId) =>
+      widget.repo.historicalDiscretionaryMonthlyAverage(
+        accountId: accountId,
+        anchor: DateTime.now(),
+        startDay: widget.startDay,
+        months: _historyMonths,
+      );
+
+  void _selectAccount(int accountId) {
+    setState(() {
+      _accountId = accountId;
+      _suggested = _computeSuggested(accountId);
+      _amount = _initialAmount(accountId);
+      _variancePercent =
+          widget.existingByAccountId[accountId]?.variancePercent ?? 10;
+    });
+  }
+
+  void _selectHistoryMonths(int months) {
+    setState(() {
+      // Only follow the recomputed suggestion if the slider hadn't been
+      // manually moved away from it yet - once the user has tweaked the
+      // amount by hand, changing the history window shouldn't silently
+      // discard that tweak.
+      final wasAtSuggested = _amount == _suggested;
+      _historyMonths = months;
+      _suggested = _computeSuggested(_accountId);
+      if (wasAtSuggested) _amount = _suggested;
+    });
+  }
+
+  String _formatAmount(double amount) =>
+      widget.currency?.format(amount) ?? amount.toStringAsFixed(2);
+
+  /// Red for a net expense (the common "dépenses imprévues" case), green for
+  /// a net credit, unstyled at exactly 0 - same convention as the rest of
+  /// the app's amount coloring.
+  Color? _amountColor(double amount) {
+    if (amount < 0) return Colors.red.shade700;
+    if (amount > 0) return Colors.green.shade700;
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // At least ±500 of headroom even when the computed suggestion is 0 (a
+    // brand-new account with no history yet) - otherwise the slider would
+    // have nowhere to move at all.
+    final range = max(500.0, _suggested.abs() * 2);
+    final clampedAmount = _amount.clamp(-range, range);
+    return AlertDialog(
+      title: const Text('Ajustement réaliste (dépenses imprévues)'),
+      content: SizedBox(
+        width: 360,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'La simulation ne connaît que les opérations récurrentes réelles - '
+                'jamais les dépenses variables (nourriture, imprévus...). Cet '
+                'ajustement ajoute chaque mois la différence moyenne, calculée sur '
+                'ton historique réel, entre ce que le solde a vraiment fait et ce '
+                'que les opérations récurrentes seules auraient prédit.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _accountId,
+                decoration: const InputDecoration(labelText: 'Compte'),
+                items: [
+                  for (final a in widget.accounts)
+                    DropdownMenuItem(value: a.id, child: Text(a.name)),
+                ],
+                onChanged: (id) => _selectAccount(id!),
+              ),
+              const SizedBox(height: 12),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 12, label: Text('12 mois')),
+                  ButtonSegment(value: 24, label: Text('24 mois')),
+                  ButtonSegment(value: 36, label: Text('36 mois')),
+                ],
+                selected: {_historyMonths},
+                onSelectionChanged: (s) => _selectHistoryMonths(s.first),
+              ),
+              const SizedBox(height: 12),
+              Text.rich(
+                TextSpan(
+                  style: const TextStyle(fontSize: 12),
+                  children: [
+                    TextSpan(
+                        text: 'Sur les $_historyMonths derniers mois : '),
+                    TextSpan(
+                      text: _formatAmount(_suggested),
+                      style: TextStyle(
+                        color: _amountColor(_suggested),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const TextSpan(
+                        text: ' / mois en moyenne, non expliqué par les '
+                            'opérations récurrentes.'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: 'Montant mensuel appliqué : '),
+                    TextSpan(
+                      text: _formatAmount(_amount),
+                      style: TextStyle(
+                        color: _amountColor(_amount),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Slider(
+                value: clampedAmount,
+                min: -range,
+                max: range,
+                divisions: 200,
+                label: _formatAmount(_amount),
+                onChanged: (v) => setState(() => _amount = v),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _variancePercent == 0
+                    ? 'Montant identique chaque mois'
+                    : 'Variation aléatoire d\'un mois à l\'autre : '
+                        '±${_variancePercent.round()} %',
+              ),
+              Slider(
+                value: _variancePercent,
+                min: 0,
+                max: 50,
+                divisions: 50,
+                label: '±${_variancePercent.round()} %',
+                onChanged: (v) => setState(() => _variancePercent = v),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        FilledButton(
+          onPressed: () =>
+              Navigator.of(context).pop(_DiscretionaryAdjustmentResult(
+            accountId: _accountId,
+            amount: _amount,
+            variancePercent: _variancePercent,
+          )),
+          child: const Text('Enregistrer'),
+        ),
       ],
     );
   }
@@ -965,7 +1371,8 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 
   void _submit() {
     final amount = double.tryParse(_amountController.text.replaceAll(',', '.'));
-    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0) return;
+    if (_labelController.text.trim().isEmpty || amount == null || amount <= 0)
+      return;
     Navigator.of(context).pop(_OneOffEventFormResult(
       accountId: _accountId,
       label: _labelController.text.trim(),
@@ -987,13 +1394,15 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
             TextField(
               controller: _labelController,
               autofocus: true,
-              decoration: const InputDecoration(labelText: 'Libellé (ex. Capital de départ)'),
+              decoration: const InputDecoration(
+                  labelText: 'Libellé (ex. Capital de départ)'),
             ),
             const SizedBox(height: 12),
             SegmentedButton<TransCode>(
               segments: const [
                 ButtonSegment(value: TransCode.deposit, label: Text('Revenu')),
-                ButtonSegment(value: TransCode.withdrawal, label: Text('Dépense')),
+                ButtonSegment(
+                    value: TransCode.withdrawal, label: Text('Dépense')),
               ],
               selected: {_transCode},
               onSelectionChanged: (s) => setState(() => _transCode = s.first),
@@ -1001,7 +1410,8 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
             const SizedBox(height: 12),
             TextField(
               controller: _amountController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
               decoration: const InputDecoration(labelText: 'Montant'),
             ),
             const SizedBox(height: 12),
@@ -1009,7 +1419,8 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
               initialValue: _accountId,
               decoration: const InputDecoration(labelText: 'Compte'),
               items: [
-                for (final a in widget.accounts) DropdownMenuItem(value: a.id, child: Text(a.name)),
+                for (final a in widget.accounts)
+                  DropdownMenuItem(value: a.id, child: Text(a.name)),
               ],
               onChanged: (id) => setState(() => _accountId = id!),
             ),
@@ -1034,7 +1445,9 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Annuler')),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
         FilledButton(onPressed: _submit, child: const Text('Valider')),
       ],
     );
@@ -1042,14 +1455,28 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 }
 
 /// The baseline-vs-scenario projection chart - solid accent line for "si
-/// rien ne change" ([MmexRepository.recurringMonthlyNet], the real
-/// schedule, untouched), dashed orange line for the scenario itself
-/// ([MmexRepository.simulatedMonthlyNet]) - orange dashed is the same
+/// rien ne change" ([MmexRepository.recurringDailyNet], the real schedule,
+/// untouched), dashed orange line for the scenario itself
+/// ([MmexRepository.simulatedDailyNet]) - orange dashed is the same
 /// "simulated" visual convention forecast_chart.dart already uses for its
 /// own simulated-purchase overlay, reused here on purpose for a consistent
 /// meaning across the app. Both start from today's real combined/per-account
 /// balance ([MmexRepository.accountBalance]), so they only ever diverge from
 /// what the scenario actually changes.
+///
+/// Bucketed day by day, same granularity as the dashboard's own
+/// [ForecastChart] (2026-09-02 user request: match it exactly, rather than
+/// the monthly pay-cycle bucketing this chart used until then - see git
+/// history for that earlier attempt and why it was replaced). Recurring-bill
+/// detail shows up in the tooltip on hover, same as the dashboard, but
+/// deliberately without its red dashed per-day vertical lines - those would
+/// be an unreadable wall of red across a multi-year horizon.
+///
+/// [startDay] itself (Settings' "Jour de prévision du solde") no longer
+/// changes how this chart buckets - only the exact calendar day matters now
+/// - but is still threaded through, since the "Ajustement réaliste" dialog
+/// reached from this same screen still needs it for
+/// [MmexRepository.historicalDiscretionaryMonthlyAverage].
 class _SimulationChart extends StatelessWidget {
   final MmexRepository repo;
   final int scenarioId;
@@ -1057,6 +1484,7 @@ class _SimulationChart extends StatelessWidget {
   final List<Account> accounts;
   final int horizonMonths;
   final CurrencyFormat? currency;
+  final int startDay;
 
   const _SimulationChart({
     required this.repo,
@@ -1065,6 +1493,7 @@ class _SimulationChart extends StatelessWidget {
     required this.accounts,
     required this.horizonMonths,
     required this.currency,
+    required this.startDay,
   });
 
   double _startingBalance() {
@@ -1073,26 +1502,60 @@ class _SimulationChart extends StatelessWidget {
     // Sums every *visible* account (see the caller's own filtering) - a
     // hidden account's balance has no place in "tous les comptes" here
     // either, same reasoning as the account dropdown itself.
-    return accounts.fold(0.0, (sum, a) => sum + repo.accountBalance(a.id, asOf: now));
+    return accounts.fold(
+        0.0, (sum, a) => sum + repo.accountBalance(a.id, asOf: now));
   }
 
-  List<double> _cumulative(Map<DateTime, double> monthlyNet, double startingBalance) {
-    final keys = monthlyNet.keys.toList()..sort();
+  List<double> _cumulative(
+      Map<DateTime, double> dailyNet, double startingBalance) {
+    final keys = dailyNet.keys.toList()..sort();
     var running = startingBalance;
-    return [for (final k in keys) running += monthlyNet[k]!];
+    return [for (final k in keys) running += dailyNet[k]!];
+  }
+
+  /// Every real recurring-bill occurrence between [start] and [end],
+  /// grouped by day - day-level counterpart to what the dashboard's own
+  /// ForecastChart shows (2026-09-02 user request: match its day-by-day
+  /// granularity here too, tooltip detail included, but without its red
+  /// dashed per-day vertical lines - kept out on purpose, unreadably dense
+  /// at a horizon of years, so the detail lives in the tooltip only).
+  Map<DateTime, List<RecurringOccurrence>> _groupedOccurrences(
+      DateTime start, DateTime end) {
+    final occurrences = repo.recurringOccurrencesInRange(
+        start: start, end: end, accountId: accountId);
+    final grouped = <DateTime, List<RecurringOccurrence>>{};
+    for (final o in occurrences) {
+      grouped.putIfAbsent(o.date, () => []).add(o);
+    }
+    return grouped;
+  }
+
+  /// "\n\nOpérations récurrentes :\n• Salaire : +2 500,00 €\n..." appended to
+  /// a day's tooltip.
+  String _occurrenceSuffix(List<RecurringOccurrence>? occurrences) {
+    if (occurrences == null || occurrences.isEmpty) return '';
+    final lines = occurrences.map((o) {
+      final amount = currency?.format(o.signedAmount) ?? o.signedAmount.toStringAsFixed(2);
+      return '• ${o.label} : $amount';
+    }).join('\n');
+    return '\n\nOpérations récurrentes :\n$lines';
   }
 
   @override
   Widget build(BuildContext context) {
     final now = DateTime.now();
-    final anchor = DateTime(now.year, now.month + horizonMonths - 1, 1);
+    final today = DateTime(now.year, now.month, now.day);
+    final anchor = DateTime(now.year, now.month + horizonMonths, now.day)
+        .subtract(const Duration(days: 1));
+    final days = anchor.difference(today).inDays + 1;
     final startingBalance = _startingBalance();
 
     final baselineNet =
-        repo.recurringMonthlyNet(anchor: anchor, months: horizonMonths, accountId: accountId);
-    final scenarioNet = repo.simulatedMonthlyNet(
-        scenarioId: scenarioId, anchor: anchor, months: horizonMonths, accountId: accountId);
-    final months = (baselineNet.keys.toList()..sort());
+        repo.recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
+    final scenarioNet = repo.simulatedDailyNet(
+        scenarioId: scenarioId, anchor: anchor, days: days, accountId: accountId);
+    final points = (baselineNet.keys.toList()..sort());
+    final grouped = _groupedOccurrences(today, anchor);
 
     final baseline = _cumulative(baselineNet, startingBalance);
     final scenario = _cumulative(scenarioNet, startingBalance);
@@ -1102,8 +1565,9 @@ class _SimulationChart extends StatelessWidget {
     final maxY = allValues.reduce((a, b) => a > b ? a : b);
     final pad = (maxY - minY).abs() * 0.1 + 1;
 
-    final labelInterval = (months.length / 8).clamp(1, 60).roundToDouble();
-    final axisFormat = DateFormat(months.length > 24 ? 'yyyy' : 'MMM yy', 'fr_FR');
+    final labelInterval = (points.length / 8).clamp(1, double.infinity).roundToDouble();
+    final axisFormat =
+        DateFormat(horizonMonths > 24 ? 'yyyy' : 'd MMM yy', 'fr_FR');
 
     return Column(
       children: [
@@ -1111,11 +1575,14 @@ class _SimulationChart extends StatelessWidget {
           children: [
             _Legend(color: AppTheme.accent, label: 'Sans changement'),
             const SizedBox(width: 16),
-            _Legend(color: Colors.orange.shade700, label: 'Avec ce scénario', dashed: true),
+            _Legend(
+                color: Colors.orange.shade700,
+                label: 'Avec ce scénario',
+                dashed: true),
             const Spacer(),
-            if (months.isNotEmpty)
+            if (points.isNotEmpty)
               Text(
-                'Écart en ${DateFormat('MMM yyyy', 'fr_FR').format(months.last)} : '
+                'Écart le ${DateFormat('d MMM yyyy', 'fr_FR').format(points.last)} : '
                 '${currency?.format(scenario.last - baseline.last) ?? (scenario.last - baseline.last).toStringAsFixed(2)}',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
@@ -1130,9 +1597,12 @@ class _SimulationChart extends StatelessWidget {
               gridData: const FlGridData(drawVerticalLine: false),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
-                leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles:
+                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 bottomTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
@@ -1140,10 +1610,12 @@ class _SimulationChart extends StatelessWidget {
                     interval: labelInterval,
                     getTitlesWidget: (value, meta) {
                       final i = value.round();
-                      if (i < 0 || i >= months.length) return const SizedBox.shrink();
+                      if (i < 0 || i >= points.length)
+                        return const SizedBox.shrink();
                       return Padding(
                         padding: const EdgeInsets.only(top: 6),
-                        child: Text(axisFormat.format(months[i]), style: const TextStyle(fontSize: 10)),
+                        child: Text(axisFormat.format(points[i]),
+                            style: const TextStyle(fontSize: 10)),
                       );
                     },
                   ),
@@ -1156,24 +1628,35 @@ class _SimulationChart extends StatelessWidget {
                   getTooltipItems: (spots) => [
                     for (final s in spots)
                       LineTooltipItem(
-                        '${DateFormat('MMM yyyy', 'fr_FR').format(months[s.x.round()])}\n'
+                        '${DateFormat('EEEE d MMMM yyyy', 'fr_FR').format(points[s.x.round()])}\n'
                         '${currency?.format(s.y) ?? s.y.toStringAsFixed(2)}'
-                        '${s.barIndex == 1 ? ' (scénario)' : ''}',
-                        const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                        '${s.barIndex == 1 ? ' (scénario)' : ''}'
+                        // Only on the baseline ("Sans changement") item -
+                        // both bars are touched at once, and attaching the
+                        // same list to each would just show it twice.
+                        '${s.barIndex == 0 ? _occurrenceSuffix(grouped[points[s.x.round()]]) : ''}',
+                        const TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.w600),
                       ),
                   ],
                 ),
               ),
               lineBarsData: [
                 LineChartBarData(
-                  spots: [for (var i = 0; i < baseline.length; i++) FlSpot(i.toDouble(), baseline[i])],
+                  spots: [
+                    for (var i = 0; i < baseline.length; i++)
+                      FlSpot(i.toDouble(), baseline[i])
+                  ],
                   isCurved: false,
                   color: AppTheme.accent,
                   barWidth: 2.5,
                   dotData: const FlDotData(show: false),
                 ),
                 LineChartBarData(
-                  spots: [for (var i = 0; i < scenario.length; i++) FlSpot(i.toDouble(), scenario[i])],
+                  spots: [
+                    for (var i = 0; i < scenario.length; i++)
+                      FlSpot(i.toDouble(), scenario[i])
+                  ],
                   isCurved: false,
                   color: Colors.orange.shade700,
                   barWidth: 2.5,
@@ -1194,7 +1677,8 @@ class _Legend extends StatelessWidget {
   final String label;
   final bool dashed;
 
-  const _Legend({required this.color, required this.label, this.dashed = false});
+  const _Legend(
+      {required this.color, required this.label, this.dashed = false});
 
   @override
   Widget build(BuildContext context) {
@@ -1210,7 +1694,8 @@ class _Legend extends StatelessWidget {
                     4,
                     (i) => Expanded(
                       child: Container(
-                          margin: EdgeInsets.only(right: i < 3 ? 2 : 0), color: i.isEven ? color : null),
+                          margin: EdgeInsets.only(right: i < 3 ? 2 : 0),
+                          color: i.isEven ? color : null),
                     ),
                   ),
                 )

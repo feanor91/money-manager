@@ -104,7 +104,7 @@ mois sur l'horizon choisi (années, pas juste mois).
    `recurringMonthlyNet` (aucune divergence silencieuse possible).
    `flutter analyze`/`flutter test` (457) propres. Pas encore d'interface
    - rien n'est accessible depuis l'appli pour l'instant, uniquement du
-   code testé en coulisses.
+     code testé en coulisses.
 2. **Interface minimale** - un scénario, liste d'ajustements, un
    graphique (réutilisant le rendu de `ForecastChart`) sur plusieurs
    années. Pas commencé - questions ouvertes ci-dessus toujours à trancher
