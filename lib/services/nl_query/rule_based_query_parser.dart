@@ -46,6 +46,18 @@ import 'query_intent.dart';
   } else if (payeeId != null) {
     intent = QueryIntent(
         kind: QueryKind.payeeSpend, period: period, accountId: accountId, payeeId: payeeId);
+  } else if (RegExp(r'\bsolde\b|\bbalance\b').hasMatch(text) && _mentionsPerMonth(text)) {
+    // "solde ... mois par mois"/"au 24 de chaque mois" - one snapshot per
+    // month, not a single point in time (see balance below). 2026-09-02
+    // user report: this used to fall straight into the balance branch,
+    // silently ignoring "mois par mois" the same way income/expense
+    // questions used to before they got their own "par mois" checks.
+    intent = QueryIntent(
+      kind: QueryKind.balanceByMonth,
+      period: period,
+      accountId: accountId,
+      balanceDay: _extractDayOfMonth(text),
+    );
   } else if (RegExp(r'\bsolde\b|\bbalance\b').hasMatch(text)) {
     // A mentioned period ("le solde en juillet") means "as of the end of
     // that period"; no period at all means "right now" (executor default).
@@ -127,6 +139,19 @@ bool _mentionsRecurring(String text) => RegExp(r'recurrente?s?\b').hasMatch(text
 /// breakdown instead of one lump total (see QueryKind.expenseByMonth).
 bool _mentionsPerMonth(String text) =>
     RegExp(r'par mois|mois par mois|chaque mois').hasMatch(text);
+
+/// "au 24 du mois", "le 24 de chaque mois", "le 24 du mois" - an explicit
+/// day-of-month for a [QueryKind.balanceByMonth] question. Deliberately
+/// requires "du mois"/"de chaque mois" right after the number (not just
+/// "au 24" alone), so this never misfires on an unrelated "au 24 juillet"
+/// date mention elsewhere in the question.
+int? _extractDayOfMonth(String text) {
+  final match =
+      RegExp(r'(?:au|le)\s+(\d{1,2})\s*(?:du mois|de chaque mois|de ce mois)')
+          .firstMatch(text);
+  final day = int.tryParse(match?.group(1) ?? '');
+  return (day != null && day >= 1 && day <= 31) ? day : null;
+}
 
 /// "Pourquoi vais-je finir le mois en négatif ?", "vais-je finir en
 /// négatif", "pourquoi je vais être dans le rouge", "vais-je être à

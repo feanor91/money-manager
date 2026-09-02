@@ -149,6 +149,24 @@ void main() {
     expect(result.intent!.asOf, isNull);
   });
 
+  test('solde + "mois par mois" -> balanceByMonth, not a single-point balance '
+      '(2026-09-02 user report: this used to silently ignore "mois par mois")',
+      () {
+    final result = parse(
+        'dis moi sur les 3 dernières années, mois par mois, au 24 du mois, '
+        'de combien était le solde du compte Livret A');
+    expect(result.intent!.kind, QueryKind.balanceByMonth);
+    expect(result.intent!.accountId, livretA.id);
+    expect(result.intent!.balanceDay, 24);
+  });
+
+  test('solde "mois par mois" with no explicit day -> balanceDay left null '
+      '(executor defaults to the last day of each month)', () {
+    final result = parse('mon solde mois par mois sur 12 mois');
+    expect(result.intent!.kind, QueryKind.balanceByMonth);
+    expect(result.intent!.balanceDay, isNull);
+  });
+
   test('"chez X" -> payeeSpend with resolved payee', () {
     final result = parse('combien j\'ai dépensé chez Carrefour ce mois-ci ?');
     expect(result.intent!.kind, QueryKind.payeeSpend);

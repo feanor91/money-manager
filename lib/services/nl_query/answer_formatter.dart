@@ -159,6 +159,23 @@ String formatAnswer(
           asOf != null ? ' au ${DateFormat('d MMMM yyyy', 'fr_FR').format(asOf)}' : " aujourd'hui";
       return 'Solde de $accountName$asOfNote : ${money(answer.total ?? 0)}.';
 
+    case QueryKind.balanceByMonth:
+      final monthly = answer.monthlyBreakdown ?? const {};
+      final months = monthly.keys.toList()..sort();
+      final accountName = accountsById[intent.accountId]?.name ?? 'ce compte';
+      if (months.isEmpty) {
+        return 'Aucune donnée trouvée pour $accountName sur ${intent.period.label}.$periodNote';
+      }
+      final monthFormat = DateFormat('MMMM yyyy', 'fr_FR');
+      final dayNote =
+          intent.balanceDay != null ? ' au ${intent.balanceDay}' : ' en fin de mois';
+      final lines = _bulletLines(months.map((m) {
+        final label = monthFormat.format(m);
+        return '${label[0].toUpperCase()}${label.substring(1)} : ${money(monthly[m]!)}';
+      }));
+      return 'Solde de $accountName$dayNote, mois par mois (${intent.period.label}) :\n'
+          '$lines$periodNote';
+
     case QueryKind.topExpenses:
       final breakdown = answer.categoryBreakdown ?? const {};
       final sorted = breakdown.entries.where((e) => e.value > 0).toList()

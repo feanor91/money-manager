@@ -14,6 +14,17 @@ enum QueryKind {
   /// "Quel est le solde de mon compte courant ?" (optionally "au 15 juin").
   balance,
 
+  /// "Quel était mon solde au 24 de chaque mois sur les 3 dernières
+  /// années ?" - one balance snapshot per calendar month across
+  /// [QueryIntent.period], each dated [QueryIntent.balanceDay] (clamped to
+  /// that month's real length; the last day of the month when no day was
+  /// mentioned) - distinct from [balance], which only ever answers a single
+  /// point in time. 2026-09-02 user report: "solde" + "mois par mois" fell
+  /// through to a single-point [balance] answer, silently ignoring "mois
+  /// par mois" entirely (only the dépenses/revenus branches checked for
+  /// it).
+  balanceByMonth,
+
   /// "Mes plus grosses dépenses du mois dernier" - the biggest spending
   /// *categories* over the period, ranked by their total (not individual
   /// withdrawals: ranking single transactions let one big one-off
@@ -113,6 +124,12 @@ class QueryIntent {
   /// end of [period]) when null, see query_executor.dart.
   final DateTime? asOf;
 
+  /// Only meaningful for [QueryKind.balanceByMonth] - the day of the month
+  /// an explicit "au 24 du mois"/"le 24 de chaque mois" asked for. Null
+  /// means "the last day of each month" (the same default [balance] uses
+  /// when no date is mentioned at all).
+  final int? balanceDay;
+
   /// Only meaningful for [QueryKind.expenseTotal]/[QueryKind.adHoc] -
   /// "dépenses récurrentes" narrows the total (and its category breakdown/
   /// detail transactions) to ones actually linked to a recurring bill,
@@ -144,6 +161,7 @@ class QueryIntent {
     this.payeeId,
     this.topN = 5,
     this.asOf,
+    this.balanceDay,
     this.recurringOnly = false,
     this.adHocMetric,
     this.adHocTransactionType,
@@ -168,6 +186,7 @@ class QueryIntent {
     int? payeeId,
     int? topN,
     DateTime? asOf,
+    int? balanceDay,
     bool? recurringOnly,
     AdHocMetric? adHocMetric,
     AdHocTransactionType? adHocTransactionType,
@@ -182,6 +201,7 @@ class QueryIntent {
       payeeId: payeeId ?? this.payeeId,
       topN: topN ?? this.topN,
       asOf: asOf ?? this.asOf,
+      balanceDay: balanceDay ?? this.balanceDay,
       recurringOnly: recurringOnly ?? this.recurringOnly,
       adHocMetric: adHocMetric ?? this.adHocMetric,
       adHocTransactionType: adHocTransactionType ?? this.adHocTransactionType,

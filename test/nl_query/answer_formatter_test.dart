@@ -153,6 +153,36 @@ void main() {
     expect(text, contains("aujourd'hui"));
   });
 
+  test('balanceByMonth lists one line per month with the account name '
+      'and the requested day', () {
+    final period3y = DateRange(
+        start: DateTime(2023, 9, 1), end: DateTime(2026, 10, 1), label: 'les 3 derniers ans');
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.balanceByMonth,
+        period: period3y,
+        accountId: compteCourant.id,
+        balanceDay: 24,
+      ),
+      QueryAnswer(monthlyBreakdown: {
+        DateTime(2026, 7, 1): 2435,
+        DateTime(2026, 8, 1): 2100,
+      }),
+    );
+    expect(text, contains('Compte Courant'));
+    expect(text, contains('au 24'));
+    expect(text, contains('2 435,00 €'));
+    expect(text, contains('2 100,00 €'));
+  });
+
+  test('balanceByMonth with no explicit day says "en fin de mois"', () {
+    final text = format(
+      QueryIntent(kind: QueryKind.balanceByMonth, period: july, accountId: compteCourant.id),
+      QueryAnswer(monthlyBreakdown: {DateTime(2026, 7, 1): 2435}),
+    );
+    expect(text, contains('en fin de mois'));
+  });
+
   test('payeeSpend names the payee', () {
     final text = format(
       QueryIntent(kind: QueryKind.payeeSpend, period: july, payeeId: carrefour.id),

@@ -48,9 +48,11 @@ class QueryAnswer {
   /// [answer_formatter.dart] for how those two are told apart).
   final DateTime? forecastCrossesNegativeOn;
 
-  /// [QueryKind.expenseByMonth] only - one total per calendar month across
-  /// [QueryIntent.period], keyed by each month's 1st, oldest first. See
-  /// [MmexRepository.categorySpendByMonth].
+  /// [QueryKind.expenseByMonth] (one total per calendar month, see
+  /// [MmexRepository.categorySpendByMonth]) or [QueryKind.balanceByMonth]
+  /// (one balance snapshot per calendar month, see
+  /// [MmexRepository.accountBalance]) - both keyed by each month's 1st,
+  /// oldest first.
   final Map<DateTime, double>? monthlyBreakdown;
 
   /// [QueryKind.adHoc] only - one entry per [QueryIntent.adHocGroupBy]
@@ -204,6 +206,27 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
       }
       final asOf = intent.asOf ?? now ?? DateTime.now();
       return QueryAnswer(total: repo.accountBalance(accountId, asOf: asOf));
+
+    case QueryKind.balanceByMonth:
+      final accountId = intent.accountId;
+      if (accountId == null) {
+        throw ArgumentError(
+            'QueryKind.balanceByMonth requires a resolved accountId - callers '
+            'must resolve a default (e.g. the dashboard\'s selected account) '
+            'before calling runQuery, never guess silently.');
+      }
+      final monthly = <DateTime, double>{};
+      var cursor = DateTime(intent.period.start.year, intent.period.start.month, 1);
+      while (cursor.isBefore(intent.period.end)) {
+        final daysInMonth = DateTime(cursor.year, cursor.month + 1, 0).day;
+        final day = intent.balanceDay != null
+            ? intent.balanceDay!.clamp(1, daysInMonth)
+            : daysInMonth;
+        final asOf = DateTime(cursor.year, cursor.month, day);
+        monthly[cursor] = repo.accountBalance(accountId, asOf: asOf);
+        cursor = DateTime(cursor.year, cursor.month + 1, 1);
+      }
+      return QueryAnswer(monthlyBreakdown: monthly);
 
     case QueryKind.topExpenses:
       final totals = repo.categorySpendForPeriod(

@@ -254,6 +254,45 @@ void main() {
     );
   });
 
+  test('balanceByMonth returns one snapshot per month, keyed by each '
+      "month's 1st (2026-09-02: solde + \"mois par mois\" used to silently "
+      'collapse to a single point)', () {
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.balanceByMonth,
+        period: period(DateTime(2026, 7, 1), DateTime(2026, 9, 1)),
+        accountId: accountId,
+        balanceDay: 15,
+      ),
+      repo,
+    );
+    final monthly = answer.monthlyBreakdown!;
+    expect(monthly.keys.toSet(), {DateTime(2026, 7, 1), DateTime(2026, 8, 1)});
+    // 1000 initial + 1500 deposit - 40 - 25, all on or before the 15th.
+    expect(monthly[DateTime(2026, 7, 1)], 2435);
+    // No transactions in August - the running balance carries forward.
+    expect(monthly[DateTime(2026, 8, 1)], 2435);
+  });
+
+  test('balanceByMonth with no explicit day uses the last day of each month', () {
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.balanceByMonth,
+        period: period(DateTime(2026, 7, 1), DateTime(2026, 8, 1)),
+        accountId: accountId,
+      ),
+      repo,
+    );
+    expect(answer.monthlyBreakdown![DateTime(2026, 7, 1)], 2435);
+  });
+
+  test('balanceByMonth without a resolved accountId throws rather than guessing', () {
+    expect(
+      () => runQuery(QueryIntent(kind: QueryKind.balanceByMonth, period: july), repo),
+      throwsArgumentError,
+    );
+  });
+
   test('topExpenses ranks categories by their total, biggest first', () {
     final answer =
         runQuery(QueryIntent(kind: QueryKind.topExpenses, period: july, topN: 5), repo);
