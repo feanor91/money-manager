@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:money_manager/data/mmex_database.dart';
 import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager/models/budget_period.dart' show nextForecastDay;
 import 'package:money_manager/models/recurrence.dart';
 import 'package:money_manager/models/transaction.dart';
 
@@ -738,14 +739,14 @@ void main() {
     });
   });
 
-  group('simulatedDailyNetWithAssumedFinalBalance', () {
-    test('applied is false and the net series is unchanged when '
+  group('simulatedDailyNetWithAssumedFinalBalance (2026-09-03: recurs '
+      'monthly, not just once)', () {
+    test('both lists stay empty and the net series is unchanged when '
         'assumedFinalBalance is null', () {
       final id = repo.createSimScenario('S');
       final today = DateTime.now();
       final todayMidnight = DateTime(today.year, today.month, today.day);
       final anchor = todayMidnight.add(const Duration(days: 30));
-      final target = todayMidnight.add(const Duration(days: 5));
       final plain = repo.simulatedDailyNet(
           scenarioId: id, anchor: anchor, days: 31, accountId: accountId);
 
@@ -755,42 +756,60 @@ void main() {
         anchor: anchor,
         days: 31,
         accountId: accountId,
-        targetDate: target,
+        forecastDay: todayMidnight.day,
       );
 
-      expect(result.applied, isFalse);
+      expect(result.appliedDates, isEmpty);
+      expect(result.ignoredDates, isEmpty);
       expect(result.net, plain);
     });
 
-    test('applies the assumption and injects the delta at the target date '
-        "when the scenario's own calculated balance there is already "
-        'positive - the "uniquement si positif" rule\'s positive branch', () {
+    test('is re-applied at every monthly occurrence of forecastDay while '
+        'the running balance stays positive - "reportée toutes les fins de '
+        'mois" (2026-09-03 user correction of the original one-shot design)',
+        () {
       final id = repo.createSimScenario('S');
       final today = DateTime.now();
       final todayMidnight = DateTime(today.year, today.month, today.day);
-      final anchor = todayMidnight.add(const Duration(days: 30));
-      final target = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = todayMidnight.day;
+      final checkpoints = <DateTime>[];
+      var checkpoint = nextForecastDay(todayMidnight, forecastDay);
+      for (var i = 0; i < 3; i++) {
+        checkpoints.add(checkpoint);
+        checkpoint = nextForecastDay(
+            checkpoint.add(const Duration(days: 1)), forecastDay);
+      }
+      final anchor = checkpoints.last;
+      final days = anchor.difference(todayMidnight).inDays + 1;
 
       final result = repo.simulatedDailyNetWithAssumedFinalBalance(
         scenarioId: id,
         assumedFinalBalance: 1500,
         anchor: anchor,
-        days: 31,
+        days: days,
         accountId: accountId,
-        targetDate: target,
+        forecastDay: forecastDay,
       );
 
-      expect(result.calculatedAtTarget, 1000.0);
-      expect(result.applied, isTrue);
-      expect(result.net[target], 500.0); // 1500 (assumed) - 1000 (calculated)
+      expect(result.appliedDates, checkpoints);
+      expect(result.ignoredDates, isEmpty);
+      // First checkpoint: 1500 (assumed) - 1000 (starting balance).
+      expect(result.net[checkpoints[0]], 500.0);
+      // No further real movement in between - already pinned to 1500, so
+      // later checkpoints reset to the very same figure: delta 0.
+      expect(result.net[checkpoints[1]], 0.0);
+      expect(result.net[checkpoints[2]], 0.0);
     });
 
-    test('never applies the assumption when the calculated balance at the '
-        'target date is already negative - the rule\'s "laisser le solde '
-        'calculé" branch, exactly the point of the whole feature', () {
+    test('never applies at a month whose running balance is already '
+        'negative or zero - the real (bad) trajectory shows through '
+        'untouched for that month, exactly the point of the whole feature',
+        () {
       final id = repo.createSimScenario('S');
       final today = DateTime.now();
       final todayMidnight = DateTime(today.year, today.month, today.day);
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = checkpoint.day;
       repo.addSimOneOffEvent(
         scenarioId: id,
         accountId: otherAccountId,
@@ -799,64 +818,117 @@ void main() {
         amount: 2000,
         date: todayMidnight.add(const Duration(days: 2)),
       );
-      final anchor = todayMidnight.add(const Duration(days: 30));
-      final target = todayMidnight.add(const Duration(days: 5));
 
       final result = repo.simulatedDailyNetWithAssumedFinalBalance(
         scenarioId: id,
         assumedFinalBalance: 50000, // a very optimistic assumption
-        anchor: anchor,
-        days: 31,
+        anchor: checkpoint,
+        days: checkpoint.difference(todayMidnight).inDays + 1,
         accountId: otherAccountId,
-        targetDate: target,
+        forecastDay: forecastDay,
       );
       final plain = repo.simulatedDailyNet(
-          scenarioId: id, anchor: anchor, days: 31, accountId: otherAccountId);
+          scenarioId: id,
+          anchor: checkpoint,
+          days: checkpoint.difference(todayMidnight).inDays + 1,
+          accountId: otherAccountId);
 
-      expect(result.calculatedAtTarget, -2000.0);
-      expect(result.applied, isFalse);
+      expect(result.appliedDates, isEmpty);
+      expect(result.ignoredDates, [checkpoint]);
       expect(result.net, plain); // never touched - no silent optimism
     });
 
-    test('applied is false when the target date falls outside the charted '
-        'window', () {
+    test('a month that recovers to positive after an earlier negative one '
+        'gets pinned again - each checkpoint judges the *running* total, '
+        'not a single fixed one', () {
       final id = repo.createSimScenario('S');
       final today = DateTime.now();
       final todayMidnight = DateTime(today.year, today.month, today.day);
-      final anchor = todayMidnight.add(const Duration(days: 10));
-      final outsideTarget = todayMidnight.add(const Duration(days: 60));
+      final checkpoint1 = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = checkpoint1.day;
+      final checkpoint2 =
+          nextForecastDay(checkpoint1.add(const Duration(days: 1)), forecastDay);
+      // otherAccountId starts at 0 - a withdrawal before checkpoint1 pushes
+      // it negative there, then a deposit before checkpoint2 brings it back
+      // positive.
+      repo.addSimOneOffEvent(
+        scenarioId: id,
+        accountId: otherAccountId,
+        label: 'Grosse dépense',
+        transCode: TransCode.withdrawal,
+        amount: 500,
+        date: todayMidnight.add(const Duration(days: 1)),
+      );
+      repo.addSimOneOffEvent(
+        scenarioId: id,
+        accountId: otherAccountId,
+        label: 'Rentrée d\'argent',
+        transCode: TransCode.deposit,
+        amount: 1000,
+        date: checkpoint1.add(const Duration(days: 1)),
+      );
+      final days = checkpoint2.difference(todayMidnight).inDays + 1;
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: 2000,
+        anchor: checkpoint2,
+        days: days,
+        accountId: otherAccountId,
+        forecastDay: forecastDay,
+      );
+
+      expect(result.ignoredDates, [checkpoint1]); // -500, still negative
+      expect(result.appliedDates, [checkpoint2]); // -500 + 1000 = 500, positive
+      expect(result.net[checkpoint1], 0.0); // untouched
+      expect(result.net[checkpoint2], 1500.0); // 2000 (assumed) - 500 (running)
+    });
+
+    test('both lists stay empty when forecastDay never occurs inside the '
+        'charted window', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      // A single-day window containing only today, with a forecastDay
+      // that's guaranteed to differ from today's own day-of-month - its
+      // next real occurrence (this month or, if already past, next month)
+      // can then never land on today itself, regardless of which real
+      // calendar date this test happens to run on.
+      final otherDay = todayMidnight.day == 1 ? 2 : 1;
 
       final result = repo.simulatedDailyNetWithAssumedFinalBalance(
         scenarioId: id,
         assumedFinalBalance: 5000,
-        anchor: anchor,
-        days: 11,
+        anchor: todayMidnight,
+        days: 1,
         accountId: accountId,
-        targetDate: outsideTarget,
+        forecastDay: otherDay,
       );
 
-      expect(result.applied, isFalse);
+      expect(result.appliedDates, isEmpty);
+      expect(result.ignoredDates, isEmpty);
     });
 
-    test('accountId: null sums across accountsForTotal for the calculated '
-        'figure, same convention as "tous les comptes" everywhere else', () {
+    test('accountId: null sums across accountsForTotal for the running '
+        'total, same convention as "tous les comptes" everywhere else', () {
       final id = repo.createSimScenario('S');
       final today = DateTime.now();
       final todayMidnight = DateTime(today.year, today.month, today.day);
-      final anchor = todayMidnight.add(const Duration(days: 30));
-      final target = todayMidnight.add(const Duration(days: 5));
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = checkpoint.day;
 
       final result = repo.simulatedDailyNetWithAssumedFinalBalance(
         scenarioId: id,
-        assumedFinalBalance: null,
-        anchor: anchor,
-        days: 31,
+        assumedFinalBalance: 1200,
+        anchor: checkpoint,
+        days: checkpoint.difference(todayMidnight).inDays + 1,
         accountId: null,
         accountsForTotal: repo.getAccounts(),
-        targetDate: target,
+        forecastDay: forecastDay,
       );
 
-      expect(result.calculatedAtTarget, 1000.0); // 1000 + 0
+      expect(result.appliedDates, [checkpoint]);
+      expect(result.net[checkpoint], 200.0); // 1200 (assumed) - 1000 (1000 + 0)
     });
   });
 }

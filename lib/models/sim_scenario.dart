@@ -13,14 +13,17 @@ class SimScenario {
   final DateTime createdAt;
   final DateTime updatedAt;
 
-  /// "Solde final supposé" (2026-09-02 user request) - a balance the user
-  /// trusts more than the raw projection, at the app's existing "Jour de
-  /// prévision du solde" date (see MmexRepository.forecastAccountBalanceForScenario/
-  /// _SimulationChart). Null (the default) means no adjustment. Only ever
-  /// *applied* when the scenario's own calculated balance at that date is
-  /// already positive - see the doc comment on where it's consumed for why:
-  /// this must never be a way to paper over a genuinely negative
-  /// projection.
+  /// "Solde final supposé" (2026-09-02 user request, corrected to recur
+  /// monthly on 2026-09-03) - a balance the user trusts more than the raw
+  /// projection, re-applied at *every* monthly occurrence of the app's
+  /// existing "Jour de prévision du solde" setting (see
+  /// MmexRepository.simulatedDailyNetWithAssumedFinalBalance), not just
+  /// once: the user's real account tends to hover near this same figure
+  /// every month regardless of what a naive multi-year recurring-only
+  /// projection says. Null (the default) means no adjustment. Only ever
+  /// *applied* at a given month if the running balance there is already
+  /// positive - see the doc comment on where it's consumed for why: this
+  /// must never be a way to paper over a genuinely negative trajectory.
   final double? assumedFinalBalance;
 
   const SimScenario({

@@ -4,7 +4,7 @@ import '../models/account.dart';
 import '../models/bill_deposit.dart';
 import '../models/budget.dart';
 import '../models/budget_period.dart'
-    show BudgetWindow, budgetWindowContaining, previousBudgetWindow;
+    show BudgetWindow, budgetWindowContaining, previousBudgetWindow, nextForecastDay;
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
@@ -1492,21 +1492,38 @@ class MmexRepository {
   }
 
   /// [simulatedDailyNet] with [assumedFinalBalance] (see
-  /// [SimScenario.assumedFinalBalance]'s own doc comment) applied at
-  /// [targetDate] when appropriate - extracted here as its own method
-  /// (rather than inline in `_SimulationChart`) so the "uniquement si
-  /// positif" rule is directly unit-tested (test/sim_scenario_test.dart)
-  /// like every other piece of the simulator's math - "extrêmement fiable"
-  /// was an explicit requirement (2026-09-02).
+  /// [SimScenario.assumedFinalBalance]'s own doc comment) re-applied at
+  /// *every* monthly occurrence of [forecastDay] within [anchor]/[days]'s
+  /// window, not just once - extracted here as its own method (rather than
+  /// inline in `_SimulationChart`) so the "reporté toutes les fins de
+  /// mois, sauf si le solde est négatif" rule is directly unit-tested
+  /// (test/sim_scenario_test.dart) like every other piece of the
+  /// simulator's math - "extrêmement fiable" was an explicit requirement
+  /// (2026-09-02).
+  ///
+  /// Why recurring rather than a single date (2026-09-03 user correction of
+  /// the original one-shot design): the user's real bank balance almost
+  /// never matches a naive recurring-only projection several years out -
+  /// in practice it hovers close to the same "slightly positive or
+  /// slightly negative" figure every month, because real life (extra
+  /// discretionary spending or saving) keeps nudging it back there. Walks
+  /// month-by-month in chronological order, each checkpoint's decision
+  /// based on the *running* total so far - which already includes every
+  /// earlier checkpoint's own pin, exactly like the real account carries
+  /// its actual balance from one month into the next: if that running
+  /// total is already positive, it's reset to [assumedFinalBalance]; if
+  /// it's zero or negative, it's left alone and the (possibly negative)
+  /// calculated figure shows through untouched for that month - this must
+  /// never be a way to make a genuinely bad trajectory look fine.
   ///
   /// [accountsForTotal] is only consulted when [accountId] is null ("tous
   /// les comptes") - same summing convention as
-  /// `_SimulationChart._startingBalance`. `applied` is always false when
-  /// [assumedFinalBalance] is null (nothing to apply) or [targetDate] falls
-  /// outside [anchor]/[days]'s own window - the caller can still read
-  /// `calculatedAtTarget` (the real projected figure at that date) either
-  /// way, e.g. to explain *why* nothing was applied.
-  ({Map<DateTime, double> net, bool applied, double calculatedAtTarget})
+  /// `_SimulationChart._startingBalance`. Both returned lists are empty
+  /// when [assumedFinalBalance] is null (nothing to apply) or [forecastDay]
+  /// has no occurrence at all inside [anchor]/[days]'s window - the caller
+  /// can tell "nothing to show" from "some months negative" by checking
+  /// whether both lists are empty.
+  ({Map<DateTime, double> net, List<DateTime> appliedDates, List<DateTime> ignoredDates})
       simulatedDailyNetWithAssumedFinalBalance({
     required int scenarioId,
     required double? assumedFinalBalance,
@@ -1514,30 +1531,50 @@ class MmexRepository {
     required int days,
     int? accountId,
     List<Account> accountsForTotal = const [],
-    required DateTime targetDate,
+    required int forecastDay,
   }) {
     final net = simulatedDailyNet(
         scenarioId: scenarioId, anchor: anchor, days: days, accountId: accountId);
-    final calculatedAtTarget = accountId != null
-        ? forecastAccountBalanceForScenario(
-            scenarioId: scenarioId, accountId: accountId, targetDate: targetDate)
-        : accountsForTotal.fold(
-            0.0,
-            (sum, a) => sum +
-                forecastAccountBalanceForScenario(
-                    scenarioId: scenarioId, accountId: a.id, targetDate: targetDate));
+    if (assumedFinalBalance == null) {
+      return (net: net, appliedDates: const [], ignoredDates: const []);
+    }
 
-    if (assumedFinalBalance == null || calculatedAtTarget <= 0) {
-      return (net: net, applied: false, calculatedAtTarget: calculatedAtTarget);
+    final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final accountIds = accountId != null
+        ? [accountId]
+        : accountsForTotal.map((a) => a.id).toList();
+
+    var runningTotal = accountIds.fold(
+        0.0, (sum, id) => sum + accountBalance(id, asOf: today));
+    final futureReal = <DateTime, double>{};
+    for (final id in accountIds) {
+      futureDailyNet(after: today, end: anchorDay, accountId: id)
+          .forEach((k, v) => futureReal[k] = (futureReal[k] ?? 0) + v);
     }
-    final bucket =
-        DateTime(targetDate.year, targetDate.month, targetDate.day);
-    if (!net.containsKey(bucket)) {
-      return (net: net, applied: false, calculatedAtTarget: calculatedAtTarget);
+
+    final appliedDates = <DateTime>[];
+    final ignoredDates = <DateTime>[];
+    var cursor = _addDays(today, 1);
+    var checkpoint = nextForecastDay(today, forecastDay);
+    while (!checkpoint.isAfter(anchorDay)) {
+      while (!cursor.isAfter(checkpoint)) {
+        runningTotal += (net[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
+        cursor = _addDays(cursor, 1);
+      }
+      if (runningTotal > 0) {
+        final delta = assumedFinalBalance - runningTotal;
+        net[checkpoint] = (net[checkpoint] ?? 0) + delta;
+        runningTotal = assumedFinalBalance;
+        appliedDates.add(checkpoint);
+      } else {
+        ignoredDates.add(checkpoint);
+      }
+      checkpoint = nextForecastDay(_addDays(checkpoint, 1), forecastDay);
     }
-    final delta = assumedFinalBalance - calculatedAtTarget;
-    net[bucket] = (net[bucket] ?? 0) + delta;
-    return (net: net, applied: true, calculatedAtTarget: calculatedAtTarget);
+
+    return (net: net, appliedDates: appliedDates, ignoredDates: ignoredDates);
   }
 
   /// First future calendar day [accountId]'s projected running balance dips
