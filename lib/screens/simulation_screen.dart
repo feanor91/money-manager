@@ -78,6 +78,19 @@ class _SimulationScreenState extends State<SimulationScreen> {
   int? _scenarioId;
   _Horizon _horizon = _Horizon.tenYears;
 
+  /// Bumped by the "Rafraîchir" button (2026-09-03 user request: "pouvoir
+  /// rafraîchir les scénarios de simulation quand j'ajoute des opérations
+  /// récurrentes") - folded into [_AdjustmentsPanel]'s key below to force
+  /// Flutter to fully tear down and recreate it (and every per-bill row
+  /// state nested inside, each seeded once in its own initState) rather
+  /// than just re-running build() on the existing State object. Adding a
+  /// recurring bill elsewhere already reaches this screen reactively
+  /// (Provider's `touch()` → `notifyListeners()`, watched via
+  /// `context.watch<DatabaseProvider>()` below), so this is a deliberate
+  /// belt-and-suspenders "start completely fresh" control for peace of
+  /// mind, not a fix for a reproduced staleness bug.
+  int _refreshNonce = 0;
+
   @override
   void initState() {
     super.initState();
@@ -271,6 +284,13 @@ class _SimulationScreenState extends State<SimulationScreen> {
             onPressed: () => _createScenario(repo),
           ),
           const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Rafraîchir (après avoir ajouté des opérations '
+                'récurrentes, par exemple)',
+            icon: const Icon(Icons.refresh),
+            onPressed: () => setState(() => _refreshNonce++),
+          ),
+          const SizedBox(width: 8),
           DropdownButton<int?>(
             value: accountId,
             underline: const SizedBox.shrink(),
@@ -301,7 +321,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 900;
                 final panel = _AdjustmentsPanel(
-                  key: ValueKey(scenario.id),
+                  key: ValueKey('${scenario.id}_$_refreshNonce'),
                   repo: repo,
                   scenario: scenario,
                   accountId: accountId,

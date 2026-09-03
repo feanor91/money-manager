@@ -248,22 +248,30 @@ class _RecurringScreenState extends State<RecurringScreen> {
   }
 
   Future<void> _openEditor(BuildContext context,
-      {BillDeposit? existing}) async {
+      {BillDeposit? existing, BillDeposit? duplicateFrom}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
-    final categoryChange = await showModalBottomSheet<CategoryChange?>(
+    final result = await showModalBottomSheet<RecurringEditorResult>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => RecurringEditorSheet(existing: existing, repo: repo),
+      builder: (_) => RecurringEditorSheet(
+          existing: existing, repo: repo, duplicateFrom: duplicateFrom),
     );
     dbProvider.touch();
-    if (categoryChange != null && context.mounted) {
+    if (result?.categoryChange != null && context.mounted) {
       await offerBulkCategoryReassign(
         context: context,
         repo: repo,
         dbProvider: dbProvider,
-        change: categoryChange,
+        change: result!.categoryChange!,
       );
+    }
+    // "Dupliquer" was tapped - reopen a fresh "Nouvelle opération
+    // récurrente" sheet seeded from the source bill, only once this one
+    // has fully closed (same deferred-to-after-close convention as
+    // openTransactionEditor's identical duplicate handling).
+    if (result?.duplicateFrom != null && context.mounted) {
+      await _openEditor(context, duplicateFrom: result!.duplicateFrom);
     }
   }
 }
@@ -364,6 +372,18 @@ class _RecurringTotalsBar extends StatelessWidget {
   }
 }
 
+/// [RecurringEditorSheet]'s pop value - `categoryChange` triggers the same
+/// bulk-reassign offer [TransactionEditorResult] does; `duplicateFrom`
+/// triggers _RecurringScreenState._openEditor reopening a fresh sheet
+/// seeded from the source bill, same "Dupliquer" convention as the ledger's
+/// own TransactionEditorResult/openTransactionEditor (2026-09-03 user
+/// request: "possibilité de dupliquer une opération récurrente comme pour
+/// les transactions du grand livre").
+typedef RecurringEditorResult = ({
+  CategoryChange? categoryChange,
+  BillDeposit? duplicateFrom,
+});
+
 /// Public (not file-private) so [TransactionsScreen] can also open it - lets
 /// you create a recurring bill straight from the ledger without switching
 /// to the "Récurrentes" tab first.
@@ -372,11 +392,22 @@ class RecurringEditorSheet extends StatefulWidget {
   final MmexRepository repo;
   final int? defaultAccountId;
 
+  /// Seeds every field a duplicated bill should copy, exactly like
+  /// [existing] would - unlike the ledger's own duplicateFrom (which
+  /// deliberately blanks amount/date since those vary transaction to
+  /// transaction), a recurring bill is a template whose amount/date are
+  /// normally stable, so "Dupliquer" here copies everything and lets the
+  /// user tweak whichever field actually needs to differ (e.g. splitting a
+  /// bill across two accounts) before saving. Ignored when [existing] is
+  /// set, same as [existing] always winning over a seed.
+  final BillDeposit? duplicateFrom;
+
   const RecurringEditorSheet({
     super.key,
     this.existing,
     required this.repo,
     this.defaultAccountId,
+    this.duplicateFrom,
   });
 
   @override
@@ -410,26 +441,30 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
   void initState() {
     super.initState();
     final bill = widget.existing;
-    _accountId = bill?.accountId ?? widget.defaultAccountId;
-    _toAccountId = bill?.toAccountId;
-    _categoryId = bill?.categoryId;
-    _payeeId = bill?.payeeId;
-    _transCode = bill?.transCode ?? TransCode.withdrawal;
-    _nextOccurrence = bill?.nextOccurrence ?? DateTime.now();
-    _period = bill?.period ?? RecurrencePeriod.monthly;
-    _autoExecute = bill?.autoExecute ?? RecurrenceAutoExecute.notify;
-    _amountController.text = bill != null ? bill.amount.toStringAsFixed(2) : '';
-    _limitedOccurrences = (bill?.numOccurrences ?? -1) >= 0;
+    // A duplicate only ever seeds a brand-new bill - ignored the moment
+    // there's a real [existing] to edit instead, same convention as
+    // TransactionEditorSheet's dup/draft handling.
+    final seed = bill ?? widget.duplicateFrom;
+    _accountId = seed?.accountId ?? widget.defaultAccountId;
+    _toAccountId = seed?.toAccountId;
+    _categoryId = seed?.categoryId;
+    _payeeId = seed?.payeeId;
+    _transCode = seed?.transCode ?? TransCode.withdrawal;
+    _nextOccurrence = seed?.nextOccurrence ?? DateTime.now();
+    _period = seed?.period ?? RecurrencePeriod.monthly;
+    _autoExecute = seed?.autoExecute ?? RecurrenceAutoExecute.notify;
+    _amountController.text = seed != null ? seed.amount.toStringAsFixed(2) : '';
+    _limitedOccurrences = (seed?.numOccurrences ?? -1) >= 0;
     // For the "dans/tous les X jours/mois" periods, NUMOCCURRENCES holds the
     // interval X rather than a remaining-occurrences count (see
     // recurrence.dart periodUsesXParam) - always show/edit it, independent
     // of the "durée limitée" toggle which doesn't apply to these periods.
     _occurrencesController.text = periodUsesXParam(_period)
-        ? (bill?.numOccurrences != null && bill!.numOccurrences > 0
-            ? bill.numOccurrences.toString()
+        ? (seed?.numOccurrences != null && seed!.numOccurrences > 0
+            ? seed.numOccurrences.toString()
             : '1')
-        : (_limitedOccurrences ? bill!.numOccurrences.toString() : '');
-    _notesController.text = bill?.notes ?? '';
+        : (_limitedOccurrences ? seed!.numOccurrences.toString() : '');
+    _notesController.text = seed?.notes ?? '';
   }
 
   @override
@@ -706,6 +741,19 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                       },
                       child: const Text('Supprimer'),
                     ),
+                  // Closes this sheet with the source bill attached -
+                  // _RecurringScreenState._openEditor reopens a fresh
+                  // "Nouvelle opération récurrente" sheet from it once this
+                  // one has actually closed, same convention as the
+                  // ledger's own "Dupliquer" (transactions_screen.dart).
+                  if (widget.existing != null)
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop((
+                        categoryChange: null,
+                        duplicateFrom: widget.existing,
+                      )),
+                      child: const Text('Dupliquer'),
+                    ),
                   const Spacer(),
                   FilledButton(
                     onPressed: _save,
@@ -807,7 +855,8 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
       }
     }
     context.read<DatabaseProvider>().touch();
-    Navigator.of(context).pop(categoryChange);
+    Navigator.of(context)
+        .pop((categoryChange: categoryChange, duplicateFrom: null));
   }
 }
 
