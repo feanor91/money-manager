@@ -36,6 +36,38 @@ bool periodUsesXParam(RecurrencePeriod period) =>
 bool periodIsFixedTwoShot(RecurrencePeriod period) =>
     period == RecurrencePeriod.inXDays || period == RecurrencePeriod.inXMonths;
 
+/// How many months [period] spans, for the periods with a fixed monthly
+/// interval - null for every other period (weekly/daily-stepped, or the "X
+/// jours/mois" periods, whose interval isn't fixed by the period itself at
+/// all - see [periodUsesXParam]). Used to cap "Répartir en X fois" when
+/// recording an occurrence (see recurring_screen.dart's
+/// `_RecordOccurrenceDialog._maxSplitInto`, 2026-09-02 user request):
+/// the installment count may go up to (and including) this span - a
+/// 3-month period can take 3 monthly installments, a 6-month one 6, and so
+/// on - since the last of X monthly installments starting on the due date
+/// lands X-1 months later, still strictly before the next due date exactly
+/// [this span] months out.
+int? recurrenceMonthSpan(RecurrencePeriod period) {
+  switch (period) {
+    case RecurrencePeriod.monthly:
+    case RecurrencePeriod.monthlyLastDay:
+    case RecurrencePeriod.monthlyLastBusinessDay:
+      return 1;
+    case RecurrencePeriod.biMonthly:
+      return 2;
+    case RecurrencePeriod.quarterly:
+      return 3;
+    case RecurrencePeriod.fourMonths:
+      return 4;
+    case RecurrencePeriod.halfYearly:
+      return 6;
+    case RecurrencePeriod.yearly:
+      return 12;
+    default:
+      return null;
+  }
+}
+
 // Ground truth: MMEX's own REPEAT_TYPE enum (Model_Billsdeposits.h, stable
 // releases - not the in-progress 2026 rewrite, which uses a different
 // internal representation, though it preserves the same on-disk codes -

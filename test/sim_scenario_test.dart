@@ -662,4 +662,201 @@ void main() {
       expect(result.values.single, 500.0);
     });
   });
+
+  group('assumedFinalBalance (solde final supposé, 2026-09-02)', () {
+    test('a fresh scenario has no assumed final balance', () {
+      repo.createSimScenario('S');
+      expect(repo.getSimScenarios().single.assumedFinalBalance, isNull);
+    });
+
+    test('setting is readable back, and passing null clears it', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimScenarioAssumedFinalBalance(id, 45000);
+      expect(repo.getSimScenarios().single.assumedFinalBalance, 45000.0);
+
+      repo.setSimScenarioAssumedFinalBalance(id, null);
+      expect(repo.getSimScenarios().single.assumedFinalBalance, isNull);
+    });
+  });
+
+  group('forecastAccountBalanceForScenario', () {
+    test("returns today's real balance when targetDate isn't in the future",
+        () {
+      final id = repo.createSimScenario('S');
+      final balance = repo.forecastAccountBalanceForScenario(
+          scenarioId: id, accountId: accountId, targetDate: DateTime.now());
+      expect(balance, 1000.0);
+    });
+
+    test("projects a scenario's virtual bill forward to a future date", () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      repo.addSimVirtualBill(
+        scenarioId: id,
+        accountId: accountId,
+        label: 'Pension',
+        transCode: TransCode.deposit,
+        amount: 500,
+        startDate: todayMidnight.add(const Duration(days: 5)),
+        period: RecurrencePeriod.monthly,
+      );
+
+      final balance = repo.forecastAccountBalanceForScenario(
+        scenarioId: id,
+        accountId: accountId,
+        targetDate: todayMidnight.add(const Duration(days: 10)),
+      );
+
+      expect(balance, 1500.0);
+    });
+
+    test('a disabled real bill is excluded here, unlike the real, unmodified '
+        'forecastAccountBalance', () {
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.withdrawal,
+        amount: 200,
+        nextOccurrence: todayMidnight.add(const Duration(days: 3)),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      final billId = repo.getBillDeposits().single.id;
+      final id = repo.createSimScenario('S');
+      repo.upsertSimBillOverride(id, billId, disabledFrom: todayMidnight);
+      final target = todayMidnight.add(const Duration(days: 10));
+
+      final scenarioBalance = repo.forecastAccountBalanceForScenario(
+          scenarioId: id, accountId: accountId, targetDate: target);
+      final realBalance = repo.forecastAccountBalance(accountId, target);
+
+      expect(scenarioBalance, 1000.0);
+      expect(realBalance, 800.0);
+    });
+  });
+
+  group('simulatedDailyNetWithAssumedFinalBalance', () {
+    test('applied is false and the net series is unchanged when '
+        'assumedFinalBalance is null', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final anchor = todayMidnight.add(const Duration(days: 30));
+      final target = todayMidnight.add(const Duration(days: 5));
+      final plain = repo.simulatedDailyNet(
+          scenarioId: id, anchor: anchor, days: 31, accountId: accountId);
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: null,
+        anchor: anchor,
+        days: 31,
+        accountId: accountId,
+        targetDate: target,
+      );
+
+      expect(result.applied, isFalse);
+      expect(result.net, plain);
+    });
+
+    test('applies the assumption and injects the delta at the target date '
+        "when the scenario's own calculated balance there is already "
+        'positive - the "uniquement si positif" rule\'s positive branch', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final anchor = todayMidnight.add(const Duration(days: 30));
+      final target = todayMidnight.add(const Duration(days: 5));
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: 1500,
+        anchor: anchor,
+        days: 31,
+        accountId: accountId,
+        targetDate: target,
+      );
+
+      expect(result.calculatedAtTarget, 1000.0);
+      expect(result.applied, isTrue);
+      expect(result.net[target], 500.0); // 1500 (assumed) - 1000 (calculated)
+    });
+
+    test('never applies the assumption when the calculated balance at the '
+        'target date is already negative - the rule\'s "laisser le solde '
+        'calculé" branch, exactly the point of the whole feature', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      repo.addSimOneOffEvent(
+        scenarioId: id,
+        accountId: otherAccountId,
+        label: 'Grosse dépense',
+        transCode: TransCode.withdrawal,
+        amount: 2000,
+        date: todayMidnight.add(const Duration(days: 2)),
+      );
+      final anchor = todayMidnight.add(const Duration(days: 30));
+      final target = todayMidnight.add(const Duration(days: 5));
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: 50000, // a very optimistic assumption
+        anchor: anchor,
+        days: 31,
+        accountId: otherAccountId,
+        targetDate: target,
+      );
+      final plain = repo.simulatedDailyNet(
+          scenarioId: id, anchor: anchor, days: 31, accountId: otherAccountId);
+
+      expect(result.calculatedAtTarget, -2000.0);
+      expect(result.applied, isFalse);
+      expect(result.net, plain); // never touched - no silent optimism
+    });
+
+    test('applied is false when the target date falls outside the charted '
+        'window', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final anchor = todayMidnight.add(const Duration(days: 10));
+      final outsideTarget = todayMidnight.add(const Duration(days: 60));
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: 5000,
+        anchor: anchor,
+        days: 11,
+        accountId: accountId,
+        targetDate: outsideTarget,
+      );
+
+      expect(result.applied, isFalse);
+    });
+
+    test('accountId: null sums across accountsForTotal for the calculated '
+        'figure, same convention as "tous les comptes" everywhere else', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final anchor = todayMidnight.add(const Duration(days: 30));
+      final target = todayMidnight.add(const Duration(days: 5));
+
+      final result = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: id,
+        assumedFinalBalance: null,
+        anchor: anchor,
+        days: 31,
+        accountId: null,
+        accountsForTotal: repo.getAccounts(),
+        targetDate: target,
+      );
+
+      expect(result.calculatedAtTarget, 1000.0); // 1000 + 0
+    });
+  });
 }

@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../data/mmex_repository.dart';
 import '../models/account.dart';
 import '../models/bill_deposit.dart';
+import '../models/budget_period.dart' show nextForecastDay;
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
@@ -114,6 +115,38 @@ class _SimulationScreenState extends State<SimulationScreen> {
     setState(() {});
   }
 
+  /// "Solde final supposé" (2026-09-02 user request) - see
+  /// [SimScenario.assumedFinalBalance]/`_SimulationChart`'s own doc comment
+  /// for the full "uniquement si positif" rule this feeds. [targetDate] is
+  /// always the app's existing "Jour de prévision du solde" date
+  /// ([nextForecastDay] applied to [DatabaseProvider.forecastDay]) - shown
+  /// in the prompt so the user knows exactly which date their number
+  /// applies to.
+  Future<void> _setAssumedFinalBalance(
+      MmexRepository repo, SimScenario scenario, DateTime targetDate) async {
+    final text = await _promptText(
+      context,
+      title: 'Solde final supposé',
+      label:
+          'Montant au ${DateFormat('d MMM yyyy', 'fr_FR').format(targetDate)} '
+          '(laisser vide pour annuler)',
+      initialValue: scenario.assumedFinalBalance?.toStringAsFixed(2) ?? '',
+    );
+    if (text == null) return; // dialog dismissed - nothing changes
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      repo.setSimScenarioAssumedFinalBalance(scenario.id, null);
+      _touch();
+      setState(() {});
+      return;
+    }
+    final value = double.tryParse(trimmed.replaceAll(',', '.'));
+    if (value == null) return; // not a number - silently ignored, same as leaving the field untouched
+    repo.setSimScenarioAssumedFinalBalance(scenario.id, value);
+    _touch();
+    setState(() {});
+  }
+
   Future<void> _deleteScenario(
       MmexRepository repo, SimScenario scenario) async {
     final confirmed = await showDialog<bool>(
@@ -171,6 +204,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
     final rawAccountId = dbProvider.selectedAccountId;
     final accountId =
         accounts.any((a) => a.id == rawAccountId) ? rawAccountId : null;
+    // "Jour de prévision du solde" (Paramètres) - where "Solde final
+    // supposé" applies (2026-09-02 user request). Same date the dashboard's
+    // own near-term forecast already anchors to (dashboard_screen.dart).
+    final forecastTargetDate =
+        nextForecastDay(DateTime.now(), dbProvider.forecastDay);
 
     return Scaffold(
       appBar: AppBar(
@@ -202,6 +240,22 @@ class _SimulationScreenState extends State<SimulationScreen> {
               tooltip: 'Supprimer ce scénario',
               icon: const Icon(Icons.delete_outline),
               onPressed: () => _deleteScenario(repo, scenario),
+            ),
+            IconButton(
+              tooltip: scenario.assumedFinalBalance != null
+                  ? 'Solde final supposé : '
+                      '${currency?.format(scenario.assumedFinalBalance!) ?? scenario.assumedFinalBalance!.toStringAsFixed(2)} '
+                      'au ${DateFormat('d MMM yyyy', 'fr_FR').format(forecastTargetDate)}'
+                  : 'Définir un solde final supposé au '
+                      '${DateFormat('d MMM yyyy', 'fr_FR').format(forecastTargetDate)}',
+              icon: Icon(
+                Icons.flag_outlined,
+                color: scenario.assumedFinalBalance != null
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              onPressed: () =>
+                  _setAssumedFinalBalance(repo, scenario, forecastTargetDate),
             ),
             const SizedBox(width: 8),
           ],
@@ -261,6 +315,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   horizonMonths: _horizon.years * 12,
                   currency: currency,
                   startDay: dbProvider.forecastDay,
+                  assumedFinalBalance: scenario.assumedFinalBalance,
+                  forecastTargetDate: forecastTargetDate,
                 );
                 if (wide) {
                   return Row(
@@ -1479,7 +1535,9 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 /// changes how this chart buckets - only the exact calendar day matters now
 /// - but is still threaded through, since the "Ajustement réaliste" dialog
 /// reached from this same screen still needs it for
-/// [MmexRepository.historicalDiscretionaryMonthlyAverage].
+/// [MmexRepository.historicalDiscretionaryMonthlyAverage], and since
+/// 2026-09-02 also anchors [assumedFinalBalance] - see that field's own doc
+/// comment.
 class _SimulationChart extends StatelessWidget {
   final MmexRepository repo;
   final int scenarioId;
@@ -1489,6 +1547,28 @@ class _SimulationChart extends StatelessWidget {
   final CurrencyFormat? currency;
   final int startDay;
 
+  /// "Solde final supposé" (2026-09-02 user request: "je découpe... je
+  /// veux ajouter un paramètre qui sera le solde final supposé... injecté
+  /// dans le calcul, uniquement si le solde calculé est positif, sinon
+  /// laisser le solde calculé") - [SimScenario.assumedFinalBalance],
+  /// applied at [forecastTargetDate] as a one-time adjustment to the
+  /// *scenario* ("avec ce scénario") line only, which then carries forward
+  /// through the rest of the projection exactly like a one-off event would
+  /// - never to the baseline ("sans changement") line, which stays the
+  /// pure unmodified real schedule for an honest comparison. Deliberately
+  /// gated on the scenario's own *calculated* balance at that date already
+  /// being positive (see [build]'s own `calculatedAtTarget` check) - this
+  /// must never be a way to make a genuinely bad (negative) projection look
+  /// fine; a negative calculated result always shows through untouched,
+  /// regardless of what's typed in here.
+  final double? assumedFinalBalance;
+
+  /// The date [assumedFinalBalance] applies at - always
+  /// `nextForecastDay(now, startDay)`, computed once by the parent so this
+  /// widget and the AppBar control that sets [assumedFinalBalance] always
+  /// agree on exactly which date is meant.
+  final DateTime forecastTargetDate;
+
   const _SimulationChart({
     required this.repo,
     required this.scenarioId,
@@ -1497,6 +1577,8 @@ class _SimulationChart extends StatelessWidget {
     required this.horizonMonths,
     required this.currency,
     required this.startDay,
+    required this.assumedFinalBalance,
+    required this.forecastTargetDate,
   });
 
   double _startingBalance() {
@@ -1555,10 +1637,40 @@ class _SimulationChart extends StatelessWidget {
 
     final baselineNet =
         repo.recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
-    final scenarioNet = repo.simulatedDailyNet(
-        scenarioId: scenarioId, anchor: anchor, days: days, accountId: accountId);
+    // "Solde final supposé" (2026-09-02) - see [assumedFinalBalance]'s own
+    // doc comment/MmexRepository.simulatedDailyNetWithAssumedFinalBalance
+    // for the full "uniquement si positif" rule. Only ever nudges the
+    // *scenario* net series, never the baseline above.
+    final scenarioResult = repo.simulatedDailyNetWithAssumedFinalBalance(
+      scenarioId: scenarioId,
+      assumedFinalBalance: assumedFinalBalance,
+      anchor: anchor,
+      days: days,
+      accountId: accountId,
+      accountsForTotal: accounts,
+      targetDate: forecastTargetDate,
+    );
+    final scenarioNet = scenarioResult.net;
     final points = (baselineNet.keys.toList()..sort());
     final grouped = _groupedOccurrences(today, anchor);
+
+    String? assumedBalanceNote;
+    if (assumedFinalBalance != null) {
+      final targetLabel =
+          DateFormat('d MMM yyyy', 'fr_FR').format(forecastTargetDate);
+      final calcLabel = currency?.format(scenarioResult.calculatedAtTarget) ??
+          scenarioResult.calculatedAtTarget.toStringAsFixed(2);
+      if (scenarioResult.applied) {
+        assumedBalanceNote = 'Solde final supposé appliqué le $targetLabel : '
+            '${currency?.format(assumedFinalBalance!) ?? assumedFinalBalance!.toStringAsFixed(2)}';
+      } else if (scenarioResult.calculatedAtTarget <= 0) {
+        assumedBalanceNote = 'Solde final supposé ignoré - le calcul est déjà '
+            'négatif le $targetLabel ($calcLabel)';
+      } else {
+        assumedBalanceNote =
+            'Solde final supposé hors de l\'horizon affiché ($targetLabel)';
+      }
+    }
 
     final baseline = _cumulative(baselineNet, startingBalance);
     final scenario = _cumulative(scenarioNet, startingBalance);
@@ -1591,6 +1703,28 @@ class _SimulationChart extends StatelessWidget {
               ),
           ],
         ),
+        // Always says whether the assumption was actually used, and why
+        // not when it wasn't (2026-09-02) - the whole point of the
+        // "uniquement si positif" rule is that a negative calculated
+        // outcome is never quietly hidden, so silence here would defeat it.
+        if (assumedBalanceNote != null) ...[
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.flag_outlined,
+                  size: 14, color: Theme.of(context).colorScheme.outline),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  assumedBalanceNote,
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.outline),
+                ),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 12),
         Expanded(
           child: LineChart(

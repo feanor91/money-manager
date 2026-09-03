@@ -229,6 +229,17 @@ class MmexRepository {
     // same as before this column existed.
     _tryAddColumn(
         'APP_SIM_VIRTUAL_BILLS', 'VARIANCE_PERCENT', 'REAL NOT NULL DEFAULT 0');
+    // "Solde final supposé" (2026-09-02 user request) - an assumed/known
+    // balance the user trusts more than the raw projection at the app's
+    // existing "Jour de prévision du solde" date (DatabaseProvider.forecastDay
+    // / models/budget_period.dart's nextForecastDay - the same date the
+    // dashboard's own near-term forecast already anchors to). Null (the
+    // default) means no adjustment - see
+    // MmexRepository.forecastAccountBalanceForScenario/_SimulationChart for
+    // how and when this actually gets applied (only when the scenario's own
+    // calculated balance at that date is already positive - never allowed
+    // to paper over a genuinely negative projection).
+    _tryAddColumn('APP_SIM_SCENARIOS', 'ASSUMED_FINAL_BALANCE', 'REAL');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1444,6 +1455,91 @@ class MmexRepository {
     return total;
   }
 
+  /// Scenario-aware counterpart to [forecastAccountBalance] - same
+  /// single-figure projection to one specific date, but sourced from
+  /// [scenarioId]'s effective bill set ([simulatedDailyNet]) instead of the
+  /// unmodified real one. Used to work out what a scenario's own
+  /// calculated balance would be at "Jour de prévision du solde" before
+  /// deciding whether to apply [SimScenario.assumedFinalBalance] there -
+  /// see `_SimulationChart`'s own doc comment for the full "uniquement si
+  /// positif" rule (2026-09-02 user request).
+  double forecastAccountBalanceForScenario({
+    required int scenarioId,
+    required int accountId,
+    required DateTime targetDate,
+  }) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final target = DateTime(targetDate.year, targetDate.month, targetDate.day);
+    final todayBalance = accountBalance(accountId, asOf: today);
+    if (!target.isAfter(today)) return todayBalance;
+
+    final simulated = simulatedDailyNet(
+      scenarioId: scenarioId,
+      anchor: target,
+      days: _daysBetween(today, target) + 1,
+      accountId: accountId,
+    );
+    final futureReal =
+        futureDailyNet(after: today, end: target, accountId: accountId);
+    var total = todayBalance;
+    var cursor = _addDays(today, 1);
+    while (!cursor.isAfter(target)) {
+      total += (simulated[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
+      cursor = _addDays(cursor, 1);
+    }
+    return total;
+  }
+
+  /// [simulatedDailyNet] with [assumedFinalBalance] (see
+  /// [SimScenario.assumedFinalBalance]'s own doc comment) applied at
+  /// [targetDate] when appropriate - extracted here as its own method
+  /// (rather than inline in `_SimulationChart`) so the "uniquement si
+  /// positif" rule is directly unit-tested (test/sim_scenario_test.dart)
+  /// like every other piece of the simulator's math - "extrêmement fiable"
+  /// was an explicit requirement (2026-09-02).
+  ///
+  /// [accountsForTotal] is only consulted when [accountId] is null ("tous
+  /// les comptes") - same summing convention as
+  /// `_SimulationChart._startingBalance`. `applied` is always false when
+  /// [assumedFinalBalance] is null (nothing to apply) or [targetDate] falls
+  /// outside [anchor]/[days]'s own window - the caller can still read
+  /// `calculatedAtTarget` (the real projected figure at that date) either
+  /// way, e.g. to explain *why* nothing was applied.
+  ({Map<DateTime, double> net, bool applied, double calculatedAtTarget})
+      simulatedDailyNetWithAssumedFinalBalance({
+    required int scenarioId,
+    required double? assumedFinalBalance,
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+    List<Account> accountsForTotal = const [],
+    required DateTime targetDate,
+  }) {
+    final net = simulatedDailyNet(
+        scenarioId: scenarioId, anchor: anchor, days: days, accountId: accountId);
+    final calculatedAtTarget = accountId != null
+        ? forecastAccountBalanceForScenario(
+            scenarioId: scenarioId, accountId: accountId, targetDate: targetDate)
+        : accountsForTotal.fold(
+            0.0,
+            (sum, a) => sum +
+                forecastAccountBalanceForScenario(
+                    scenarioId: scenarioId, accountId: a.id, targetDate: targetDate));
+
+    if (assumedFinalBalance == null || calculatedAtTarget <= 0) {
+      return (net: net, applied: false, calculatedAtTarget: calculatedAtTarget);
+    }
+    final bucket =
+        DateTime(targetDate.year, targetDate.month, targetDate.day);
+    if (!net.containsKey(bucket)) {
+      return (net: net, applied: false, calculatedAtTarget: calculatedAtTarget);
+    }
+    final delta = assumedFinalBalance - calculatedAtTarget;
+    net[bucket] = (net[bucket] ?? 0) + delta;
+    return (net: net, applied: true, calculatedAtTarget: calculatedAtTarget);
+  }
+
   /// First future calendar day [accountId]'s projected running balance dips
   /// below zero, projecting forward from today with the same mechanical
   /// simulation [forecastAccountBalance] uses (known recurring bills via
@@ -1955,31 +2051,61 @@ class MmexRepository {
   /// [date], then advances the template's next-occurrence date to the first
   /// cycle date after [date] (deleting the template if it has just run out
   /// of remaining occurrences).
+  ///
+  /// [splitInto] (2026-09-02 user request - "je découpe Axeria en 2 ou 3
+  /// paiements plutôt qu'un seul pour faciliter ma trésorerie, à présent je
+  /// le fais manuellement") - when greater than 1, records this SAME
+  /// occurrence as [splitInto] smaller transactions instead of one,
+  /// [date]/[date]+1 month/[date]+2 months/... (see
+  /// [recurrenceMonthSpan]/`_RecordOccurrenceDialog` for why the UI caps
+  /// this below the bill's own period, so installments never run into its
+  /// next real due date), each labeled "(i/N)" in its notes and linked to
+  /// the same occurrence index/total as a single unsplit occurrence would
+  /// be - this only changes how *this* due amount is realized into
+  /// transactions, never the template's own schedule (still exactly one
+  /// cycle advance below, regardless of [splitInto]) or remaining-occurrence
+  /// count. Amounts are split cents-exactly (see [_splitAmountEvenly]) so
+  /// they always sum back to [bill]'s real total, never silently losing or
+  /// gaining a cent to rounding. Returns the first installment's
+  /// transaction id (same single-int contract as the unsplit case, the only
+  /// one an existing caller has ever needed).
   int recordBillOccurrence(BillDeposit bill,
-      {required DateTime date, bool reconciled = false}) {
-    final transId = insertTransaction(
-      accountId: bill.accountId,
-      payeeId: bill.payeeId,
-      transCode: bill.transCode,
-      amount: bill.amount,
-      date: date,
-      categoryId: bill.categoryId,
-      toAccountId: bill.toAccountId,
-      toAmount: bill.toAmount,
-      notes: bill.notes,
-      reconciled: reconciled,
-    );
+      {required DateTime date, bool reconciled = false, int splitInto = 1}) {
+    final installments = splitInto < 1 ? 1 : splitInto;
     final total = billOccurrenceTotals()[bill.id];
     final hasFixedCount =
         !periodUsesXParam(bill.period) && bill.numOccurrences >= 0;
-    _linkTransactionToBill(
-      transId,
-      bill.id,
-      occurrenceIndex: (hasFixedCount && total != null)
-          ? total - bill.numOccurrences + 1
-          : null,
-      occurrenceTotal: hasFixedCount ? total : null,
-    );
+    final occurrenceIndex = (hasFixedCount && total != null)
+        ? total - bill.numOccurrences + 1
+        : null;
+    final occurrenceTotal = hasFixedCount ? total : null;
+
+    final amounts = _splitAmountEvenly(bill.amount, installments);
+    final toAmounts = _splitAmountEvenly(bill.toAmount, installments);
+    int? firstTransId;
+    for (var i = 0; i < installments; i++) {
+      final transId = insertTransaction(
+        accountId: bill.accountId,
+        payeeId: bill.payeeId,
+        transCode: bill.transCode,
+        amount: amounts[i],
+        date: i == 0 ? date : _addMonths(date, i),
+        categoryId: bill.categoryId,
+        toAccountId: bill.toAccountId,
+        toAmount: toAmounts[i],
+        notes: installments == 1
+            ? bill.notes
+            : '${(bill.notes ?? '').isEmpty ? '' : '${bill.notes} '}(${i + 1}/$installments)',
+        reconciled: reconciled,
+      );
+      _linkTransactionToBill(
+        transId,
+        bill.id,
+        occurrenceIndex: occurrenceIndex,
+        occurrenceTotal: occurrenceTotal,
+      );
+      firstTransId ??= transId;
+    }
     // The recorded date may be earlier than the template's own scheduled
     // occurrence (recording a bill a little early/late) - always advance
     // from at least the template's own anchor so the schedule can't get
@@ -1987,7 +2113,25 @@ class MmexRepository {
     final advanceFrom =
         date.isAfter(bill.nextOccurrence) ? date : bill.nextOccurrence;
     _applyScheduleAdvance(bill, _advanceSchedule(bill, advanceFrom));
-    return transId;
+    return firstTransId!;
+  }
+
+  /// Splits [total] into [parts] amounts that sum back to exactly [total] -
+  /// never drops or invents a cent the way naively dividing a double and
+  /// rounding each share independently could. Works in integer cents
+  /// (rounding [total] to the nearest cent first) and hands the leftover
+  /// cents from that division to the first few installments, one cent
+  /// each, so e.g. 100.00 split 3 ways is [33.34, 33.33, 33.33] - not
+  /// [33.33, 33.33, 33.33] (short a cent) or [33.34, 33.34, 33.34] (over by
+  /// two).
+  List<double> _splitAmountEvenly(double total, int parts) {
+    final totalCents = (total * 100).round();
+    final baseCents = totalCents ~/ parts;
+    final remainderCents = totalCents - baseCents * parts;
+    return [
+      for (var i = 0; i < parts; i++)
+        (baseCents + (i < remainderCents ? 1 : 0)) / 100,
+    ];
   }
 
   /// Catches up every missed occurrence of [bill] between its current next
@@ -2291,6 +2435,16 @@ class MmexRepository {
     db.execute(
       'UPDATE APP_SIM_SCENARIOS SET NAME = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
       [name, DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Sets/clears [scenarioId]'s "solde final supposé" - see
+  /// [SimScenario.assumedFinalBalance]'s own doc comment. Pass null to
+  /// clear it (back to "no adjustment").
+  void setSimScenarioAssumedFinalBalance(int scenarioId, double? value) {
+    db.execute(
+      'UPDATE APP_SIM_SCENARIOS SET ASSUMED_FINAL_BALANCE = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [value, DateTime.now().toIso8601String(), scenarioId],
     );
   }
 

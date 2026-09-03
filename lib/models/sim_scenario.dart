@@ -13,11 +13,22 @@ class SimScenario {
   final DateTime createdAt;
   final DateTime updatedAt;
 
+  /// "Solde final supposé" (2026-09-02 user request) - a balance the user
+  /// trusts more than the raw projection, at the app's existing "Jour de
+  /// prévision du solde" date (see MmexRepository.forecastAccountBalanceForScenario/
+  /// _SimulationChart). Null (the default) means no adjustment. Only ever
+  /// *applied* when the scenario's own calculated balance at that date is
+  /// already positive - see the doc comment on where it's consumed for why:
+  /// this must never be a way to paper over a genuinely negative
+  /// projection.
+  final double? assumedFinalBalance;
+
   const SimScenario({
     required this.id,
     required this.name,
     required this.createdAt,
     required this.updatedAt,
+    this.assumedFinalBalance,
   });
 
   factory SimScenario.fromRow(Map<String, Object?> row) {
@@ -28,6 +39,7 @@ class SimScenario {
           DateTime.now(),
       updatedAt: DateTime.tryParse(row['UPDATED_AT'] as String? ?? '') ??
           DateTime.now(),
+      assumedFinalBalance: (row['ASSUMED_FINAL_BALANCE'] as num?)?.toDouble(),
     );
   }
 }
