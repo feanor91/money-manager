@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.96] - 2026-09-03
+
+- fix(ai): route to AI directly when configured, skip closed-vocabulary routing
+
 ## [1.0.95] - 2026-09-03
 
 - feat(recurring,simulation): duplicate a recurring operation; refresh scenarios
