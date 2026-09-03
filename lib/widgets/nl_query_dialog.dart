@@ -375,36 +375,30 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     final payees = repo.getPayees(onlyActive: false);
     final currency = repo.getBaseCurrency();
 
-    // The (Windows-only, optional) local AI gets first try when it's
-    // actually usable; a null intent from it - not enabled, not
-    // downloaded, or it genuinely didn't understand - falls straight
-    // through to the same rule-based parser used everywhere else, so the
-    // feature always answers something rather than erroring out just
-    // because local AI happens to be off or unavailable right now.
-    var parsed = isLocalLlmSupported
-        ? await extractIntentWithLocalLlm(
-            trimmed,
-            categories: categories,
-            accounts: accounts,
-            payees: payees,
-          )
-        : (intent: null, periodWasExplicit: false);
-
-    // Full-database-access query engine (2026-08-07, "j'en ai marre d'être
-    // limité"; opened up further 2026-08-23 into an actual multi-turn chat)
-    // - tried whenever the local AI either didn't recognize a fixed
-    // question shape at all, or landed on QueryKind.adHoc (its old closed
-    // metric/type/groupBy vocabulary, now treated purely as an "open-ended
-    // question" signal rather than something still answered with that
-    // vocabulary directly). Runs its own throwaway read-only connection
-    // internally (see askLocalLlmWithFullDataAccess), same OS-enforced
-    // guarantee as QueryKind.adHoc's dedicated connection below. On any
-    // failure - the model couldn't write usable SQL, the query errored, no
-    // local AI available - this changes nothing and falls straight through
-    // to whatever would have run anyway (the old adHoc vocabulary if
-    // that's what was recognized, or the rule-based parser).
-    if (isLocalLlmSupported &&
-        (parsed.intent == null || parsed.intent!.kind == QueryKind.adHoc)) {
+    // 2026-09-03 user request ("je veux que la question parte
+    // immédiatement vers [l'IA], pas de routage redéfini... seul l'IA doit
+    // me répondre") - once AI is switched on in Settings
+    // (isLocalLlmEnabled()), it answers *every* question directly via the
+    // full-database-access engine, full stop. Previously a question always
+    // went through extractIntentWithLocalLlm's closed intent vocabulary
+    // first, and - if that call declined *and* full SQL access also
+    // declined - silently fell through to the pure-regex rule-based parser
+    // (rule_based_query_parser.dart) and its fuzzy name matching
+    // (name_matcher.dart matching any word against real account/category/
+    // payee names). Both are keyword-matching, not understanding: a rich,
+    // clearly-open-ended question could get silently hijacked by a single
+    // incidental word ("opérations" reads as a plain expense filter,
+    // "factures" matches a real category by name) with no indication that
+    // this happened, and no relation to the multi-step AI answer the user
+    // actually wanted (2026-09-03 user reports: "opérations récurrentes"
+    // and "factures" mentioned in an analytical question both silently
+    // routed there). The deterministic engine below - both the intent
+    // extractor and the rule-based parser - now runs ONLY when AI is off,
+    // never as an under-the-hood fallback out from under an AI answer that
+    // declined; a declined AI question instead falls to the same model
+    // answering as free conversation (still AI, still disclaimed via its
+    // own badge), never to the closed engine.
+    if (isLocalLlmSupported && await isLocalLlmEnabled()) {
       // dbPath (desktop: the real file path, reopened read-only by the
       // implementation) vs repo (web and Android: the in-memory database
       // itself - there is no file to reopen there, see
@@ -424,56 +418,47 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
           // Told apart from "not understood" on purpose (same 2026-08-31
           // lesson as askLocalLlmFreeform's own error case below) - a real
           // backend failure (wrong model id, rate limit, an invalid query)
-          // must never look like a wrong/misleading fallback answer from
-          // the rule-based parser.
+          // must never look like a wrong/misleading fallback answer.
           reply(
               "Le service IA a renvoyé une erreur ($message). Réessaie dans "
               'quelques instants, ou vérifie les paramètres IA.',
               _AnswerKind.error);
           return;
         case SqlAccessUnavailable():
-        // Falls straight through to the rule-based parser below, exactly
-        // as before this type existed.
+        // The model itself declined this question against the schema (or
+        // its response wasn't usable) - falls to plain AI conversation
+        // just below, never to the closed deterministic engine.
       }
-    }
-
-    if (parsed.intent == null) {
-      parsed = parseQuestion(
-        trimmed,
-        categories: categories,
-        accounts: accounts,
-        payees: payees,
-      );
-    }
-    var intent = parsed.intent;
-    if (intent == null) {
-      // Neither the intent extractor nor the rule-based parser recognized
-      // this as a financial question - rather than a flat rejection, let
-      // the same local model answer as ordinary conversation instead (see
-      // the badge on the answer bubble, which is what keeps this visually
-      // distinct from a real computed-from-your-data answer). Only
-      // attempted when local AI is actually usable; otherwise there is no
-      // model left to ask and the message below is all there is.
-      final freeform = isLocalLlmSupported
-          ? await askLocalLlmFreeform(trimmed, history: history)
-          : const LlmFreeformUnavailable();
+      final freeform = await askLocalLlmFreeform(trimmed, history: history);
       switch (freeform) {
         case LlmFreeformSuccess(:final text, :final tokensPerSecond):
           reply(text, _AnswerKind.freeform, tokensPerSecond: tokensPerSecond);
         case LlmFreeformError(:final message):
-          // Told apart from "not understood" (below) on purpose - found
-          // 2026-08-31 that a rate-limited cloud provider (HTTP 429) was
-          // silently swallowed into the generic "je n'ai pas compris cette
-          // question" message, actively misleading: the AI never got a
-          // chance to understand anything, the request itself was rejected.
           reply(
               "Le service IA a renvoyé une erreur ($message). Réessaie dans "
               'quelques instants, ou vérifie les paramètres IA.',
               _AnswerKind.error);
         case LlmFreeformUnavailable():
-          reply(_notUnderstoodMessage(trimmed, accounts: accounts),
+          reply(
+              "L'IA n'a pas réussi à répondre à cette question à partir de "
+              'tes données. Essaie de la reformuler.',
               _AnswerKind.error);
       }
+      return;
+    }
+
+    // AI off (or unsupported on this platform) - the same closed
+    // rule-based engine as always, unchanged.
+    final parsed = parseQuestion(
+      trimmed,
+      categories: categories,
+      accounts: accounts,
+      payees: payees,
+    );
+    var intent = parsed.intent;
+    if (intent == null) {
+      reply(_notUnderstoodMessage(trimmed, accounts: accounts),
+          _AnswerKind.error);
       return;
     }
 

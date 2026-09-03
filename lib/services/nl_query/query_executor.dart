@@ -63,6 +63,19 @@ class QueryAnswer {
   /// ad_hoc_query.dart.
   final List<MapEntry<String, double>>? adHocResult;
 
+  /// [QueryKind.expenseTotal]/[QueryKind.adHoc] with [QueryIntent.recurringOnly]
+  /// only - true when the requested period doesn't extend into the future
+  /// at all, so the schedule-based total above is structurally near-empty
+  /// and would mislead if shown as a real figure (see
+  /// [_recurringNotMeaningfulForPeriod]'s own doc comment for the full
+  /// story - found 2026-09-03: "dépenses récurrentes en Factures pour les
+  /// 18 derniers mois" silently answered 89,96 € instead of anything
+  /// resembling real history). [answer_formatter.dart] shows an explicit
+  /// caveat instead of the normal template when this is true; every other
+  /// field above is still populated (harmless, just near-zero) in case a
+  /// caller wants it anyway.
+  final bool recurringNotMeaningfulForPeriod;
+
   const QueryAnswer({
     this.total,
     this.income,
@@ -73,8 +86,31 @@ class QueryAnswer {
     this.forecastCrossesNegativeOn,
     this.monthlyBreakdown,
     this.adHocResult,
+    this.recurringNotMeaningfulForPeriod = false,
   });
 }
+
+/// True when [intent] asked for "récurrentes" (schedule-based) totals over
+/// a period that doesn't extend into the future at all. The schedule can
+/// never answer that meaningfully: [MmexRepository._occurrencesInRange]
+/// never emits an occurrence before a bill's *current*
+/// [BillDeposit.nextOccurrence] (MMEX already advanced that date past
+/// every occurrence it actually executed - see that method's own doc
+/// comment), so a wholly-past period returns near-nothing - just whatever
+/// bill happens to still have a pending occurrence sitting inside the
+/// window - instead of real recurring spend history. Deliberately *not*
+/// fixed by reading real ledger transactions linked to a bill instead: an
+/// earlier version of this feature did exactly that and was reverted
+/// 2026-08-07 after it answered a completely different, wrong-looking
+/// total than the "Opérations récurrentes" screen for the same
+/// account/period (see [MmexRepository.recurringCategorySpendForPeriod]'s
+/// own doc comment) - that screen is itself forward-looking only, so
+/// there's no ledger-based number that would agree with it for a period
+/// that's actually in the past. Honest and silent are in tension here;
+/// this picks honest: say plainly that the question can't be answered
+/// this way, rather than answering it wrong.
+bool _recurringNotMeaningfulForPeriod(QueryIntent intent, DateTime today) =>
+    intent.recurringOnly && !intent.period.end.isAfter(today);
 
 /// See mmex_repository.dart's/forecast_chart.dart's own copies of this - a
 /// calendar-day (not elapsed-time) step, safe across DST transitions.
@@ -91,6 +127,8 @@ DateTime _addDays(DateTime date, int days) => DateTime(date.year, date.month, da
 QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
   switch (intent.kind) {
     case QueryKind.expenseTotal:
+      final recurringNotMeaningful =
+          _recurringNotMeaningfulForPeriod(intent, now ?? DateTime.now());
       final totals = intent.recurringOnly
           ? repo.recurringCategorySpendForPeriod(
               intent.period.start,
@@ -132,12 +170,17 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
         return QueryAnswer(
           total: rolledUpSpend(intent.categoryId!, totals, categories),
           transactions: transactions,
+          recurringNotMeaningfulForPeriod: recurringNotMeaningful,
         );
       }
       final total = totals.values.fold(0.0, (a, b) => a + b);
       final sorted = totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
       final breakdown = {for (final e in sorted.take(3)) e.key: e.value};
-      return QueryAnswer(total: total, categoryBreakdown: breakdown);
+      return QueryAnswer(
+        total: total,
+        categoryBreakdown: breakdown,
+        recurringNotMeaningfulForPeriod: recurringNotMeaningful,
+      );
 
     case QueryKind.expenseByMonth:
       final monthly = repo.categorySpendByMonth(
@@ -172,6 +215,8 @@ QueryAnswer runQuery(QueryIntent intent, MmexRepository repo, {DateTime? now}) {
           accounts: repo.getAccounts(),
           payees: repo.getPayees(onlyActive: false),
         ),
+        recurringNotMeaningfulForPeriod:
+            _recurringNotMeaningfulForPeriod(intent, now ?? DateTime.now()),
       );
 
     case QueryKind.incomeTotal:

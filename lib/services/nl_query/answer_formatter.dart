@@ -61,6 +61,25 @@ String formatAnswer(
   final accountNote =
       intent.accountId != null ? ' sur ${accountsById[intent.accountId]?.name ?? "ce compte"}' : '';
 
+  // "Récurrentes" over a period that's already entirely in the past can't
+  // be answered from the bill schedule (see
+  // query_executor.dart's _recurringNotMeaningfulForPeriod) - say so
+  // plainly rather than presenting the near-empty schedule total as if it
+  // were real spend history (found 2026-09-03: "dépenses récurrentes en
+  // Factures pour les 18 derniers mois" silently answered 89,96 €).
+  // Shared by expenseTotal and adHoc below - both can set this flag.
+  if (answer.recurringNotMeaningfulForPeriod) {
+    final name = intent.categoryId != null
+        ? categoryFullPath(intent.categoryId, categoriesById)
+        : null;
+    final subject =
+        (name == null || name.isEmpty) ? 'les dépenses récurrentes' : 'les dépenses récurrentes en $name';
+    return 'Impossible de calculer $subject pour ${intent.period.label}$accountNote : '
+        'le planning des opérations récurrentes ne reflète que la période actuelle et à venir, '
+        'pas l\'historique. Reposez la question sans "récurrentes" pour voir le total réellement '
+        'enregistré sur cette période.$periodNote';
+  }
+
   switch (intent.kind) {
     case QueryKind.expenseTotal:
       final total = answer.total ?? 0;

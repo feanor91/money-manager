@@ -162,6 +162,67 @@ void main() {
     expect(answer.transactions, isEmpty); // a schedule occurrence isn't a MoneyTransaction to show
   });
 
+  test(
+      'expenseTotal with recurringOnly flags recurringNotMeaningfulForPeriod '
+      'when the period is entirely in the past - regression test for the '
+      '2026-09-03 report of a silently misleading 89,96 € total ("dépenses '
+      'récurrentes en Factures pour les 18 derniers mois")', () {
+    repo.insertBillDeposit(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 15,
+      nextOccurrence: DateTime(2026, 7, 20),
+      period: RecurrencePeriod.monthly,
+      autoExecute: RecurrenceAutoExecute.manual,
+      categoryId: alimentationId,
+    );
+    // july ends 2026-08-01 - entirely before "now" below, so the bill
+    // schedule (which never emits an occurrence before its own current
+    // BillDeposit.nextOccurrence) can't meaningfully answer this.
+    final now = DateTime(2026, 9, 3);
+
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.expenseTotal,
+        period: july,
+        categoryId: alimentationId,
+        recurringOnly: true,
+      ),
+      repo,
+      now: now,
+    );
+
+    expect(answer.recurringNotMeaningfulForPeriod, isTrue);
+  });
+
+  test(
+      'expenseTotal with recurringOnly does NOT flag recurringNotMeaningfulForPeriod '
+      'when the period still extends into the future - preserves the '
+      '2026-08-07 decision for forward-looking questions', () {
+    final now = DateTime(2026, 7, 15); // inside july - still has future room
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.expenseTotal, period: july, recurringOnly: true),
+      repo,
+      now: now,
+    );
+
+    expect(answer.recurringNotMeaningfulForPeriod, isFalse);
+  });
+
+  test(
+      'expenseTotal without recurringOnly never sets recurringNotMeaningfulForPeriod, '
+      'even for a wholly past period', () {
+    final now = DateTime(2026, 9, 3);
+    final answer = runQuery(
+      QueryIntent(kind: QueryKind.expenseTotal, period: july),
+      repo,
+      now: now,
+    );
+
+    expect(answer.recurringNotMeaningfulForPeriod, isFalse);
+  });
+
   test('expenseByMonth breaks down a category across months, zero-filling months with no spend', () {
     // setUp only seeded July; August (same account, same category) gets one
     // more so the breakdown has a real second, different month to check.
@@ -214,6 +275,25 @@ void main() {
     expect(answer.total, isNull);
     expect(answer.categoryBreakdown, isNull);
     expect(answer.monthlyBreakdown, isNull);
+  });
+
+  test(
+      'adHoc with recurringOnly also flags recurringNotMeaningfulForPeriod '
+      'for a wholly past period - same root cause as the expenseTotal case '
+      'above, both go through recurringScheduleRows', () {
+    final answer = runQuery(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.category,
+        recurringOnly: true,
+      ),
+      repo,
+      now: DateTime(2026, 9, 3),
+    );
+    expect(answer.recurringNotMeaningfulForPeriod, isTrue);
   });
 
   test('adHoc throws if adHocMetric/adHocTransactionType/adHocGroupBy is missing', () {

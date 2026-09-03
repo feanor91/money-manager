@@ -65,6 +65,45 @@ void main() {
     expect(text, contains('Restaurant'));
   });
 
+  test(
+      'recurringNotMeaningfulForPeriod shows a caveat instead of the '
+      'misleading total, naming the category when one was asked for - '
+      'regression test for the 2026-09-03 "89,96 €" report', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.expenseTotal,
+        period: july,
+        categoryId: restaurant.id,
+        recurringOnly: true,
+      ),
+      const QueryAnswer(
+        total: 4.5,
+        recurringNotMeaningfulForPeriod: true,
+      ),
+    );
+    expect(text, contains('Impossible de calculer'));
+    expect(text, contains('Restaurant'));
+    // The near-empty, misleading figure must never surface in the text.
+    expect(text, isNot(contains('4,50')));
+  });
+
+  test(
+      'recurringNotMeaningfulForPeriod shows a caveat for adHoc too, same '
+      'root cause as expenseTotal', () {
+    final text = format(
+      QueryIntent(
+        kind: QueryKind.adHoc,
+        period: july,
+        adHocMetric: AdHocMetric.sum,
+        adHocTransactionType: AdHocTransactionType.withdrawal,
+        adHocGroupBy: AdHocGroupBy.category,
+        recurringOnly: true,
+      ),
+      const QueryAnswer(recurringNotMeaningfulForPeriod: true),
+    );
+    expect(text, contains('Impossible de calculer'));
+  });
+
   test('expenseTotal for a specific category names it, not a generic breakdown', () {
     final text = format(
       QueryIntent(kind: QueryKind.expenseTotal, period: july, categoryId: restaurant.id),
