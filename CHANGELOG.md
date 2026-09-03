@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.94] - 2026-09-03
+
+- fix(simulation): re-apply the assumed final balance every month, not once
+
 ## [1.0.93] - 2026-09-03
 
 - feat(recurring,simulation): split a bill occurrence into installments; simulator assumed final balance
