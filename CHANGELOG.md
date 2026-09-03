@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.93] - 2026-09-03
+
+- feat(recurring,simulation): split a bill occurrence into installments; simulator assumed final balance
+- fix(ai): default cloud model to a JSON-reliable option, not a reasoning model
+
 ## [1.0.92] - 2026-09-02
 
 - fix(ci): wrap single-statement ifs in blocks to satisfy flutter analyze
