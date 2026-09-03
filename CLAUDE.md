@@ -8,8 +8,17 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
 ## Repo layout
 
 - This repo (`App`) lives at `D:\Repos\MoneyManager\App`.
-- The real financial database is `D:\Repos\MoneyManager\Bdd\MyMoney.mmb` -
-  **never commit `Bdd/`** (it's outside this repo entirely, one level up).
+- The real, live financial database (what the deployed app actually reads/
+  writes, Nextcloud-synced across every device) is
+  `C:\Users\bteuile\Nextcloud\Documents\MoneyManager\MesComptes.mmb` -
+  confirmed 2026-09-03 after a false "hallucination" alarm caused by
+  querying the wrong file (see below). **`D:\Repos\MoneyManager\Bdd\` (a
+  sibling directory, outside this repo, containing its own
+  `MesComptes.mmb`) is a separate, stale dev/test copy - do not treat it as
+  current or authoritative.** Before drawing any conclusion from querying
+  a `.mmb` file directly (e.g. to verify an app answer), read it from the
+  Nextcloud path above, never the `Bdd/` one. **Never commit either
+  path.**
 - A reference clone of the upstream MMEX source lives at
   `D:\Repos\MoneyManager\moneymanagerex` - consult it (`Model_Billsdeposits.h`,
   `billsdepositsdialog.cpp`, `Repeat::next_repeat`, etc.) whenever a
@@ -410,6 +419,30 @@ this happened for real before the fix.
 - All user-facing text is French, with proper accents - when adding
   strings, get the accents right the first time rather than doing a
   separate cleanup pass later.
+- **Cloud AI free-model choice matters a lot for "Poser une question"'s
+  full-SQL-access mode** (sql_query_engine.dart) - every step (intent
+  extraction, SQL writing) needs strict, parseable JSON with nothing else
+  around it. A free "reasoning" model (chain-of-thought on by default -
+  e.g. `nvidia/nemotron-3-super-120b-a12b:free`, the previous default)
+  frequently burns its whole `max_tokens` budget on hidden narration
+  before ever producing that JSON, even with the `'reasoning': {'exclude':
+  true}` request field and the `<think>` -stripping already in
+  `cloud_llm_client.dart` - both are defenses, not guarantees. When this
+  happens the failure is **silent**: both AI calls quietly decline
+  (`SqlAccessUnavailable`, not `SqlAccessError`) and the app falls all the
+  way back to the closed rule-based engine with no notes/periodicity/
+  free-form reasoning, no error banner - confirmed 2026-09-03 with a real
+  "opérations vétérinaires, montants + notes + périodicité" question that
+  silently produced the plain deterministic answer despite cloud AI being
+  correctly configured and reachable (connection test passed). Switching
+  to `minimax/minimax-m3:free` (tuned for agentic/tool-use tasks - clean
+  structured JSON output rather than displayed reasoning) answered
+  correctly end-to-end on the first try, verified row-by-row against the
+  real database. `defaultCloudLlmModel` in `cloud_llm_client.dart` now
+  pre-fills Settings' model field with `minimax/minimax-m3:free` for this
+  reason - if a future report says the cloud AI "isn't understanding
+  anything" despite a working connection test, suspect the chosen model's
+  JSON reliability first, not the app's prompts/logic.
 
 ## Working style feedback
 

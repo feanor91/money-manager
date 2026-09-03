@@ -92,7 +92,7 @@ Future<void> setCloudLlmEndpoint(String value) async {
 Future<String> cloudLlmModel() async {
   if (!_supported) return '';
   final prefs = await AppPreferences.getInstance();
-  return prefs.getString(_prefsKeyCloudModel) ?? '';
+  return prefs.getString(_prefsKeyCloudModel) ?? defaultCloudLlmModel;
 }
 
 Future<void> setCloudLlmModel(String value) async {

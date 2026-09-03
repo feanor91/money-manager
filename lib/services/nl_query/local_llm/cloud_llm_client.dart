@@ -6,6 +6,32 @@ import 'package:http/http.dart' as http;
 import 'llama_server_client.dart' show intentSystemPrompt, freeformSystemPrompt;
 import 'llm_engine.dart';
 
+/// Pre-filled into Settings' "Nom du modèle" field the first time a user
+/// opens the cloud AI section (before they've ever set their own value) -
+/// not a hardcoded requirement, just a sane starting point on OpenRouter's
+/// free tier. Chosen 2026-09-03 after a real side-by-side: the previously
+/// pre-filled `nvidia/nemotron-3-super-120b-a12b:free` is a reasoning model
+/// (chain-of-thought on by default), and this app's two-call flow
+/// (intent-extraction JSON, then SQL-writing JSON - see
+/// sql_query_engine.dart/intent_json_codec.dart) needs every response to be
+/// strict, parseable JSON with nothing else around it. A reasoning model's
+/// hidden narration can still eat the whole `max_tokens` budget before
+/// reaching real output even with `'reasoning': {'exclude': true}` sent
+/// (see [CloudLlmClient._chat]'s own comment on that flag, and
+/// `_stripReasoning`'s doc comment on the leftover `<think>` case) - both
+/// of which are defenses against exactly this, not guarantees. Confirmed by
+/// a real user test the same day: with the nemotron model, an "opérations
+/// vétérinaire sur 2 ans, montants + notes + périodicité" question silently
+/// fell all the way back to the closed rule-based engine (no notes, no
+/// periodicity - both AI calls quietly declined); switching to
+/// `minimax/minimax-m3:free` - a model tuned for agentic/tool-use tasks
+/// (structured JSON, function calling) rather than displayed reasoning -
+/// answered correctly end-to-end on the first try, verified row-by-row
+/// against the real database. Never assumed to still be free or even to
+/// still exist on OpenRouter indefinitely - it's a starting point the user
+/// can freely override in Settings, not a guarantee.
+const defaultCloudLlmModel = 'minimax/minimax-m3:free';
+
 /// Talks to any OpenAI-compatible `/v1/chat/completions` HTTP endpoint - a
 /// real hosted provider (OpenAI, Mistral, Groq, OpenRouter, ...) or the
 /// user's own `llama-server.exe` reached remotely (it speaks this same
