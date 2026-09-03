@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.95] - 2026-09-03
+
+- feat(recurring,simulation): duplicate a recurring operation; refresh scenarios
+- docs: note that commit subject lines leak into the in-app update dialog
+
 ## [1.0.94] - 2026-09-03
 
 - fix(simulation): re-apply the assumed final balance every month, not once
