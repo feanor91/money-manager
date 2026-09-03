@@ -35,6 +35,17 @@ you're doing in plain terms - don't assume Flutter/Dart/git familiarity.
   `main`, so always `git fetch origin main && git rebase origin/main`
   immediately before pushing, every time.
 - Create new commits rather than amending, per standard policy.
+- **Write the commit subject line (the first line) in French.** Found
+  2026-09-03: `.github/workflows/release.yml`'s "Generate changelog entry
+  body" step builds the changelog/GitHub Release body directly from
+  `git log --pretty=format:'- %s'` (commit subjects, unmodified), and
+  `lib/widgets/update_prompt_io.dart` displays that release body verbatim
+  in the in-app "mise à jour disponible" dialog - the one user-facing
+  surface in this app that isn't authored UI strings, so the "all
+  user-facing text is French" rule (below) applies to it too, easy to miss
+  since commit messages are normally a developer-only detail. The rest of
+  the commit message (body, `Co-Authored-By:` trailer) can stay in English
+  as usual - only the subject line actually reaches the user.
 
 ## Dev loop (before every restart)
 
