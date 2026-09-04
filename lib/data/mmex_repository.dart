@@ -2734,6 +2734,74 @@ class MmexRepository {
     );
   }
 
+  /// Creates a new scenario named [newName], deep-copying every adjustment
+  /// saved under [sourceScenarioId] - bill overrides, virtual bills,
+  /// one-off events, and every "solde final supposé" (both the current
+  /// per-account rows and the legacy scenario-wide fallback column, so a
+  /// duplicate behaves identically to its source until independently
+  /// edited - see [getSimAssumedFinalBalance]'s own doc comment on that
+  /// fallback). "Dupliquer ce scénario" (2026-09-03 user request): lets a
+  /// variant ("et si je pars 2 ans plus tôt ?") start from a known-good
+  /// scenario instead of rebuilding every adjustment from scratch. Returns
+  /// the new scenario's id. Never touches [sourceScenarioId] itself.
+  int duplicateSimScenario(int sourceScenarioId, String newName) {
+    final newId = createSimScenario(newName);
+
+    for (final o in getSimBillOverrides(sourceScenarioId)) {
+      upsertSimBillOverride(newId, o.billId,
+          disabledFrom: o.disabledFrom, amountOverride: o.amountOverride);
+    }
+    for (final v in getSimVirtualBills(sourceScenarioId)) {
+      addSimVirtualBill(
+        scenarioId: newId,
+        accountId: v.accountId,
+        label: v.label,
+        transCode: v.transCode,
+        amount: v.amount,
+        startDate: v.startDate,
+        period: v.period,
+        numOccurrences: v.numOccurrences,
+        variancePercent: v.variancePercent,
+        annualIncreasePercent: v.annualIncreasePercent,
+        annualIncreaseAnchor: v.annualIncreaseAnchor,
+      );
+    }
+    for (final e in getSimOneOffEvents(sourceScenarioId)) {
+      addSimOneOffEvent(
+        scenarioId: newId,
+        accountId: e.accountId,
+        label: e.label,
+        transCode: e.transCode,
+        amount: e.amount,
+        date: e.date,
+      );
+    }
+    final balanceRows = db.query(
+      'SELECT ACCOUNTID, AMOUNT FROM APP_SIM_ASSUMED_FINAL_BALANCES WHERE SCENARIOID = ?',
+      [sourceScenarioId],
+    );
+    for (final row in balanceRows) {
+      db.execute(
+        'INSERT INTO APP_SIM_ASSUMED_FINAL_BALANCES (SCENARIOID, ACCOUNTID, AMOUNT) VALUES (?, ?, ?)',
+        [newId, row['ACCOUNTID'], row['AMOUNT']],
+      );
+    }
+    final legacyRows = db.query(
+      'SELECT ASSUMED_FINAL_BALANCE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?',
+      [sourceScenarioId],
+    );
+    final legacyValue = legacyRows.isEmpty
+        ? null
+        : legacyRows.first['ASSUMED_FINAL_BALANCE'];
+    if (legacyValue != null) {
+      db.execute(
+        'UPDATE APP_SIM_SCENARIOS SET ASSUMED_FINAL_BALANCE = ? WHERE SCENARIOID = ?',
+        [legacyValue, newId],
+      );
+    }
+    return newId;
+  }
+
   /// Deletes [scenarioId] and every adjustment saved under it - other
   /// scenarios (and the real recurring bills/transactions) are untouched.
   void deleteSimScenario(int scenarioId) {

@@ -89,6 +89,114 @@ void main() {
     });
   });
 
+  group('duplicateSimScenario (2026-09-03, "Dupliquer ce scénario")', () {
+    test('deep-copies bill overrides, virtual bills, one-off events and '
+        'per-account assumed final balances into a new, independent '
+        'scenario - the source is left untouched', () {
+      final billId = repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.withdrawal,
+        amount: 100,
+        nextOccurrence: DateTime(2026, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      final sourceId = repo.createSimScenario('Original');
+      repo.upsertSimBillOverride(sourceId, billId,
+          disabledFrom: DateTime(2035, 1, 1), amountOverride: 50);
+      repo.addSimVirtualBill(
+        scenarioId: sourceId,
+        accountId: accountId,
+        label: 'Pension',
+        transCode: TransCode.deposit,
+        amount: 1200,
+        startDate: DateTime(2035, 1, 1),
+        period: RecurrencePeriod.monthly,
+        numOccurrences: 24,
+        variancePercent: 5,
+        annualIncreasePercent: 2,
+        annualIncreaseAnchor: DateTime(2035, 1, 1),
+      );
+      repo.addSimOneOffEvent(
+        scenarioId: sourceId,
+        accountId: accountId,
+        label: 'Capital départ',
+        transCode: TransCode.deposit,
+        amount: 50000,
+        date: DateTime(2035, 6, 1),
+      );
+      repo.setSimAssumedFinalBalance(sourceId, accountId, 2000);
+      repo.setSimAssumedFinalBalance(sourceId, otherAccountId, -100);
+
+      final newId = repo.duplicateSimScenario(sourceId, 'Original (copie)');
+
+      expect(repo.getSimScenarios().map((s) => s.name),
+          containsAll(['Original', 'Original (copie)']));
+      expect(newId, isNot(sourceId));
+
+      final override = repo.getSimBillOverrides(newId).single;
+      expect(override.billId, billId);
+      expect(override.disabledFrom, DateTime(2035, 1, 1));
+      expect(override.amountOverride, 50.0);
+
+      final virtual = repo.getSimVirtualBills(newId).single;
+      expect(virtual.label, 'Pension');
+      expect(virtual.amount, 1200.0);
+      expect(virtual.numOccurrences, 24);
+      expect(virtual.variancePercent, 5.0);
+      expect(virtual.annualIncreasePercent, 2.0);
+      expect(virtual.annualIncreaseAnchor, DateTime(2035, 1, 1));
+      // A fresh row of its own, not literally sharing the source's id.
+      expect(virtual.id, isNot(repo.getSimVirtualBills(sourceId).single.id));
+
+      final event = repo.getSimOneOffEvents(newId).single;
+      expect(event.label, 'Capital départ');
+      expect(event.amount, 50000.0);
+
+      expect(repo.getSimAssumedFinalBalance(newId, accountId), 2000.0);
+      expect(repo.getSimAssumedFinalBalance(newId, otherAccountId), -100.0);
+
+      // The source scenario is completely unaffected by the copy.
+      expect(repo.getSimBillOverrides(sourceId), hasLength(1));
+      expect(repo.getSimVirtualBills(sourceId), hasLength(1));
+      expect(repo.getSimOneOffEvents(sourceId), hasLength(1));
+      expect(repo.getSimAssumedFinalBalance(sourceId, accountId), 2000.0);
+    });
+
+    test('a scenario with nothing set duplicates into an equally empty one',
+        () {
+      final sourceId = repo.createSimScenario('Vide');
+      final newId = repo.duplicateSimScenario(sourceId, 'Vide (copie)');
+
+      expect(repo.getSimBillOverrides(newId), isEmpty);
+      expect(repo.getSimVirtualBills(newId), isEmpty);
+      expect(repo.getSimOneOffEvents(newId), isEmpty);
+      expect(repo.getSimAssumedFinalBalance(newId, accountId), isNull);
+    });
+
+    test('editing the duplicate never changes the source - independent rows, '
+        'not shared references', () {
+      final billId = repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.withdrawal,
+        amount: 100,
+        nextOccurrence: DateTime(2026, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      final sourceId = repo.createSimScenario('Original');
+      repo.upsertSimBillOverride(sourceId, billId, amountOverride: 50);
+      final newId = repo.duplicateSimScenario(sourceId, 'Original (copie)');
+
+      repo.upsertSimBillOverride(newId, billId, amountOverride: 999);
+
+      expect(repo.getSimBillOverrides(sourceId).single.amountOverride, 50.0);
+      expect(repo.getSimBillOverrides(newId).single.amountOverride, 999.0);
+    });
+  });
+
   group('bill overrides', () {
     test('upserting an override is readable back, a second call for the '
         'same bill replaces rather than duplicates', () {

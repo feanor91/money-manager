@@ -136,6 +136,22 @@ class _SimulationScreenState extends State<SimulationScreen> {
     setState(() {});
   }
 
+  /// "Dupliquer ce scénario" (2026-09-03 user request) - suggests
+  /// "{nom} (copie)" as a starting name, editable before confirming, same
+  /// as [_renameScenario]'s prompt. Selects the new scenario afterward so
+  /// the user lands straight on the copy to start tweaking it.
+  Future<void> _duplicateScenario(
+      MmexRepository repo, SimScenario scenario) async {
+    final name = await _promptText(context,
+        title: 'Dupliquer le scénario',
+        label: 'Nom du nouveau scénario',
+        initialValue: '${scenario.name} (copie)');
+    if (name == null || name.trim().isEmpty) return;
+    final newId = repo.duplicateSimScenario(scenario.id, name.trim());
+    _touch();
+    setState(() => _scenarioId = newId);
+  }
+
   Future<void> _deleteScenario(
       MmexRepository repo, SimScenario scenario) async {
     final confirmed = await showDialog<bool>(
@@ -259,6 +275,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
               tooltip: 'Supprimer ce scénario',
               icon: const Icon(Icons.delete_outline),
               onPressed: () => _deleteScenario(repo, scenario),
+            ),
+            IconButton(
+              tooltip: 'Dupliquer ce scénario',
+              icon: const Icon(Icons.copy_outlined),
+              onPressed: () => _duplicateScenario(repo, scenario),
             ),
           ],
           IconButton(
