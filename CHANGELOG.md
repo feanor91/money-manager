@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.99] - 2026-09-04
+
+- feat(simulation): masquer les courbes de projection sans changement
+
 ## [1.0.98] - 2026-09-04
 
 - docs: mettre à jour le README et le guide embarqué
