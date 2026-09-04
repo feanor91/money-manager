@@ -24,6 +24,14 @@ class SimScenario {
   /// *applied* at a given month if the running balance there is already
   /// positive - see the doc comment on where it's consumed for why: this
   /// must never be a way to paper over a genuinely negative trajectory.
+  ///
+  /// **Legacy** (2026-09): superseded by the per-account
+  /// APP_SIM_ASSUMED_FINAL_BALANCES table (see
+  /// MmexRepository.getSimAssumedFinalBalance/setSimAssumedFinalBalance) -
+  /// the app never writes here anymore, this column only still gets *read*,
+  /// as a one-time fallback default for whichever account has no row of its
+  /// own yet, so a value set before the per-account version existed is
+  /// never silently lost.
   final double? assumedFinalBalance;
 
   const SimScenario({

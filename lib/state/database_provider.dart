@@ -204,6 +204,25 @@ class DatabaseProvider extends ChangeNotifier {
         hiddenAccountIds.map((id) => id.toString()).toList());
   }
 
+  /// Accounts checked in the Simulation screen's account picker (2026-09
+  /// user request: show one baseline+scenario curve per selected account,
+  /// side by side, instead of a single combined/single-account view) -
+  /// persisted so the choice survives closing and reopening the screen.
+  /// Empty means "never configured yet" - the screen itself falls back to
+  /// [selectedAccountId] in that case, not to "every account", so a user
+  /// with many accounts doesn't get an overwhelming chart the first time
+  /// they open it.
+  Set<int> simulationSelectedAccountIds = {};
+
+  Future<void> setSimulationSelectedAccountIds(Set<int> accountIds) async {
+    simulationSelectedAccountIds = accountIds;
+    notifyListeners();
+    final prefs = companionSettings;
+    if (prefs == null) return;
+    await prefs.setStringList(_prefsKeySimulationAccounts,
+        accountIds.map((id) => id.toString()).toList());
+  }
+
   /// Custom account display order (list of account ids), used by the
   /// dashboard's drag-and-drop carousel. Accounts not present in this list
   /// (new ones, or before it's ever been set) fall back to their natural
@@ -843,6 +862,11 @@ class DatabaseProvider extends ChangeNotifier {
           .map((s) => int.tryParse(s))
           .whereType<int>()
           .toList();
+      simulationSelectedAccountIds =
+          (prefs.getStringList(_prefsKeySimulationAccounts) ?? [])
+              .map((s) => int.tryParse(s))
+              .whereType<int>()
+              .toSet();
       ledgerColumnOrder = prefs.getStringList(_prefsKeyLedgerColumnOrder) ?? [];
       ledgerHiddenColumns =
           (prefs.getStringList(_prefsKeyLedgerHiddenColumns) ?? []).toSet();
@@ -862,6 +886,7 @@ class DatabaseProvider extends ChangeNotifier {
       selectedAccountId = null;
       hiddenAccountIds = {};
       accountOrder = [];
+      simulationSelectedAccountIds = {};
       ledgerColumnOrder = [];
       ledgerHiddenColumns = {};
       forecastDay = 24;
@@ -1180,6 +1205,7 @@ class DatabaseProvider extends ChangeNotifier {
 const _prefsKeySelectedAccount = 'mmex_selected_account_id';
 const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
 const _prefsKeyAccountOrder = 'mmex_account_order';
+const _prefsKeySimulationAccounts = 'mmex_simulation_selected_account_ids';
 const _prefsKeyForecastDay = 'mmex_forecast_day';
 const _prefsKeyPalette = 'mmex_app_palette';
 const _prefsKeyThemeMode = 'mmex_app_theme_mode';

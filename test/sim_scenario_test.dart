@@ -664,19 +664,43 @@ void main() {
     });
   });
 
-  group('assumedFinalBalance (solde final supposé, 2026-09-02)', () {
+  group('assumedFinalBalance (solde final supposé, 2026-09-02, made '
+      'per-account 2026-09)', () {
     test('a fresh scenario has no assumed final balance', () {
       repo.createSimScenario('S');
       expect(repo.getSimScenarios().single.assumedFinalBalance, isNull);
     });
 
-    test('setting is readable back, and passing null clears it', () {
+    test('per-account setting is readable back, and passing null clears it',
+        () {
       final id = repo.createSimScenario('S');
-      repo.setSimScenarioAssumedFinalBalance(id, 45000);
-      expect(repo.getSimScenarios().single.assumedFinalBalance, 45000.0);
+      repo.setSimAssumedFinalBalance(id, accountId, 45000);
+      expect(repo.getSimAssumedFinalBalance(id, accountId), 45000.0);
 
-      repo.setSimScenarioAssumedFinalBalance(id, null);
-      expect(repo.getSimScenarios().single.assumedFinalBalance, isNull);
+      repo.setSimAssumedFinalBalance(id, accountId, null);
+      expect(repo.getSimAssumedFinalBalance(id, accountId), isNull);
+    });
+
+    test('a different account is entirely independent', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimAssumedFinalBalance(id, accountId, 45000);
+      expect(repo.getSimAssumedFinalBalance(id, otherAccountId), isNull);
+    });
+
+    test(
+        'falls back to the legacy scenario-wide column when this account '
+        'has no row of its own yet - never silently loses a value set '
+        'before the per-account version existed', () {
+      final id = repo.createSimScenario('S');
+      repo.db.execute(
+          'UPDATE APP_SIM_SCENARIOS SET ASSUMED_FINAL_BALANCE = ? WHERE SCENARIOID = ?',
+          [12000.0, id]);
+      expect(repo.getSimAssumedFinalBalance(id, accountId), 12000.0);
+
+      // Once this account gets its own explicit value, the legacy fallback
+      // no longer applies to it, even if cleared back to null.
+      repo.setSimAssumedFinalBalance(id, accountId, null);
+      expect(repo.getSimAssumedFinalBalance(id, accountId), isNull);
     });
   });
 

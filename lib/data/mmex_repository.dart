@@ -240,6 +240,26 @@ class MmexRepository {
     // calculated balance at that date is already positive - never allowed
     // to paper over a genuinely negative projection).
     _tryAddColumn('APP_SIM_SCENARIOS', 'ASSUMED_FINAL_BALANCE', 'REAL');
+    // Per-account replacement for the column above (2026-09 user request:
+    // the simulation screen now shows one curve per selected account, so a
+    // single scenario-wide "solde final supposé" applying the exact same
+    // target to every account no longer makes sense - each account needs
+    // its own). The old column is left in place, never written to again,
+    // purely as a one-time fallback default for an account that has no row
+    // here yet - see MmexRepository.getSimAssumedFinalBalance.
+    // AMOUNT is nullable on purpose: a row with AMOUNT = NULL still means
+    // something (see getSimAssumedFinalBalance's own doc comment) -
+    // "this account was explicitly cleared, stop falling back to the
+    // legacy scenario-wide column for it" - so the row itself has to
+    // exist even when there's no number to store.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_ASSUMED_FINAL_BALANCES (
+        SCENARIOID INTEGER NOT NULL,
+        ACCOUNTID INTEGER NOT NULL,
+        AMOUNT REAL,
+        PRIMARY KEY (SCENARIOID, ACCOUNTID)
+      )
+    ''');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -2475,13 +2495,48 @@ class MmexRepository {
     );
   }
 
-  /// Sets/clears [scenarioId]'s "solde final supposé" - see
-  /// [SimScenario.assumedFinalBalance]'s own doc comment. Pass null to
-  /// clear it (back to "no adjustment").
-  void setSimScenarioAssumedFinalBalance(int scenarioId, double? value) {
+  /// [scenarioId]'s "solde final supposé" for one specific [accountId] -
+  /// see [_SimulationChart]'s own doc comment for how and when this
+  /// actually gets applied. Falls back to the legacy scenario-wide
+  /// [SimScenario.assumedFinalBalance] column when this account has no row
+  /// of its own yet (2026-09: that column used to be the only place this
+  /// lived, applying the same value to every account at once - never
+  /// silently drop a value someone already had set there before this
+  /// account-by-account version existed). That fallback stops applying the
+  /// moment this account gets its own explicit value (including an
+  /// explicit "cleared"/null, tracked by the row existing at all - see
+  /// [setSimAssumedFinalBalance]).
+  double? getSimAssumedFinalBalance(int scenarioId, int accountId) {
+    final rows = db.query(
+      'SELECT AMOUNT FROM APP_SIM_ASSUMED_FINAL_BALANCES WHERE SCENARIOID = ? AND ACCOUNTID = ?',
+      [scenarioId, accountId],
+    );
+    if (rows.isNotEmpty) return (rows.first['AMOUNT'] as num?)?.toDouble();
+    final scenarioRows = db.query(
+      'SELECT ASSUMED_FINAL_BALANCE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?',
+      [scenarioId],
+    );
+    if (scenarioRows.isEmpty) return null;
+    return (scenarioRows.first['ASSUMED_FINAL_BALANCE'] as num?)?.toDouble();
+  }
+
+  /// Sets/clears [accountId]'s "solde final supposé" within [scenarioId].
+  /// Pass null to clear it (back to "no adjustment" for this account,
+  /// regardless of what the legacy scenario-wide value above says - see
+  /// [getSimAssumedFinalBalance]'s own doc comment on why a cleared row
+  /// still needs to exist rather than just being deleted).
+  void setSimAssumedFinalBalance(int scenarioId, int accountId, double? value) {
     db.execute(
-      'UPDATE APP_SIM_SCENARIOS SET ASSUMED_FINAL_BALANCE = ?, UPDATED_AT = ? WHERE SCENARIOID = ?',
-      [value, DateTime.now().toIso8601String(), scenarioId],
+      'DELETE FROM APP_SIM_ASSUMED_FINAL_BALANCES WHERE SCENARIOID = ? AND ACCOUNTID = ?',
+      [scenarioId, accountId],
+    );
+    db.execute(
+      'INSERT INTO APP_SIM_ASSUMED_FINAL_BALANCES (SCENARIOID, ACCOUNTID, AMOUNT) VALUES (?, ?, ?)',
+      [scenarioId, accountId, value],
+    );
+    db.execute(
+      'UPDATE APP_SIM_SCENARIOS SET UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [DateTime.now().toIso8601String(), scenarioId],
     );
   }
 
@@ -2493,6 +2548,9 @@ class MmexRepository {
     db.execute(
         'DELETE FROM APP_SIM_VIRTUAL_BILLS WHERE SCENARIOID = ?', [scenarioId]);
     db.execute('DELETE FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_SIM_ASSUMED_FINAL_BALANCES WHERE SCENARIOID = ?',
         [scenarioId]);
     db.execute(
         'DELETE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);

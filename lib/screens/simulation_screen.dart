@@ -91,6 +91,14 @@ class _SimulationScreenState extends State<SimulationScreen> {
   /// mind, not a fix for a reproduced staleness bug.
   int _refreshNonce = 0;
 
+  /// Whole-panel collapse - lives here, not inside _AdjustmentsPanel's own
+  /// State, so the surrounding layout (wide-mode width, narrow-mode height)
+  /// can actually shrink to match instead of leaving the space reserved.
+  /// Starts collapsed (2026-09 user request: "collapse tout" means the
+  /// panel too, not just each account section within it) - the chart gets
+  /// the full view by default, the panel is one tap away when needed.
+  bool _panelCollapsed = true;
+
   @override
   void initState() {
     super.initState();
@@ -128,39 +136,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
     setState(() {});
   }
 
-  /// "Solde final supposé" (2026-09-02 user request) - see
-  /// [SimScenario.assumedFinalBalance]/`_SimulationChart`'s own doc comment
-  /// for the full "uniquement si positif" rule this feeds. [targetDate] is
-  /// always the app's existing "Jour de prévision du solde" date
-  /// ([nextForecastDay] applied to [DatabaseProvider.forecastDay]) - shown
-  /// in the prompt so the user knows exactly which date their number
-  /// applies to.
-  Future<void> _setAssumedFinalBalance(MmexRepository repo,
-      SimScenario scenario, DateTime nextForecastDate) async {
-    final text = await _promptText(
-      context,
-      title: 'Solde final supposé',
-      label: 'Montant reporté chaque fin de mois (prochaine : '
-          '${DateFormat('d MMM yyyy', 'fr_FR').format(nextForecastDate)}), '
-          'sauf si le calcul est déjà négatif ce mois-là '
-          '(laisser vide pour annuler)',
-      initialValue: scenario.assumedFinalBalance?.toStringAsFixed(2) ?? '',
-    );
-    if (text == null) return; // dialog dismissed - nothing changes
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) {
-      repo.setSimScenarioAssumedFinalBalance(scenario.id, null);
-      _touch();
-      setState(() {});
-      return;
-    }
-    final value = double.tryParse(trimmed.replaceAll(',', '.'));
-    if (value == null) return; // not a number - silently ignored, same as leaving the field untouched
-    repo.setSimScenarioAssumedFinalBalance(scenario.id, value);
-    _touch();
-    setState(() {});
-  }
-
   Future<void> _deleteScenario(
       MmexRepository repo, SimScenario scenario) async {
     final confirmed = await showDialog<bool>(
@@ -188,6 +163,29 @@ class _SimulationScreenState extends State<SimulationScreen> {
     _selectMostRecentScenario();
   }
 
+  /// "3 comptes" / a single account's own name / "Tous les comptes" when
+  /// every visible account is checked - keeps the toolbar button readable
+  /// without listing every name.
+  String _accountsSummaryLabel(List<Account> accounts, List<Account> selected) {
+    if (selected.isEmpty) return 'Aucun compte';
+    if (selected.length == accounts.length) return 'Tous les comptes';
+    if (selected.length == 1) return selected.first.name;
+    return '${selected.length} comptes';
+  }
+
+  Future<void> _selectAccounts(DatabaseProvider dbProvider,
+      List<Account> accounts, List<Account> currentlySelected) async {
+    final result = await showDialog<Set<int>>(
+      context: context,
+      builder: (context) => _AccountMultiSelectDialog(
+        accounts: accounts,
+        initiallySelected: currentlySelected.map((a) => a.id).toSet(),
+      ),
+    );
+    if (result == null) return;
+    await dbProvider.setSimulationSelectedAccountIds(result);
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
@@ -208,24 +206,28 @@ class _SimulationScreenState extends State<SimulationScreen> {
         .where((a) => !dbProvider.isAccountHidden(a.id))
         .toList();
     final currency = repo.getBaseCurrency();
-    // Same account "in focus" every other screen (dashboard, ledger,
-    // budget...) shows and switches via [DatabaseProvider.selectAccount] -
-    // 2026-09-02 user request: this screen used to keep its own separate,
-    // never-persisted selection (always starting back at "Tous les
-    // comptes"), the one place in the app that didn't match. Falls back to
-    // "Tous les comptes" (null) if the globally selected account is hidden
-    // or gone, same as the scenario fallback above.
-    final rawAccountId = dbProvider.selectedAccountId;
-    final accountId =
-        accounts.any((a) => a.id == rawAccountId) ? rawAccountId : null;
+    // Checkbox-based multi-account selection (2026-09 user request: show
+    // one baseline+scenario curve per checked account, side by side,
+    // instead of a single account or a merged "tous les comptes" total).
+    // Persisted via DatabaseProvider.simulationSelectedAccountIds, filtered
+    // to accounts that still actually exist/aren't hidden. Falls back to
+    // the dashboard's own "in focus" account (same idea the old
+    // single-account selector used) only the very first time this screen
+    // is opened, when nothing has been saved here yet - never once the
+    // user has actually picked something, even an empty selection.
+    final savedIds = dbProvider.simulationSelectedAccountIds
+        .where((id) => accounts.any((a) => a.id == id))
+        .toSet();
+    final selectedAccounts = dbProvider.simulationSelectedAccountIds.isNotEmpty
+        ? accounts.where((a) => savedIds.contains(a.id)).toList()
+        : accounts.where((a) => a.id == dbProvider.selectedAccountId).toList();
     // "Jour de prévision du solde" (Paramètres) - the day of the month
     // "Solde final supposé" recurs on, every month (2026-09-02 user
     // request, corrected to recur monthly rather than once on 2026-09-03).
     // Same date the dashboard's own near-term forecast already anchors to
-    // (dashboard_screen.dart) - used here only to label the *next*
-    // occurrence in the tooltip/prompt.
-    final nextForecastDate =
-        nextForecastDay(DateTime.now(), dbProvider.forecastDay);
+    // (dashboard_screen.dart) - now computed inside _AdjustmentsPanel
+    // itself (its "solde final supposé" flag button moved there, one per
+    // account, 2026-09 - see MmexRepository.getSimAssumedFinalBalance).
 
     return Scaffold(
       appBar: AppBar(
@@ -258,25 +260,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
               icon: const Icon(Icons.delete_outline),
               onPressed: () => _deleteScenario(repo, scenario),
             ),
-            IconButton(
-              tooltip: scenario.assumedFinalBalance != null
-                  ? 'Solde final supposé : '
-                      '${currency?.format(scenario.assumedFinalBalance!) ?? scenario.assumedFinalBalance!.toStringAsFixed(2)} '
-                      'reporté chaque fin de mois (prochaine : '
-                      '${DateFormat('d MMM yyyy', 'fr_FR').format(nextForecastDate)})'
-                  : 'Définir un solde final supposé, reporté chaque fin de '
-                      'mois (prochaine : '
-                      '${DateFormat('d MMM yyyy', 'fr_FR').format(nextForecastDate)})',
-              icon: Icon(
-                Icons.flag_outlined,
-                color: scenario.assumedFinalBalance != null
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              onPressed: () =>
-                  _setAssumedFinalBalance(repo, scenario, nextForecastDate),
-            ),
-            const SizedBox(width: 8),
           ],
           IconButton(
             tooltip: 'Nouveau scénario',
@@ -291,16 +274,12 @@ class _SimulationScreenState extends State<SimulationScreen> {
             onPressed: () => setState(() => _refreshNonce++),
           ),
           const SizedBox(width: 8),
-          DropdownButton<int?>(
-            value: accountId,
-            underline: const SizedBox.shrink(),
-            items: [
-              const DropdownMenuItem(
-                  value: null, child: Text('Tous les comptes')),
-              for (final a in accounts)
-                DropdownMenuItem(value: a.id, child: Text(a.name)),
-            ],
-            onChanged: (id) => dbProvider.selectAccount(id),
+          TextButton.icon(
+            onPressed: accounts.isEmpty
+                ? null
+                : () => _selectAccounts(dbProvider, accounts, selectedAccounts),
+            icon: const Icon(Icons.checklist),
+            label: Text(_accountsSummaryLabel(accounts, selectedAccounts)),
           ),
           const SizedBox(width: 8),
           DropdownButton<_Horizon>(
@@ -320,14 +299,19 @@ class _SimulationScreenState extends State<SimulationScreen> {
           : LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 900;
+                final selectedAccountIds =
+                    selectedAccounts.map((a) => a.id).toList();
                 final panel = _AdjustmentsPanel(
                   key: ValueKey('${scenario.id}_$_refreshNonce'),
                   repo: repo,
                   scenario: scenario,
-                  accountId: accountId,
+                  accountIds: selectedAccountIds,
                   accounts: accounts,
                   currency: currency,
                   startDay: dbProvider.forecastDay,
+                  collapsed: _panelCollapsed,
+                  onToggleCollapsed: () =>
+                      setState(() => _panelCollapsed = !_panelCollapsed),
                   onChanged: () {
                     _touch();
                     setState(() {});
@@ -336,18 +320,17 @@ class _SimulationScreenState extends State<SimulationScreen> {
                 final chart = _SimulationChart(
                   repo: repo,
                   scenarioId: scenario.id,
-                  accountId: accountId,
+                  accountIds: selectedAccountIds,
                   accounts: accounts,
                   horizonMonths: _horizon.years * 12,
                   currency: currency,
                   startDay: dbProvider.forecastDay,
-                  assumedFinalBalance: scenario.assumedFinalBalance,
                 );
                 if (wide) {
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      SizedBox(width: 420, child: panel),
+                      SizedBox(width: _panelCollapsed ? 56 : 420, child: panel),
                       const VerticalDivider(width: 1),
                       Expanded(
                           child: Padding(
@@ -357,9 +340,13 @@ class _SimulationScreenState extends State<SimulationScreen> {
                 }
                 return Column(
                   children: [
-                    SizedBox(height: 320, child: chart),
+                    _panelCollapsed
+                        ? Expanded(child: chart)
+                        : SizedBox(height: 320, child: chart),
                     const Divider(height: 1),
-                    Expanded(child: panel),
+                    _panelCollapsed
+                        ? SizedBox(height: 56, child: panel)
+                        : Expanded(child: panel),
                   ],
                 );
               },
@@ -396,22 +383,139 @@ class _SimulationScreenState extends State<SimulationScreen> {
   }
 }
 
+/// Checkbox picker for which accounts show their own baseline+scenario
+/// curve on the simulation chart (2026-09 user request) - same
+/// `AlertDialog(content: SizedBox(...ListView...))` shape budget_screen.dart's
+/// own multi-select dialogs already use. At least one account must stay
+/// checked to save: an empty selection would leave the chart with nothing
+/// to draw, and would also be indistinguishable from "never configured yet"
+/// (see DatabaseProvider.simulationSelectedAccountIds's own doc comment),
+/// which falls back to the dashboard's selected account instead of staying
+/// empty.
+class _AccountMultiSelectDialog extends StatefulWidget {
+  final List<Account> accounts;
+  final Set<int> initiallySelected;
+
+  const _AccountMultiSelectDialog({
+    required this.accounts,
+    required this.initiallySelected,
+  });
+
+  @override
+  State<_AccountMultiSelectDialog> createState() =>
+      _AccountMultiSelectDialogState();
+}
+
+class _AccountMultiSelectDialogState extends State<_AccountMultiSelectDialog> {
+  late Set<int> _selected = {...widget.initiallySelected};
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Comptes affichés sur la simulation'),
+      content: SizedBox(
+        width: 360,
+        height: 420,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => setState(
+                      () => _selected = widget.accounts.map((a) => a.id).toSet()),
+                  child: const Text('Tout cocher'),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _selected = {}),
+                  child: const Text('Tout décocher'),
+                ),
+              ],
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final a in widget.accounts)
+                    CheckboxListTile(
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: _selected.contains(a.id),
+                      onChanged: (v) => setState(() {
+                        if (v ?? false) {
+                          _selected.add(a.id);
+                        } else {
+                          _selected.remove(a.id);
+                        }
+                      }),
+                      title: Text(a.name),
+                    ),
+                ],
+              ),
+            ),
+            if (_selected.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Coche au moins un compte.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        FilledButton(
+          onPressed:
+              _selected.isEmpty ? null : () => Navigator.of(context).pop(_selected),
+          child: const Text('Enregistrer'),
+        ),
+      ],
+    );
+  }
+}
+
 Future<String?> _promptText(
   BuildContext context, {
   required String title,
   required String label,
   String? initialValue,
+  // Longer explanation shown as its own wrapped line above the field,
+  // separate from [label] - found 2026-09 that a long sentence passed as
+  // the field's own `labelText` (the assumed-final-balance prompt's, at
+  // the time) gets silently truncated with "…" instead of wrapping, since
+  // a TextField's floating label is always a single line by Material
+  // design. Short labels ("Nom", "Montant"...) still just use [label]
+  // directly and never need this.
+  String? helperText,
 }) {
   final controller = TextEditingController(text: initialValue);
   return showDialog<String>(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(title),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        decoration: InputDecoration(labelText: label),
-        onSubmitted: (v) => Navigator.of(context).pop(v),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (helperText != null) ...[
+              Text(helperText,
+                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 12),
+            ],
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: InputDecoration(labelText: label),
+              onSubmitted: (v) => Navigator.of(context).pop(v),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -430,31 +534,67 @@ extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
 }
 
-/// The scrollable left/top panel listing every adjustment this scenario
-/// makes - real bills (with inline "arrêt le"/"nouveau montant" fields),
-/// virtual bills, and one-off events, each section with its own compact
-/// "+" entry point. Every control commits immediately (no "Enregistrer"
-/// button anywhere in this panel) via [onChanged], which the parent uses to
-/// persist ([DatabaseProvider.touch]) and recompute the chart.
-class _AdjustmentsPanel extends StatelessWidget {
+/// The left/top panel listing every adjustment this scenario makes - real
+/// bills (with inline "arrêt le"/"nouveau montant" fields), virtual bills,
+/// and one-off events, grouped into one collapsible section per selected
+/// account (2026-09 user feedback: showing every account's items in one
+/// merged list made it impossible to tell which account a given adjustment
+/// actually belonged to). The whole panel can also collapse down to a
+/// single button, to give the chart more room. Every control commits
+/// immediately (no "Enregistrer" button anywhere in this panel) via
+/// [_AdjustmentsPanel.onChanged], which the parent uses to persist
+/// ([DatabaseProvider.touch]) and recompute the chart.
+class _AdjustmentsPanel extends StatefulWidget {
   final MmexRepository repo;
   final SimScenario scenario;
-  final int? accountId;
+  final List<int> accountIds;
   final List<Account> accounts;
   final CurrencyFormat? currency;
   final VoidCallback onChanged;
   final int startDay;
 
+  /// Whole-panel collapse state - owned by the parent (not this widget's
+  /// own State) so the *layout* around it (the wide-mode SizedBox width,
+  /// the narrow-mode row height) can actually shrink to match, instead of
+  /// reserving the same space regardless (2026-09 user report: collapsing
+  /// used to leave the chart stuck at its original width, the panel just
+  /// showing a mostly-empty strip inside the space it still reserved).
+  final bool collapsed;
+  final VoidCallback onToggleCollapsed;
+
   const _AdjustmentsPanel({
     super.key,
     required this.repo,
     required this.scenario,
-    required this.accountId,
+    required this.accountIds,
     required this.accounts,
     required this.currency,
     required this.onChanged,
     required this.startDay,
+    required this.collapsed,
+    required this.onToggleCollapsed,
   });
+
+  @override
+  State<_AdjustmentsPanel> createState() => _AdjustmentsPanelState();
+}
+
+class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
+  /// Per-account expand state for each account's own section below - unlike
+  /// [_AdjustmentsPanel.collapsed] (the whole panel), this never affects the
+  /// surrounding layout, so it's fine to keep purely local. Empty = every
+  /// account section starts collapsed (2026-09 user request) - opt-in to
+  /// expand, not opt-in to collapse, so a newly-selected account also
+  /// starts collapsed without needing to track it explicitly.
+  final Set<int> _expandedAccountIds = {};
+
+  MmexRepository get repo => widget.repo;
+  SimScenario get scenario => widget.scenario;
+  List<int> get accountIds => widget.accountIds;
+  List<Account> get accounts => widget.accounts;
+  CurrencyFormat? get currency => widget.currency;
+  VoidCallback get onChanged => widget.onChanged;
+  int get startDay => widget.startDay;
 
   /// The date a limited-duration bill (a fixed remaining occurrence count,
   /// e.g. the last N payments left on a loan - see
@@ -497,6 +637,34 @@ class _AdjustmentsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Found 2026-09: collapsing/expanding the *whole* panel (as opposed to
+    // one account's own section, which has its own RepaintBoundary fix
+    // right below) could leave the exact same kind of blank/grey
+    // rectangle behind, reproduced live - toggling this swaps the returned
+    // widget between a tiny Align and the full scrolling Column below,
+    // while this State object (and its BuildContext/Element) stays the
+    // same. A keyed RepaintBoundary that changes key on every toggle
+    // forces Flutter to genuinely discard and remount the old compositing
+    // layer instead of trying to reuse/diff it - the same fix as the
+    // per-account one, one level up.
+    return RepaintBoundary(
+      key: ValueKey('sim-panel-repaint-${widget.collapsed}'),
+      child: _buildContent(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    if (widget.collapsed) {
+      return Align(
+        alignment: Alignment.topCenter,
+        child: IconButton(
+          tooltip: 'Afficher les ajustements',
+          icon: const Icon(Icons.chevron_right),
+          onPressed: widget.onToggleCollapsed,
+        ),
+      );
+    }
+
     final payeesById = {
       for (final p in repo.getPayees(onlyActive: false)) p.id: p
     };
@@ -507,184 +675,303 @@ class _AdjustmentsPanel extends StatelessWidget {
     final overridesByBillId = {
       for (final o in repo.getSimBillOverrides(scenario.id)) o.billId: o
     };
-    final realBills = repo.getBillDeposits().where((b) {
-      if (b.paused) return false;
-      if (accountId == null) return b.transCode != TransCode.transfer;
-      return b.accountId == accountId || b.toAccountId == accountId;
-    }).toList()
+    // Every real/virtual/one-off item, unfiltered - each account's own
+    // section below picks out just its own from these.
+    final allRealBills = repo.getBillDeposits().where((b) => !b.paused).toList();
+    final allVirtualBills = repo.getSimVirtualBills(scenario.id);
+    final allEvents = repo.getSimOneOffEvents(scenario.id);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 8, 0),
+          child: Row(
+            children: [
+              Expanded(
+                  child: Text('Ajustements',
+                      style: Theme.of(context).textTheme.titleMedium)),
+              IconButton(
+                tooltip: 'Replier',
+                icon: const Icon(Icons.chevron_left),
+                onPressed: widget.onToggleCollapsed,
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: accountIds.isEmpty
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                      'Sélectionne au moins un compte pour voir/modifier ses ajustements.'),
+                )
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 16),
+                  children: [
+                    for (final id in accountIds)
+                      if (accountsById[id] != null)
+                        _buildAccountSection(
+                          context,
+                          accountsById[id]!,
+                          payeesById,
+                          accountsById,
+                          categoriesById,
+                          overridesByBillId,
+                          allRealBills,
+                          allVirtualBills,
+                          allEvents,
+                        ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAccountSection(
+    BuildContext context,
+    Account account,
+    Map<int, Payee> payeesById,
+    Map<int, Account> accountsById,
+    Map<int, Category> categoriesById,
+    Map<int, SimBillOverride> overridesByBillId,
+    List<BillDeposit> allRealBills,
+    List<SimVirtualBill> allVirtualBills,
+    List<SimOneOffEvent> allEvents,
+  ) {
+    final realBills = allRealBills
+        .where((b) => b.accountId == account.id || b.toAccountId == account.id)
+        .toList()
       // Biggest recurring items first (2026-09-02 user request) - by
       // magnitude regardless of income/expense direction, same convention
       // as this app's other rankings (top expenses, category spend).
       ..sort((a, b) => b.amount.abs().compareTo(a.amount.abs()));
-    final virtualBills = repo.getSimVirtualBills(scenario.id)
+    final virtualBills = allVirtualBills.where((v) => v.accountId == account.id).toList()
       ..sort((a, b) => b.amount.abs().compareTo(a.amount.abs()));
-    final events = repo.getSimOneOffEvents(scenario.id)
+    final events = allEvents.where((e) => e.accountId == account.id).toList()
       ..sort((a, b) => b.amount.abs().compareTo(a.amount.abs()));
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Row(
+    final expanded = _expandedAccountIds.contains(account.id);
+    // Found 2026-09: re-expanding an ExpansionTile inside this scrolling
+    // panel left a blank/grey rectangle where its content should be, with
+    // a sliver of the chart's own pixels bleeding through at the edge -
+    // adding `maintainState: true` (the standard fix for ExpansionTile
+    // losing its child subtree on collapse) did not fix it, pointing at a
+    // paint/compositing glitch from its SizeTransition rather than a lost
+    // subtree. Replaced with a plain conditional (no animation at all, so
+    // nothing to glitch) wrapped in its own RepaintBoundary, trading the
+    // expand animation away for a symptom that structurally can't recur.
+    return RepaintBoundary(
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-                child: Text('Opérations virtuelles',
-                    style: Theme.of(context).textTheme.titleSmall)),
-            IconButton(
-              tooltip: accounts.isEmpty
-                  ? 'Crée d\'abord un compte'
-                  : 'Ajustement réaliste (dépenses imprévues, calculé depuis '
-                      'l\'historique)',
-              icon: const Icon(Icons.auto_graph),
-              onPressed: accounts.isEmpty
-                  ? null
-                  : () => _openDiscretionaryAdjustmentDialog(context),
+            InkWell(
+              onTap: () => setState(() {
+                if (expanded) {
+                  _expandedAccountIds.remove(account.id);
+                } else {
+                  _expandedAccountIds.add(account.id);
+                }
+              }),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(account.name,
+                          style: Theme.of(context).textTheme.titleSmall),
+                    ),
+                    Icon(expanded ? Icons.expand_less : Icons.expand_more),
+                  ],
+                ),
+              ),
             ),
-            IconButton(
-              tooltip: accounts.isEmpty
-                  ? 'Crée d\'abord un compte'
-                  : 'Ajouter une opération virtuelle',
-              icon: const Icon(Icons.add_circle_outline),
-              onPressed: accounts.isEmpty
-                  ? null
-                  : () => _openVirtualBillDialog(context),
+            if (expanded)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+          Row(
+            children: [
+              Expanded(
+                  child: Text('Opérations virtuelles',
+                      style: Theme.of(context).textTheme.labelLarge)),
+              () {
+                final assumed =
+                    repo.getSimAssumedFinalBalance(scenario.id, account.id);
+                final nextDate = nextForecastDay(DateTime.now(), startDay);
+                final dateLabel = DateFormat('d MMM yyyy', 'fr_FR').format(nextDate);
+                return IconButton(
+                  tooltip: assumed != null
+                      ? 'Solde final supposé : '
+                          '${currency?.format(assumed) ?? assumed.toStringAsFixed(2)} '
+                          'reporté chaque fin de mois (prochaine : $dateLabel)'
+                      : 'Définir un solde final supposé pour ce compte, '
+                          'reporté chaque fin de mois (prochaine : $dateLabel)',
+                  icon: Icon(
+                    Icons.flag_outlined,
+                    color: assumed != null
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                  onPressed: () =>
+                      _setAssumedFinalBalance(context, account, nextDate, assumed),
+                );
+              }(),
+              IconButton(
+                tooltip: 'Ajustement réaliste (dépenses imprévues, calculé '
+                    'depuis l\'historique)',
+                icon: const Icon(Icons.auto_graph),
+                onPressed: () =>
+                    _openDiscretionaryAdjustmentDialog(context, account.id),
+              ),
+              IconButton(
+                tooltip: 'Ajouter une opération virtuelle',
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: () => _openVirtualBillDialog(context, account.id),
+              ),
+            ],
+          ),
+          if (virtualBills.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Aucune - ex. "pension de retraite +1200€/mois".'),
             ),
+          for (final v in virtualBills)
+            Tooltip(
+              message:
+                  '${v.label} (${v.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
+                  'Compte : ${accountsById[v.accountId]?.name ?? "?"}\n'
+                  'Périodicité : ${recurrencePeriodLabel(v.period)}\n'
+                  'À partir du : ${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}'
+                  '${v.variancePercent > 0 ? '\nVariation aléatoire : ±${v.variancePercent.round()} %' : ''}',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  v.transCode == TransCode.deposit
+                      ? Icons.south_west
+                      : Icons.north_east,
+                  color: v.transCode == TransCode.deposit
+                      ? AppTheme.positive
+                      : AppTheme.negative,
+                ),
+                title: Text(v.label),
+                subtitle: Text(
+                  '${currency?.format(v.amount) ?? v.amount.toStringAsFixed(2)} - '
+                  '${recurrencePeriodLabel(v.period)} - à partir du '
+                  '${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}',
+                ),
+                onTap: () => _openVirtualBillDialog(context, account.id, existing: v),
+                trailing: IconButton(
+                  tooltip: 'Supprimer',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () {
+                    repo.deleteSimVirtualBill(v.id);
+                    onChanged();
+                  },
+                ),
+              ),
+            ),
+          const Divider(height: 24),
+          Text('Opérations récurrentes réelles',
+              style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 4),
+          const Text(
+            'Laisse vide pour ne rien changer. "Arrêt le" exclut cette opération '
+            'à partir de cette date ; "Nouveau montant" remplace son montant '
+            'réel dans ce scénario uniquement.',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          if (realBills.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Aucune opération récurrente sur ce compte.'),
+            ),
+          for (final bill in realBills)
+            _RealBillRow(
+              key: ValueKey('bill-${bill.id}'),
+              bill: bill,
+              label: _billLabel(bill, payeesById, accountsById),
+              tooltip: _billTooltip(
+                  bill,
+                  _billLabel(bill, payeesById, accountsById),
+                  categoriesById,
+                  accountsById),
+              naturalEndDate: _naturalEndDate(bill),
+              currency: currency,
+              savedOverride: overridesByBillId[bill.id],
+              onChanged: (disabledFrom, amountOverride) {
+                final hasNoOverride =
+                    disabledFrom == null && amountOverride == null;
+                if (hasNoOverride) {
+                  repo.deleteSimBillOverride(scenario.id, bill.id);
+                } else {
+                  repo.upsertSimBillOverride(scenario.id, bill.id,
+                      disabledFrom: disabledFrom, amountOverride: amountOverride);
+                }
+                onChanged();
+              },
+            ),
+          const Divider(height: 24),
+          Row(
+            children: [
+              Expanded(
+                  child: Text('Événements ponctuels',
+                      style: Theme.of(context).textTheme.labelLarge)),
+              IconButton(
+                tooltip: 'Ajouter un événement ponctuel',
+                icon: const Icon(Icons.add_circle_outline),
+                onPressed: () => _openOneOffEventDialog(context, account.id),
+              ),
+            ],
+          ),
+          if (events.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text('Aucun - ex. "capital de départ +50000€".'),
+            ),
+          for (final e in events)
+            Tooltip(
+              message:
+                  '${e.label} (${e.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
+                  'Compte : ${accountsById[e.accountId]?.name ?? "?"}\n'
+                  'Date : ${DateFormat('d MMM yyyy', 'fr_FR').format(e.date)}',
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  e.transCode == TransCode.deposit
+                      ? Icons.south_west
+                      : Icons.north_east,
+                  color: e.transCode == TransCode.deposit
+                      ? AppTheme.positive
+                      : AppTheme.negative,
+                ),
+                title: Text(e.label),
+                subtitle: Text(
+                  '${currency?.format(e.amount) ?? e.amount.toStringAsFixed(2)} le '
+                  '${DateFormat('d MMM yyyy', 'fr_FR').format(e.date)}',
+                ),
+                trailing: IconButton(
+                  tooltip: 'Supprimer',
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () {
+                    repo.deleteSimOneOffEvent(e.id);
+                    onChanged();
+                  },
+                ),
+              ),
+            ),
+                  ],
+                ),
+              ),
           ],
         ),
-        if (virtualBills.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('Aucune - ex. "pension de retraite +1200€/mois".'),
-          ),
-        for (final v in virtualBills)
-          Tooltip(
-            message:
-                '${v.label} (${v.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
-                'Compte : ${accountsById[v.accountId]?.name ?? "?"}\n'
-                'Périodicité : ${recurrencePeriodLabel(v.period)}\n'
-                'À partir du : ${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}'
-                '${v.variancePercent > 0 ? '\nVariation aléatoire : ±${v.variancePercent.round()} %' : ''}',
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                v.transCode == TransCode.deposit
-                    ? Icons.south_west
-                    : Icons.north_east,
-                color: v.transCode == TransCode.deposit
-                    ? AppTheme.positive
-                    : AppTheme.negative,
-              ),
-              title: Text(v.label),
-              subtitle: Text(
-                '${currency?.format(v.amount) ?? v.amount.toStringAsFixed(2)} - '
-                '${recurrencePeriodLabel(v.period)} - à partir du '
-                '${DateFormat('d MMM yyyy', 'fr_FR').format(v.startDate)}',
-              ),
-              onTap: () => _openVirtualBillDialog(context, existing: v),
-              trailing: IconButton(
-                tooltip: 'Supprimer',
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: () {
-                  repo.deleteSimVirtualBill(v.id);
-                  onChanged();
-                },
-              ),
-            ),
-          ),
-        const Divider(height: 32),
-        Text('Opérations récurrentes réelles',
-            style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 4),
-        const Text(
-          'Laisse vide pour ne rien changer. "Arrêt le" exclut cette opération '
-          'à partir de cette date ; "Nouveau montant" remplace son montant '
-          'réel dans ce scénario uniquement.',
-          style: TextStyle(fontSize: 12, color: Colors.grey),
-        ),
-        const SizedBox(height: 8),
-        if (realBills.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('Aucune opération récurrente sur ce périmètre.'),
-          ),
-        for (final bill in realBills)
-          _RealBillRow(
-            key: ValueKey('bill-${bill.id}'),
-            bill: bill,
-            label: _billLabel(bill, payeesById, accountsById),
-            tooltip: _billTooltip(
-                bill,
-                _billLabel(bill, payeesById, accountsById),
-                categoriesById,
-                accountsById),
-            naturalEndDate: _naturalEndDate(bill),
-            currency: currency,
-            savedOverride: overridesByBillId[bill.id],
-            onChanged: (disabledFrom, amountOverride) {
-              final hasNoOverride =
-                  disabledFrom == null && amountOverride == null;
-              if (hasNoOverride) {
-                repo.deleteSimBillOverride(scenario.id, bill.id);
-              } else {
-                repo.upsertSimBillOverride(scenario.id, bill.id,
-                    disabledFrom: disabledFrom, amountOverride: amountOverride);
-              }
-              onChanged();
-            },
-          ),
-        const Divider(height: 32),
-        Row(
-          children: [
-            Expanded(
-                child: Text('Événements ponctuels',
-                    style: Theme.of(context).textTheme.titleSmall)),
-            IconButton(
-              tooltip: accounts.isEmpty
-                  ? 'Crée d\'abord un compte'
-                  : 'Ajouter un événement ponctuel',
-              icon: const Icon(Icons.add_circle_outline),
-              onPressed: accounts.isEmpty
-                  ? null
-                  : () => _openOneOffEventDialog(context),
-            ),
-          ],
-        ),
-        if (events.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('Aucun - ex. "capital de départ +50000€".'),
-          ),
-        for (final e in events)
-          Tooltip(
-            message:
-                '${e.label} (${e.transCode == TransCode.deposit ? "revenu" : "dépense"})\n'
-                'Compte : ${accountsById[e.accountId]?.name ?? "?"}\n'
-                'Date : ${DateFormat('d MMM yyyy', 'fr_FR').format(e.date)}',
-            child: ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                e.transCode == TransCode.deposit
-                    ? Icons.south_west
-                    : Icons.north_east,
-                color: e.transCode == TransCode.deposit
-                    ? AppTheme.positive
-                    : AppTheme.negative,
-              ),
-              title: Text(e.label),
-              subtitle: Text(
-                '${currency?.format(e.amount) ?? e.amount.toStringAsFixed(2)} le '
-                '${DateFormat('d MMM yyyy', 'fr_FR').format(e.date)}',
-              ),
-              trailing: IconButton(
-                tooltip: 'Supprimer',
-                icon: const Icon(Icons.close, size: 18),
-                onPressed: () {
-                  repo.deleteSimOneOffEvent(e.id);
-                  onChanged();
-                },
-              ),
-            ),
-          ),
-      ],
+      ),
     );
   }
 
@@ -697,12 +984,45 @@ class _AdjustmentsPanel extends StatelessWidget {
     return payeesById[bill.payeeId]?.name ?? 'Tiers inconnu';
   }
 
-  Future<void> _openVirtualBillDialog(BuildContext context,
+  /// "Solde final supposé" (2026-09-02 user request, made per-account
+  /// 2026-09 - see [MmexRepository.getSimAssumedFinalBalance]'s own doc
+  /// comment for why) - see `_SimulationChart`'s own doc comment for the
+  /// full "uniquement si positif" rule this feeds. [nextDate] is always the
+  /// app's existing "Jour de prévision du solde" date, shown in the prompt
+  /// so the user knows exactly which date their number applies to.
+  Future<void> _setAssumedFinalBalance(BuildContext context, Account account,
+      DateTime nextDate, double? currentValue) async {
+    final text = await _promptText(
+      context,
+      title: 'Solde final supposé - ${account.name}',
+      label: 'Montant',
+      helperText: 'Reporté chaque fin de mois (prochaine : '
+          '${DateFormat('d MMM yyyy', 'fr_FR').format(nextDate)}), '
+          'sauf si le calcul est déjà négatif ce mois-là. Laisse vide pour '
+          'annuler.',
+      initialValue: currentValue?.toStringAsFixed(2) ?? '',
+    );
+    if (text == null) return; // dialog dismissed - nothing changes
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      repo.setSimAssumedFinalBalance(scenario.id, account.id, null);
+      onChanged();
+      return;
+    }
+    final value = double.tryParse(trimmed.replaceAll(',', '.'));
+    if (value == null) return; // not a number - silently ignored, same as leaving the field untouched
+    repo.setSimAssumedFinalBalance(scenario.id, account.id, value);
+    onChanged();
+  }
+
+  Future<void> _openVirtualBillDialog(BuildContext context, int forAccountId,
       {SimVirtualBill? existing}) async {
     final result = await showDialog<_VirtualBillFormResult>(
       context: context,
-      builder: (context) =>
-          _VirtualBillDialog(accounts: accounts, existing: existing),
+      builder: (context) => _VirtualBillDialog(
+          accounts: accounts,
+          existing: existing,
+          initialAccountId: forAccountId),
     );
     if (result == null) return;
     if (existing != null) repo.deleteSimVirtualBill(existing.id);
@@ -726,14 +1046,15 @@ class _AdjustmentsPanel extends StatelessWidget {
   static const _discretionaryAdjustmentLabel =
       'Dépenses imprévues (historique)';
 
-  Future<void> _openDiscretionaryAdjustmentDialog(BuildContext context) async {
+  Future<void> _openDiscretionaryAdjustmentDialog(
+      BuildContext context, int forAccountId) async {
     final result = await showDialog<_DiscretionaryAdjustmentResult>(
       context: context,
       builder: (context) => _DiscretionaryAdjustmentDialog(
         repo: repo,
         accounts: accounts,
         currency: currency,
-        initialAccountId: accountId,
+        initialAccountId: forAccountId,
         startDay: startDay,
         existingByAccountId: {
           for (final v in repo.getSimVirtualBills(scenario.id))
@@ -762,10 +1083,12 @@ class _AdjustmentsPanel extends StatelessWidget {
     onChanged();
   }
 
-  Future<void> _openOneOffEventDialog(BuildContext context) async {
+  Future<void> _openOneOffEventDialog(
+      BuildContext context, int forAccountId) async {
     final result = await showDialog<_OneOffEventFormResult>(
       context: context,
-      builder: (context) => _OneOffEventDialog(accounts: accounts),
+      builder: (context) => _OneOffEventDialog(
+          accounts: accounts, initialAccountId: forAccountId),
     );
     if (result == null) return;
     repo.addSimOneOffEvent(
@@ -1021,8 +1344,10 @@ class _VirtualBillFormResult {
 class _VirtualBillDialog extends StatefulWidget {
   final List<Account> accounts;
   final SimVirtualBill? existing;
+  final int? initialAccountId;
 
-  const _VirtualBillDialog({required this.accounts, this.existing});
+  const _VirtualBillDialog(
+      {required this.accounts, this.existing, this.initialAccountId});
 
   @override
   State<_VirtualBillDialog> createState() => _VirtualBillDialogState();
@@ -1033,7 +1358,9 @@ class _VirtualBillDialogState extends State<_VirtualBillDialog> {
       TextEditingController(text: widget.existing?.label ?? '');
   late final _amountController = TextEditingController(
       text: widget.existing?.amount.toStringAsFixed(2) ?? '');
-  late int _accountId = widget.existing?.accountId ?? widget.accounts.first.id;
+  late int _accountId = widget.existing?.accountId ??
+      widget.initialAccountId ??
+      widget.accounts.first.id;
   late TransCode _transCode = widget.existing?.transCode ?? TransCode.deposit;
   late DateTime _startDate = widget.existing?.startDate ?? DateTime.now();
   late RecurrencePeriod _period =
@@ -1431,8 +1758,9 @@ class _OneOffEventFormResult {
 
 class _OneOffEventDialog extends StatefulWidget {
   final List<Account> accounts;
+  final int? initialAccountId;
 
-  const _OneOffEventDialog({required this.accounts});
+  const _OneOffEventDialog({required this.accounts, this.initialAccountId});
 
   @override
   State<_OneOffEventDialog> createState() => _OneOffEventDialogState();
@@ -1441,7 +1769,7 @@ class _OneOffEventDialog extends StatefulWidget {
 class _OneOffEventDialogState extends State<_OneOffEventDialog> {
   final _labelController = TextEditingController();
   final _amountController = TextEditingController();
-  late int _accountId = widget.accounts.first.id;
+  late int _accountId = widget.initialAccountId ?? widget.accounts.first.id;
   TransCode _transCode = TransCode.deposit;
   DateTime _date = DateTime.now();
 
@@ -1538,15 +1866,54 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
   }
 }
 
-/// The baseline-vs-scenario projection chart - solid accent line for "si
-/// rien ne change" ([MmexRepository.recurringDailyNet], the real schedule,
-/// untouched), dashed orange line for the scenario itself
-/// ([MmexRepository.simulatedDailyNet]) - orange dashed is the same
-/// "simulated" visual convention forecast_chart.dart already uses for its
-/// own simulated-purchase overlay, reused here on purpose for a consistent
-/// meaning across the app. Both start from today's real combined/per-account
-/// balance ([MmexRepository.accountBalance]), so they only ever diverge from
-/// what the scenario actually changes.
+/// One rotating colour per selected account (2026-09 user request: as many
+/// simulated curves as selected accounts, distinguished by colour, with
+/// solid-vs-dashed still meaning baseline-vs-scenario within each colour).
+/// Cycles via modulo if more accounts are selected than colours - unlikely
+/// in practice, and not worse than reusing a colour would be anyway.
+const _accountColors = [
+  Color(0xFF3F51B5), // indigo
+  Color(0xFFE65100), // deep orange
+  Color(0xFF2E7D32), // green
+  Color(0xFF6A1B9A), // purple
+  Color(0xFF00838F), // teal
+  Color(0xFFAD1457), // pink
+  Color(0xFF5D4037), // brown
+  Color(0xFF37474F), // blue grey
+];
+
+/// One selected account's full computed series - see
+/// [_SimulationChart._buildSeries].
+class _AccountSeries {
+  final Account account;
+  final Color color;
+  final List<double> baseline;
+  final List<double> scenario;
+  final String? assumedBalanceNote;
+
+  const _AccountSeries({
+    required this.account,
+    required this.color,
+    required this.baseline,
+    required this.scenario,
+    required this.assumedBalanceNote,
+  });
+}
+
+/// The baseline-vs-scenario projection chart - solid line for "si rien ne
+/// change" ([MmexRepository.recurringDailyNet], the real schedule,
+/// untouched), dashed line for the scenario itself
+/// ([MmexRepository.simulatedDailyNet]) - dashed is the same "simulated"
+/// visual convention forecast_chart.dart already uses for its own
+/// simulated-purchase overlay, reused here on purpose for a consistent
+/// meaning across the app. Both start from today's real per-account balance
+/// ([MmexRepository.accountBalance]), so they only ever diverge from what
+/// the scenario actually changes.
+///
+/// One such pair per entry in [accountIds] (2026-09 user request: checked
+/// accounts each get their own curves, colour-coded, rather than a single
+/// account or a merged "tous les comptes" total) - see [_buildSeries] and
+/// [_AccountSeries].
 ///
 /// Bucketed day by day, same granularity as the dashboard's own
 /// [ForecastChart] (2026-09-02 user request: match it exactly, rather than
@@ -1554,7 +1921,8 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 /// history for that earlier attempt and why it was replaced). Recurring-bill
 /// detail shows up in the tooltip on hover, same as the dashboard, but
 /// deliberately without its red dashed per-day vertical lines - those would
-/// be an unreadable wall of red across a multi-year horizon.
+/// be an unreadable wall of red across a multi-year horizon, let alone
+/// across several accounts' worth of them.
 ///
 /// [startDay] itself (Settings' "Jour de prévision du solde") no longer
 /// changes how this chart buckets - only the exact calendar day matters now
@@ -1566,49 +1934,21 @@ class _OneOffEventDialogState extends State<_OneOffEventDialog> {
 class _SimulationChart extends StatelessWidget {
   final MmexRepository repo;
   final int scenarioId;
-  final int? accountId;
+  final List<int> accountIds;
   final List<Account> accounts;
   final int horizonMonths;
   final CurrencyFormat? currency;
   final int startDay;
 
-  /// "Solde final supposé" (2026-09-02 user request, corrected to recur
-  /// monthly on 2026-09-03: "la valeur saisie pour la fin du mois doit
-  /// être reportée toutes les fins de mois, sauf si le solde est négatif")
-  /// - [SimScenario.assumedFinalBalance], re-applied at every monthly
-  /// occurrence of [startDay] ("Jour de prévision du solde") to the
-  /// *scenario* ("avec ce scénario") line only, each carrying forward
-  /// through the rest of the projection exactly like a one-off event
-  /// would - never to the baseline ("sans changement") line, which stays
-  /// the pure unmodified real schedule for an honest comparison.
-  /// Deliberately gated, month by month, on the scenario's own *running*
-  /// balance there already being positive (see
-  /// [MmexRepository.simulatedDailyNetWithAssumedFinalBalance]) - this
-  /// must never be a way to make a genuinely bad (negative) trajectory
-  /// look fine; a negative month always shows through untouched,
-  /// regardless of what's typed in here.
-  final double? assumedFinalBalance;
-
   const _SimulationChart({
     required this.repo,
     required this.scenarioId,
-    required this.accountId,
+    required this.accountIds,
     required this.accounts,
     required this.horizonMonths,
     required this.currency,
     required this.startDay,
-    required this.assumedFinalBalance,
   });
-
-  double _startingBalance() {
-    final now = DateTime.now();
-    if (accountId != null) return repo.accountBalance(accountId!, asOf: now);
-    // Sums every *visible* account (see the caller's own filtering) - a
-    // hidden account's balance has no place in "tous les comptes" here
-    // either, same reasoning as the account dropdown itself.
-    return accounts.fold(
-        0.0, (sum, a) => sum + repo.accountBalance(a.id, asOf: now));
-  }
 
   List<double> _cumulative(
       Map<DateTime, double> dailyNet, double startingBalance) {
@@ -1617,84 +1957,99 @@ class _SimulationChart extends StatelessWidget {
     return [for (final k in keys) running += dailyNet[k]!];
   }
 
-  /// Every real recurring-bill occurrence between [start] and [end],
-  /// grouped by day - day-level counterpart to what the dashboard's own
-  /// ForecastChart shows (2026-09-02 user request: match its day-by-day
-  /// granularity here too, tooltip detail included, but without its red
-  /// dashed per-day vertical lines - kept out on purpose, unreadably dense
-  /// at a horizon of years, so the detail lives in the tooltip only).
-  Map<DateTime, List<RecurringOccurrence>> _groupedOccurrences(
-      DateTime start, DateTime end) {
-    final occurrences = repo.recurringOccurrencesInRange(
-        start: start, end: end, accountId: accountId);
-    final grouped = <DateTime, List<RecurringOccurrence>>{};
-    for (final o in occurrences) {
-      grouped.putIfAbsent(o.date, () => []).add(o);
-    }
-    return grouped;
-  }
+  /// One [_AccountSeries] per entry in [accountIds], in the same order -
+  /// every figure (starting balance, baseline, scenario, "solde final
+  /// supposé" note) computed independently per account, never summed/merged
+  /// across them.
+  List<_AccountSeries> _buildSeries(DateTime anchor, int days) {
+    final accountsById = {for (final a in accounts) a.id: a};
+    final series = <_AccountSeries>[];
+    for (var i = 0; i < accountIds.length; i++) {
+      final id = accountIds[i];
+      final account = accountsById[id];
+      if (account == null) continue; // hidden/deleted since selection - skip
+      final color = _accountColors[i % _accountColors.length];
+      final startingBalance = repo.accountBalance(id, asOf: DateTime.now());
+      final baselineNet =
+          repo.recurringDailyNet(anchor: anchor, days: days, accountId: id);
+      final assumedFinalBalance = repo.getSimAssumedFinalBalance(scenarioId, id);
+      final scenarioResult = repo.simulatedDailyNetWithAssumedFinalBalance(
+        scenarioId: scenarioId,
+        assumedFinalBalance: assumedFinalBalance,
+        anchor: anchor,
+        days: days,
+        accountId: id,
+        forecastDay: startDay,
+      );
 
-  /// "\n\nOpérations récurrentes :\n• Salaire : +2 500,00 €\n..." appended to
-  /// a day's tooltip.
-  String _occurrenceSuffix(List<RecurringOccurrence>? occurrences) {
-    if (occurrences == null || occurrences.isEmpty) return '';
-    final lines = occurrences.map((o) {
-      final amount = currency?.format(o.signedAmount) ?? o.signedAmount.toStringAsFixed(2);
-      return '• ${o.label} : $amount';
-    }).join('\n');
-    return '\n\nOpérations récurrentes :\n$lines';
+      String? assumedBalanceNote;
+      if (assumedFinalBalance != null) {
+        final applied = scenarioResult.appliedDates.length;
+        final ignored = scenarioResult.ignoredDates.length;
+        final amountLabel = currency?.format(assumedFinalBalance) ??
+            assumedFinalBalance.toStringAsFixed(2);
+        if (applied == 0 && ignored == 0) {
+          assumedBalanceNote =
+              '${account.name} : solde final supposé hors de l\'horizon affiché';
+        } else if (ignored == 0) {
+          assumedBalanceNote = '${account.name} : solde final supposé '
+              '($amountLabel) reporté chaque fin de mois ($applied fois sur '
+              'l\'horizon affiché)';
+        } else {
+          assumedBalanceNote = '${account.name} : solde final supposé '
+              '($amountLabel) reporté $applied fois ; laissé au calcul '
+              '(déjà négatif) $ignored fois';
+        }
+      }
+
+      series.add(_AccountSeries(
+        account: account,
+        color: color,
+        baseline: _cumulative(baselineNet, startingBalance),
+        scenario: _cumulative(scenarioResult.net, startingBalance),
+        assumedBalanceNote: assumedBalanceNote,
+      ));
+    }
+    return series;
   }
 
   @override
   Widget build(BuildContext context) {
+    if (accountIds.isEmpty) {
+      return Center(
+        child: Text(
+          'Sélectionne au moins un compte pour voir la simulation.',
+          style: TextStyle(color: Theme.of(context).colorScheme.outline),
+        ),
+      );
+    }
+
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final anchor = DateTime(now.year, now.month + horizonMonths, now.day)
         .subtract(const Duration(days: 1));
     final days = anchor.difference(today).inDays + 1;
-    final startingBalance = _startingBalance();
+    // Independent of account - every account's own recurringDailyNet/
+    // simulatedDailyNet is bucketed [today, anchor] the exact same way.
+    final points = [
+      for (var i = 0; i < days; i++)
+        DateTime(today.year, today.month, today.day + i),
+    ];
 
-    final baselineNet =
-        repo.recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
-    // "Solde final supposé" (2026-09-02, corrected 2026-09-03 to recur
-    // monthly) - see [assumedFinalBalance]'s own doc comment/
-    // MmexRepository.simulatedDailyNetWithAssumedFinalBalance for the full
-    // "reporté toutes les fins de mois, sauf si négatif" rule. Only ever
-    // nudges the *scenario* net series, never the baseline above.
-    final scenarioResult = repo.simulatedDailyNetWithAssumedFinalBalance(
-      scenarioId: scenarioId,
-      assumedFinalBalance: assumedFinalBalance,
-      anchor: anchor,
-      days: days,
-      accountId: accountId,
-      accountsForTotal: accounts,
-      forecastDay: startDay,
-    );
-    final scenarioNet = scenarioResult.net;
-    final points = (baselineNet.keys.toList()..sort());
-    final grouped = _groupedOccurrences(today, anchor);
-
-    String? assumedBalanceNote;
-    if (assumedFinalBalance != null) {
-      final applied = scenarioResult.appliedDates.length;
-      final ignored = scenarioResult.ignoredDates.length;
-      final amountLabel = currency?.format(assumedFinalBalance!) ??
-          assumedFinalBalance!.toStringAsFixed(2);
-      if (applied == 0 && ignored == 0) {
-        assumedBalanceNote = 'Solde final supposé hors de l\'horizon affiché';
-      } else if (ignored == 0) {
-        assumedBalanceNote = 'Solde final supposé ($amountLabel) reporté '
-            'chaque fin de mois ($applied fois sur l\'horizon affiché)';
-      } else {
-        assumedBalanceNote = 'Solde final supposé ($amountLabel) reporté '
-            '$applied fois ; laissé au calcul (déjà négatif) $ignored fois';
-      }
+    final series = _buildSeries(anchor, days);
+    if (series.isEmpty) {
+      return Center(
+        child: Text(
+          'Sélectionne au moins un compte pour voir la simulation.',
+          style: TextStyle(color: Theme.of(context).colorScheme.outline),
+        ),
+      );
     }
 
-    final baseline = _cumulative(baselineNet, startingBalance);
-    final scenario = _cumulative(scenarioNet, startingBalance);
-
-    final allValues = [...baseline, ...scenario];
+    final allValues = [
+      for (final s in series) ...s.baseline,
+      for (final s in series) ...s.scenario,
+    ];
     final minY = allValues.reduce((a, b) => a < b ? a : b);
     final maxY = allValues.reduce((a, b) => a > b ? a : b);
     final pad = (maxY - minY).abs() * 0.1 + 1;
@@ -1702,48 +2057,56 @@ class _SimulationChart extends StatelessWidget {
     final labelInterval = (points.length / 8).clamp(1, double.infinity).roundToDouble();
     final axisFormat =
         DateFormat(horizonMonths > 24 ? 'yyyy' : 'd MMM yy', 'fr_FR');
+    final outline = Theme.of(context).colorScheme.outline;
 
     return Column(
       children: [
-        Row(
+        Wrap(
+          spacing: 16,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            _Legend(color: AppTheme.accent, label: 'Sans changement'),
-            const SizedBox(width: 16),
-            _Legend(
-                color: Colors.orange.shade700,
-                label: 'Avec ce scénario',
-                dashed: true),
-            const Spacer(),
-            if (points.isNotEmpty)
-              Text(
-                'Écart le ${DateFormat('d MMM yyyy', 'fr_FR').format(points.last)} : '
-                '${currency?.format(scenario.last - baseline.last) ?? (scenario.last - baseline.last).toStringAsFixed(2)}',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+            for (final s in series) _Legend(color: s.color, label: s.account.name),
+            _Legend(color: outline, label: 'Sans changement'),
+            _Legend(color: outline, label: 'Avec ce scénario', dashed: true),
           ],
         ),
+        if (points.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 16,
+            runSpacing: 4,
+            children: [
+              for (final s in series)
+                Text(
+                  '${s.account.name} - écart le '
+                  '${DateFormat('d MMM yyyy', 'fr_FR').format(points.last)} : '
+                  '${currency?.format(s.scenario.last - s.baseline.last) ?? (s.scenario.last - s.baseline.last).toStringAsFixed(2)}',
+                  style: TextStyle(fontWeight: FontWeight.w600, color: s.color),
+                ),
+            ],
+          ),
+        ],
         // Always says whether the assumption was actually used, and why
         // not when it wasn't (2026-09-02) - the whole point of the
         // "uniquement si positif" rule is that a negative calculated
         // outcome is never quietly hidden, so silence here would defeat it.
-        if (assumedBalanceNote != null) ...[
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Icon(Icons.flag_outlined,
-                  size: 14, color: Theme.of(context).colorScheme.outline),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  assumedBalanceNote,
-                  style: TextStyle(
-                      fontSize: 12,
-                      color: Theme.of(context).colorScheme.outline),
+        for (final s in series)
+          if (s.assumedBalanceNote != null) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Icon(Icons.flag_outlined, size: 14, color: outline),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    s.assumedBalanceNote!,
+                    style: TextStyle(fontSize: 12, color: outline),
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
         const SizedBox(height: 12),
         Expanded(
           child: LineChart(
@@ -1782,44 +2145,60 @@ class _SimulationChart extends StatelessWidget {
                 touchTooltipData: LineTouchTooltipData(
                   fitInsideHorizontally: true,
                   fitInsideVertically: true,
+                  // Just each account's balance (2026-09 user feedback: the
+                  // per-day recurring-operations breakdown made this
+                  // "trop chargé" with several accounts selected - 2N
+                  // multi-line items at once). One compact line per bar,
+                  // the date shown only once at the very top.
                   getTooltipItems: (spots) => [
-                    for (final s in spots)
-                      LineTooltipItem(
-                        '${DateFormat('EEEE d MMMM yyyy', 'fr_FR').format(points[s.x.round()])}\n'
-                        '${currency?.format(s.y) ?? s.y.toStringAsFixed(2)}'
-                        '${s.barIndex == 1 ? ' (scénario)' : ''}'
-                        // Only on the baseline ("Sans changement") item -
-                        // both bars are touched at once, and attaching the
-                        // same list to each would just show it twice.
-                        '${s.barIndex == 0 ? _occurrenceSuffix(grouped[points[s.x.round()]]) : ''}',
-                        const TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.w600),
-                      ),
+                    for (var i = 0; i < spots.length; i++)
+                      () {
+                        final s = spots[i];
+                        // 2 bars per account, in the same order as [series]
+                        // (baseline then scenario) - see lineBarsData below.
+                        final seriesIndex = s.barIndex ~/ 2;
+                        final isScenario = s.barIndex.isOdd;
+                        final acc = series[seriesIndex];
+                        final day = points[s.x.round()];
+                        final valueLabel =
+                            currency?.format(s.y) ?? s.y.toStringAsFixed(2);
+                        final dateLine = i == 0
+                            ? '${DateFormat('EEEE d MMMM yyyy', 'fr_FR').format(day)}\n'
+                            : '';
+                        return LineTooltipItem(
+                          '$dateLine${acc.account.name}'
+                          '${isScenario ? ' (scénario)' : ''} : $valueLabel',
+                          const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.w600),
+                        );
+                      }(),
                   ],
                 ),
               ),
               lineBarsData: [
-                LineChartBarData(
-                  spots: [
-                    for (var i = 0; i < baseline.length; i++)
-                      FlSpot(i.toDouble(), baseline[i])
-                  ],
-                  isCurved: false,
-                  color: AppTheme.accent,
-                  barWidth: 2.5,
-                  dotData: const FlDotData(show: false),
-                ),
-                LineChartBarData(
-                  spots: [
-                    for (var i = 0; i < scenario.length; i++)
-                      FlSpot(i.toDouble(), scenario[i])
-                  ],
-                  isCurved: false,
-                  color: Colors.orange.shade700,
-                  barWidth: 2.5,
-                  dashArray: const [6, 5],
-                  dotData: const FlDotData(show: false),
-                ),
+                for (final s in series) ...[
+                  LineChartBarData(
+                    spots: [
+                      for (var i = 0; i < s.baseline.length; i++)
+                        FlSpot(i.toDouble(), s.baseline[i])
+                    ],
+                    isCurved: false,
+                    color: s.color,
+                    barWidth: 2.5,
+                    dotData: const FlDotData(show: false),
+                  ),
+                  LineChartBarData(
+                    spots: [
+                      for (var i = 0; i < s.scenario.length; i++)
+                        FlSpot(i.toDouble(), s.scenario[i])
+                    ],
+                    isCurved: false,
+                    color: s.color,
+                    barWidth: 2.5,
+                    dashArray: const [6, 5],
+                    dotData: const FlDotData(show: false),
+                  ),
+                ],
               ],
             ),
           ),
