@@ -1931,7 +1931,7 @@ class _AccountSeries {
 /// [MmexRepository.historicalDiscretionaryMonthlyAverage], and since
 /// 2026-09-02 also anchors [assumedFinalBalance] - see that field's own doc
 /// comment.
-class _SimulationChart extends StatelessWidget {
+class _SimulationChart extends StatefulWidget {
   final MmexRepository repo;
   final int scenarioId;
   final List<int> accountIds;
@@ -1949,6 +1949,32 @@ class _SimulationChart extends StatelessWidget {
     required this.currency,
     required this.startDay,
   });
+
+  @override
+  State<_SimulationChart> createState() => _SimulationChartState();
+}
+
+class _SimulationChartState extends State<_SimulationChart> {
+  /// 2026-09 user request: with several accounts selected, the chart shows
+  /// a solid ("sans changement") and dashed ("avec ce scénario") line per
+  /// account at once - a lot of visual clutter once you only care about the
+  /// scenario's actual effect. This hides every solid line at once (never
+  /// per-account: a single switch is simpler to reason about than tracking
+  /// which accounts a scenario actually touches, and the dashed line alone
+  /// already shows "unchanged" by tracing the same path as the baseline
+  /// would have). Purely a display toggle, never persisted - resets to
+  /// showing both on next visit, same as the other view-only chart state in
+  /// this file (no equivalent to _panelCollapsed's persistence expected
+  /// here).
+  bool _hideUnchanged = false;
+
+  MmexRepository get repo => widget.repo;
+  int get scenarioId => widget.scenarioId;
+  List<int> get accountIds => widget.accountIds;
+  List<Account> get accounts => widget.accounts;
+  int get horizonMonths => widget.horizonMonths;
+  CurrencyFormat? get currency => widget.currency;
+  int get startDay => widget.startDay;
 
   List<double> _cumulative(
       Map<DateTime, double> dailyNet, double startingBalance) {
@@ -2047,7 +2073,7 @@ class _SimulationChart extends StatelessWidget {
     }
 
     final allValues = [
-      for (final s in series) ...s.baseline,
+      if (!_hideUnchanged) for (final s in series) ...s.baseline,
       for (final s in series) ...s.scenario,
     ];
     final minY = allValues.reduce((a, b) => a < b ? a : b);
@@ -2067,8 +2093,28 @@ class _SimulationChart extends StatelessWidget {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             for (final s in series) _Legend(color: s.color, label: s.account.name),
-            _Legend(color: outline, label: 'Sans changement'),
+            if (!_hideUnchanged) _Legend(color: outline, label: 'Sans changement'),
             _Legend(color: outline, label: 'Avec ce scénario', dashed: true),
+            InkWell(
+              onTap: () => setState(() => _hideUnchanged = !_hideUnchanged),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _hideUnchanged ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                    size: 16,
+                    color: outline,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    _hideUnchanged
+                        ? 'Projections sans changement masquées'
+                        : 'Masquer les projections sans changement',
+                    style: TextStyle(fontSize: 12, color: outline),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         if (points.isNotEmpty) ...[
@@ -2154,10 +2200,13 @@ class _SimulationChart extends StatelessWidget {
                     for (var i = 0; i < spots.length; i++)
                       () {
                         final s = spots[i];
-                        // 2 bars per account, in the same order as [series]
-                        // (baseline then scenario) - see lineBarsData below.
-                        final seriesIndex = s.barIndex ~/ 2;
-                        final isScenario = s.barIndex.isOdd;
+                        // 2 bars per account normally (baseline then
+                        // scenario, see lineBarsData below) - only 1 (the
+                        // scenario alone) when the solid baseline is hidden.
+                        final barsPerAccount = _hideUnchanged ? 1 : 2;
+                        final seriesIndex = s.barIndex ~/ barsPerAccount;
+                        final isScenario =
+                            _hideUnchanged || s.barIndex.isOdd;
                         final acc = series[seriesIndex];
                         final day = points[s.x.round()];
                         final valueLabel =
@@ -2177,16 +2226,17 @@ class _SimulationChart extends StatelessWidget {
               ),
               lineBarsData: [
                 for (final s in series) ...[
-                  LineChartBarData(
-                    spots: [
-                      for (var i = 0; i < s.baseline.length; i++)
-                        FlSpot(i.toDouble(), s.baseline[i])
-                    ],
-                    isCurved: false,
-                    color: s.color,
-                    barWidth: 2.5,
-                    dotData: const FlDotData(show: false),
-                  ),
+                  if (!_hideUnchanged)
+                    LineChartBarData(
+                      spots: [
+                        for (var i = 0; i < s.baseline.length; i++)
+                          FlSpot(i.toDouble(), s.baseline[i])
+                      ],
+                      isCurved: false,
+                      color: s.color,
+                      barWidth: 2.5,
+                      dotData: const FlDotData(show: false),
+                    ),
                   LineChartBarData(
                     spots: [
                       for (var i = 0; i < s.scenario.length; i++)
