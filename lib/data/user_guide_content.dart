@@ -74,9 +74,27 @@ Les factures, salaires ou virements qui reviennent régulièrement. Pour chacune
 • Automatique avec confirmation : l'application vous demande, à l'ouverture, si elle doit l'enregistrer.
 • Automatique silencieuse : elle est enregistrée sans rien demander (un petit message le confirme).
 
-Une case à cocher permet de mettre une opération en pause (elle est alors ignorée par l'enregistrement automatique et les prévisions). Une durée limitée peut être fixée (ex : un crédit sur 12 mensualités) - la liste affiche alors "3/12".
+Une case à cocher permet de mettre une opération en pause (elle est alors ignorée par l'enregistrement automatique et les prévisions, et reléguée en bas de la liste). Une durée limitée peut être fixée (ex : un crédit sur 12 mensualités) - la liste affiche alors "3/12". Le bouton "Dupliquer" repart d'une opération existante sans tout ressaisir.
+
+L'icône 📈 ouvre "Augmentation annuelle" : un pourcentage qui compose chaque année, à la date anniversaire choisie, le montant utilisé dans les projections (Simulation, prévision de solde) - jamais le montant réel de l'opération elle-même. L'application suggère une valeur à partir de l'historique réel de cette opération précise (minimum 3 ans de recul), mais rien n'est jamais appliqué automatiquement : la suggestion doit être acceptée puis enregistrée.
 
 Supprimer une opération récurrente ne supprime jamais les transactions déjà enregistrées : seul le modèle disparaît.''',
+  ),
+  GuideSection(
+    icon: Icons.query_stats_outlined,
+    title: 'Simulation long terme',
+    body: '''
+Des scénarios "et si" sur plusieurs années, comptes sélectionnés un par un (chacun avec sa propre courbe et son propre écart affiché). Contrairement au mode simulation du Budget (qui ne porte que sur un mois), ici l'horizon est long terme - préparer une retraite, un changement de situation, etc.
+
+Pour chaque scénario, trois leviers combinables : désactiver ou changer le montant d'une opération récurrente réelle à partir d'une date donnée, ajouter une opération récurrente virtuelle qui n'existe que dans le scénario (ex. "pension de retraite +1200€/mois à partir de 2035"), ou ajouter un événement ponctuel (ex. "capital +50000€ le 01/06/2035"). Un "solde final supposé" par compte peut aussi remplacer la projection brute par un chiffre auquel vous faites plus confiance, ré-appliqué chaque mois.
+
+Le calcul est 100% déterministe (jamais délégué à une IA) : mêmes règles de projection que la prévision de solde du tableau de bord, augmentation annuelle des opérations récurrentes comprise. Le panneau des ajustements peut être replié pour ne garder que le graphique.''',
+  ),
+  GuideSection(
+    icon: Icons.donut_large_outlined,
+    title: 'Explorateur de dépenses',
+    body: '''
+Répartition des dépenses (ou revenus) par catégorie sur une période choisie, avec filtre par compte. Touchez une part du graphique ou une ligne de la légende pour voir le détail des transactions derrière.''',
   ),
   GuideSection(
     icon: Icons.account_balance_outlined,
@@ -88,11 +106,13 @@ Attention : "Supprimer" efface le compte immédiatement, sans confirmation. Les 
   ),
   GuideSection(
     icon: Icons.category_outlined,
-    title: 'Catégories (Paramètres)',
+    title: 'Catégories et Tiers (Paramètres)',
     body: '''
-Deux niveaux seulement (catégorie et sous-catégorie, pas plus). Le menu "..." de chaque catégorie propose Renommer, Fusionner, Archiver/Réactiver et Supprimer.
+Catégories : deux niveaux seulement (catégorie et sous-catégorie, pas plus). Le menu "..." de chaque catégorie propose Renommer, Fusionner, Archiver/Réactiver et Supprimer.
 
-Renommer ou déplacer une catégorie ne touche jamais aux transactions déjà enregistrées avec elle. "Fusionner" déplace tout (transactions, opérations récurrentes, budget) d'une catégorie vers une autre puis supprime la première - uniquement proposé si elle n'a pas de sous-catégorie. Une catégorie encore utilisée ne peut pas être supprimée : l'application explique précisément ce qui l'utilise et propose "Archiver" à la place, qui la cache des listes tout en gardant son historique intact.''',
+Renommer ou déplacer une catégorie ne touche jamais aux transactions déjà enregistrées avec elle. "Fusionner" déplace tout (transactions, opérations récurrentes, budget) d'une catégorie vers une autre puis supprime la première - uniquement proposé si elle n'a pas de sous-catégorie. Une catégorie encore utilisée ne peut pas être supprimée : l'application explique précisément ce qui l'utilise et propose "Archiver" à la place, qui la cache des listes tout en gardant son historique intact.
+
+Tiers : un écran équivalent, plus simple (pas de hiérarchie), pour renommer, fusionner ou supprimer un tiers.''',
   ),
   GuideSection(
     icon: Icons.chat_bubble_outline,
@@ -112,7 +132,11 @@ Sans IA (donc sur toutes les plateformes), la reconnaissance se fait par mots cl
 
 Périodes reconnues : aujourd'hui, hier, cette semaine, la semaine dernière, ce mois, le mois dernier, cette année, l'année dernière, "les 3 derniers mois", "les 15 derniers jours", un nom de mois (avec ou sans année), une année seule (ex. 2025), ou une plage explicite ("du 01/06/2026 au 30/06/2026") - sans précision, c'est le mois en cours. Un compte ou un tiers cité par son nom (ex. "chez Carrefour") filtre la question dessus.
 
-Sur Windows uniquement, une IA locale optionnelle (Paramètres > IA locale) peut comprendre des formulations beaucoup plus libres - elle tourne entièrement sur votre ordinateur, sans connexion internet, et ne calcule jamais elle-même un chiffre : elle choisit seulement ce qu'il faut calculer, le calcul réel est toujours fait par l'application à partir de vos vraies données.''',
+Deux IA optionnelles (Paramètres) peuvent prendre le relais pour des formulations beaucoup plus libres, ou une vraie question d'analyse ("analyse mes dépenses liées aux vacances sur les 3 derniers mois") :
+• IA locale : sur ordinateur, un modèle téléchargé et exécuté sur votre machine, sans connexion internet. Sur navigateur web, elle parle à un serveur llama.cpp que vous faites tourner vous-même sur votre PC (adresse à renseigner dans Paramètres > IA locale).
+• IA cloud : un service compatible OpenAI (ex. OpenRouter) avec votre propre clé API, pour ne rien installer localement.
+
+Dans les deux cas, l'IA ne fait jamais que choisir quoi calculer (et, en mode "accès complet aux données", écrire des requêtes en lecture seule) - jamais de calcul ni d'écriture laissés au modèle : le résultat vient toujours de vos vraies données.''',
   ),
   GuideSection(
     icon: Icons.lock_outline,
@@ -120,7 +144,9 @@ Sur Windows uniquement, une IA locale optionnelle (Paramètres > IA locale) peut
     body: '''
 Paramètres > Code PIN. Un code d'au moins 4 chiffres, demandé à chaque ouverture et à chaque retour au premier plan. Après plusieurs codes erronés (réglable), l'application se verrouille temporairement (durée réglable elle aussi).
 
-Il n'existe aucune récupération en cas de code oublié - si vous le perdez, il n'y a pas de "code oublié". Le code, comme tous les autres réglages, est stocké chiffré à côté du fichier .mmb (voir la section suivante) : il est donc le même sur tous vos appareils qui ouvrent ce fichier.''',
+Il n'existe aucune récupération en cas de code oublié - si vous le perdez, il n'y a pas de "code oublié". Le code, comme tous les autres réglages, est stocké chiffré à côté du fichier .mmb (voir la section suivante) : il est donc le même sur tous vos appareils qui ouvrent ce fichier.
+
+Un verrouillage automatique par inactivité (durée réglable, désactivé par défaut) peut aussi verrouiller l'application après un moment sans interaction, sans attendre une vraie mise en arrière-plan.''',
   ),
   GuideSection(
     icon: Icons.sync_outlined,
@@ -143,5 +169,11 @@ La synchronisation se fait automatiquement à l'ouverture de l'application et qu
     title: 'Diagnostic de la base',
     body: '''
 Un contrôle en lecture seule (rien n'est modifié rien qu'en l'ouvrant) qui recherche : des références vers un compte/catégorie/tiers supprimé, des catégories mal formées, des doublons probables, des virements sans compte de destination. Les résultats sont classés par gravité ; toucher une transaction concernée ouvre directement sa fiche pour la corriger.''',
+  ),
+  GuideSection(
+    icon: Icons.system_update_outlined,
+    title: 'Mises à jour',
+    body: '''
+L'application vérifie automatiquement, à chaque démarrage, si une nouvelle version est disponible. Sur ordinateur, l'installation se fait silencieusement après votre accord initial. Sur Android, une confirmation du système est toujours demandée pour installer l'APK téléchargé (Android l'exige, ce n'est pas contournable).''',
   ),
 ];
