@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.98] - 2026-09-04
+
+- docs: mettre à jour le README et le guide embarqué
+- feat(recurring): augmentation annuelle par opération récurrente
+
 ## [1.0.97] - 2026-09-04
 
 - docs: noter l'idée de synchronisation Drive/Dropbox dans la roadmap
