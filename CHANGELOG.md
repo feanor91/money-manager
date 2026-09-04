@@ -3,6 +3,13 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.97] - 2026-09-04
+
+- docs: noter l'idée de synchronisation Drive/Dropbox dans la roadmap
+- feat(simulation): un jeu de courbes par compte sélectionné
+- fix(pin): mettre en pause le verrouillage auto quand une fenêtre est ouverte
+- fix(recurring): déplacer les opérations en pause en bas de la liste
+
 ## [1.0.96] - 2026-09-03
 
 - fix(ai): route to AI directly when configured, skip closed-vocabulary routing
