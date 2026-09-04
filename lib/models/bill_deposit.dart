@@ -36,6 +36,21 @@ class BillDeposit {
   /// `_seededMonthlyJitter`. A percentage (e.g. 10 = ±10%), never negative.
   final double variancePercent;
 
+  /// "Augmentation annuelle" (2026-09 user request) - a percentage this
+  /// bill's projected amount compounds by once per year, on each
+  /// anniversary of [annualIncreaseAnchor] (month/day only - the year is
+  /// irrelevant, only used to anchor the very first cycle). 0/null means
+  /// no increase, same flat amount forever, as before this existed. For a
+  /// real bill this is set explicitly (see
+  /// [MmexRepository.setBillAnnualIncrease]/[MmexRepository.suggestedAnnualIncrease]
+  /// for the historical-average suggestion) - deliberately global to every
+  /// simulation scenario at once, not a per-scenario override, since it's
+  /// a property of the real bill itself rather than a hypothetical
+  /// "what if" change (2026-09 user decision). For a virtual bill it's
+  /// always manual - there's no real history to suggest one from.
+  final double annualIncreasePercent;
+  final DateTime? annualIncreaseAnchor;
+
   const BillDeposit({
     required this.id,
     required this.accountId,
@@ -52,11 +67,18 @@ class BillDeposit {
     this.notes,
     this.paused = false,
     this.variancePercent = 0,
+    this.annualIncreasePercent = 0,
+    this.annualIncreaseAnchor,
   });
 
   /// Mirrors [MoneyTransaction.copyWith]: a non-transfer bill always has
   /// toAmount == amount too, so [amount] alone is enough - no separate
-  /// toAmount param to keep them in sync by construction.
+  /// toAmount param to keep them in sync by construction. Every other field
+  /// carries over unchanged (found 2026-09 while adding
+  /// [annualIncreasePercent]: this used to silently drop [variancePercent]
+  /// too whenever a scenario override changed the amount - the exact kind
+  /// of bug this doc comment already warns callers about, just never
+  /// actually fixed here before now).
   BillDeposit copyWith({double? amount}) {
     return BillDeposit(
       id: id,
@@ -73,10 +95,18 @@ class BillDeposit {
       numOccurrences: numOccurrences,
       notes: notes,
       paused: paused,
+      variancePercent: variancePercent,
+      annualIncreasePercent: annualIncreasePercent,
+      annualIncreaseAnchor: annualIncreaseAnchor,
     );
   }
 
-  factory BillDeposit.fromRow(Map<String, Object?> row, {bool paused = false}) {
+  factory BillDeposit.fromRow(
+    Map<String, Object?> row, {
+    bool paused = false,
+    double annualIncreasePercent = 0,
+    DateTime? annualIncreaseAnchor,
+  }) {
     final decoded = decodeRepeats((row['REPEATS'] as num?)?.toInt() ?? 3);
     return BillDeposit(
       id: row['BDID'] as int,
@@ -96,6 +126,8 @@ class BillDeposit {
       numOccurrences: (row['NUMOCCURRENCES'] as num?)?.toInt() ?? -1,
       notes: row['NOTES'] as String?,
       paused: paused,
+      annualIncreasePercent: annualIncreasePercent,
+      annualIncreaseAnchor: annualIncreaseAnchor,
     );
   }
 }

@@ -218,6 +218,21 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                     ),
                                   ),
                                   IconButton(
+                                    tooltip: bill.annualIncreasePercent != 0
+                                        ? 'Augmentation annuelle : '
+                                            '${bill.annualIncreasePercent.toStringAsFixed(1)} % '
+                                            '(le ${bill.annualIncreaseAnchor != null ? DateFormat.MMMd('fr_FR').format(bill.annualIncreaseAnchor!) : '?'})'
+                                        : 'Définir une augmentation annuelle',
+                                    icon: Icon(
+                                      Icons.trending_up,
+                                      color: bill.annualIncreasePercent != 0
+                                          ? Theme.of(context).colorScheme.primary
+                                          : null,
+                                    ),
+                                    onPressed: () =>
+                                        _editAnnualIncrease(context, bill),
+                                  ),
+                                  IconButton(
                                     tooltip: 'Enregistrer cette occurrence',
                                     icon: const Icon(Icons.playlist_add_check),
                                     onPressed: () =>
@@ -235,6 +250,23 @@ class _RecurringScreenState extends State<RecurringScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _editAnnualIncrease(BuildContext context, BillDeposit bill) async {
+    final dbProvider = context.read<DatabaseProvider>();
+    final repo = dbProvider.repository!;
+    final result = await showDialog<_AnnualIncreaseResult>(
+      context: context,
+      builder: (_) => _AnnualIncreaseDialog(repo: repo, bill: bill),
+    );
+    if (result == null) return;
+    if (result.cleared) {
+      repo.clearBillAnnualIncrease(bill.id);
+    } else {
+      repo.setBillAnnualIncrease(bill.id,
+          percent: result.percent!, anchor: result.anchor!);
+    }
+    dbProvider.touch();
   }
 
   Future<void> _recordOccurrence(BuildContext context, BillDeposit bill) async {
@@ -863,6 +895,156 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
 /// Lets the user record one occurrence of a recurring transaction: confirm
 /// (or edit) the actual execution date, and mark it reconciled right away
 /// if it already appeared on a bank statement.
+class _AnnualIncreaseResult {
+  final bool cleared;
+  final double? percent;
+  final DateTime? anchor;
+  const _AnnualIncreaseResult.cleared()
+      : cleared = true,
+        percent = null,
+        anchor = null;
+  const _AnnualIncreaseResult.set({required this.percent, required this.anchor})
+      : cleared = false;
+}
+
+/// "Augmentation annuelle" (2026-09 user request) - lets the user say a
+/// real recurring bill's projected amount should compound by X% every
+/// year (rent indexation, a subscription that always creeps up, ...),
+/// something a flat recurring-bill schedule can't otherwise express. Global
+/// to every simulation scenario at once, not a per-scenario override (see
+/// [BillDeposit.annualIncreasePercent]'s own doc comment) - so this lives
+/// here, in the recurring-operations screen itself, not inside a scenario.
+/// A suggested percentage/anchor date is offered when there's enough real
+/// history to compute one ([MmexRepository.suggestedAnnualIncrease]) - the
+/// user can accept it, adjust it, or ignore it and type their own.
+class _AnnualIncreaseDialog extends StatefulWidget {
+  final MmexRepository repo;
+  final BillDeposit bill;
+
+  const _AnnualIncreaseDialog({required this.repo, required this.bill});
+
+  @override
+  State<_AnnualIncreaseDialog> createState() => _AnnualIncreaseDialogState();
+}
+
+class _AnnualIncreaseDialogState extends State<_AnnualIncreaseDialog> {
+  late final _suggestion = widget.repo.suggestedAnnualIncrease(widget.bill.id);
+  late final _existing = widget.repo.getBillAnnualIncrease(widget.bill.id);
+  late double _percent = _existing?.percent ?? _suggestion?.percent ?? 0;
+  late DateTime _anchor =
+      _existing?.anchor ?? _suggestion?.anchor ?? widget.bill.nextOccurrence;
+  late final _percentController =
+      TextEditingController(text: _percent.toStringAsFixed(1));
+
+  @override
+  void dispose() {
+    _percentController.dispose();
+    super.dispose();
+  }
+
+  void _applySuggestion() {
+    final s = _suggestion;
+    if (s == null) return;
+    setState(() {
+      _percent = s.percent;
+      _anchor = s.anchor;
+      _percentController.text = _percent.toStringAsFixed(1);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Augmentation annuelle'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Le montant projeté dans la simulation augmente de ce '
+              'pourcentage chaque année, à partir de la date anniversaire '
+              '(seuls le jour et le mois comptent, pas l\'année). Le '
+              'montant réel de cette opération n\'est jamais modifié.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            if (_suggestion != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Suggestion d\'après l\'historique '
+                        '(${_suggestion.yearsSpan.toStringAsFixed(1)} ans) : '
+                        '${_suggestion.percent.toStringAsFixed(1)} %',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                        onPressed: _applySuggestion, child: const Text('Utiliser')),
+                  ],
+                ),
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Pas assez d\'historique pour suggérer une valeur (3 ans '
+                  'minimum) - saisis-la à la main si tu la connais.',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ),
+            TextField(
+              controller: _percentController,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true, signed: true),
+              decoration: const InputDecoration(labelText: 'Pourcentage par an'),
+              onChanged: (v) =>
+                  _percent = double.tryParse(v.replaceAll(',', '.')) ?? _percent,
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () async {
+                final picked = await pickDate(
+                  context: context,
+                  initialDate: _anchor,
+                  firstDate: DateTime(2000),
+                  lastDate: DateTime(DateTime.now().year + 60),
+                  helpText: 'Date anniversaire',
+                );
+                if (picked != null) setState(() => _anchor = picked);
+              },
+              child: InputDecorator(
+                decoration: const InputDecoration(labelText: 'Date anniversaire'),
+                child: Text(DateFormat('d MMMM', 'fr_FR').format(_anchor)),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (_existing != null)
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(const _AnnualIncreaseResult.cleared()),
+            child: const Text('Supprimer'),
+          ),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(
+              _AnnualIncreaseResult.set(percent: _percent, anchor: _anchor)),
+          child: const Text('Enregistrer'),
+        ),
+      ],
+    );
+  }
+}
+
 class _RecordOccurrenceDialog extends StatefulWidget {
   final BillDeposit bill;
   final MmexRepository repo;

@@ -260,6 +260,30 @@ class MmexRepository {
         PRIMARY KEY (SCENARIOID, ACCOUNTID)
       )
     ''');
+    // "Augmentation annuelle" per *real* recurring bill (2026-09 user
+    // request) - a percentage this bill's projected amount compounds by
+    // once per year, on the anniversary of ANCHOR_DATE (month/day only).
+    // Deliberately keyed by BILLID alone, not by scenario - a property of
+    // the bill itself (like its amount or its next due date), applied
+    // identically in every simulation scenario, never a per-scenario
+    // override (2026-09 user decision - keeps this consistent with "this
+    // is what the bill actually does", the same way pausing a bill or
+    // editing BILLSDEPOSITS_V1 directly would be). See
+    // MmexRepository.getBillAnnualIncrease/setBillAnnualIncrease/
+    // suggestedAnnualIncrease. A virtual bill's own equivalent lives
+    // directly on APP_SIM_VIRTUAL_BILLS below instead, since it has no
+    // BILLSDEPOSITS_V1 row to key off of.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_BILL_ANNUAL_INCREASE (
+        BILLID INTEGER PRIMARY KEY,
+        PERCENT REAL NOT NULL,
+        ANCHOR_DATE TEXT NOT NULL
+      )
+    ''');
+    _tryAddColumn('APP_SIM_VIRTUAL_BILLS', 'ANNUAL_INCREASE_PERCENT',
+        'REAL NOT NULL DEFAULT 0');
+    _tryAddColumn(
+        'APP_SIM_VIRTUAL_BILLS', 'ANNUAL_INCREASE_ANCHOR', 'TEXT');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1395,7 +1419,8 @@ class MmexRepository {
         final jitter = bill.variancePercent > 0
             ? _seededMonthlyJitter(bill.id, bucket, bill.variancePercent)
             : 0.0;
-        result[bucket] = current + signedAmount * (1 + jitter);
+        final growth = _annualGrowthFactor(bill, occurrence);
+        result[bucket] = current + signedAmount * growth * (1 + jitter);
       }
     }
     return result;
@@ -1962,10 +1987,24 @@ class MmexRepository {
     final rows = db.query(
         'SELECT * FROM BILLSDEPOSITS_V1 ORDER BY NEXTOCCURRENCEDATE ASC');
     final pausedIds = getPausedBillIds();
-    return rows
-        .map((row) => BillDeposit.fromRow(row,
-            paused: pausedIds.contains(row['BDID'] as int)))
-        .toList();
+    final increaseByBillId = {
+      for (final r in db.query(
+          'SELECT BILLID, PERCENT, ANCHOR_DATE FROM APP_BILL_ANNUAL_INCREASE'))
+        r['BILLID'] as int: (
+          percent: (r['PERCENT'] as num).toDouble(),
+          anchor: DateTime.tryParse(r['ANCHOR_DATE'] as String? ?? ''),
+        ),
+    };
+    return rows.map((row) {
+      final billId = row['BDID'] as int;
+      final increase = increaseByBillId[billId];
+      return BillDeposit.fromRow(
+        row,
+        paused: pausedIds.contains(billId),
+        annualIncreasePercent: increase?.percent ?? 0,
+        annualIncreaseAnchor: increase?.anchor,
+      );
+    }).toList();
   }
 
   static const _pausedBillsInfoName = 'MMEXFLUTTER_PAUSED_BILLS';
@@ -2006,6 +2045,138 @@ class MmexRepository {
         [value, _pausedBillsInfoName],
       );
     }
+  }
+
+  /// [billId]'s "augmentation annuelle" - see [BillDeposit.annualIncreasePercent]'s
+  /// own doc comment. Null if none is configured (0%, no compounding).
+  ({double percent, DateTime anchor})? getBillAnnualIncrease(int billId) {
+    final rows = db.query(
+        'SELECT PERCENT, ANCHOR_DATE FROM APP_BILL_ANNUAL_INCREASE WHERE BILLID = ?',
+        [billId]);
+    if (rows.isEmpty) return null;
+    final anchor =
+        DateTime.tryParse(rows.first['ANCHOR_DATE'] as String? ?? '');
+    if (anchor == null) return null;
+    return (percent: (rows.first['PERCENT'] as num).toDouble(), anchor: anchor);
+  }
+
+  /// Sets/replaces [billId]'s annual increase. [percent] of exactly 0
+  /// still writes a row (rather than clearing it) so an explicit "no
+  /// increase" is distinguishable from "never configured" if that ever
+  /// matters later - clearing is [clearBillAnnualIncrease] instead.
+  void setBillAnnualIncrease(int billId,
+      {required double percent, required DateTime anchor}) {
+    db.execute(
+        'DELETE FROM APP_BILL_ANNUAL_INCREASE WHERE BILLID = ?', [billId]);
+    db.execute(
+      'INSERT INTO APP_BILL_ANNUAL_INCREASE (BILLID, PERCENT, ANCHOR_DATE) VALUES (?, ?, ?)',
+      [billId, percent, anchor.toIso8601String()],
+    );
+  }
+
+  void clearBillAnnualIncrease(int billId) {
+    db.execute(
+        'DELETE FROM APP_BILL_ANNUAL_INCREASE WHERE BILLID = ?', [billId]);
+  }
+
+  /// A suggested annual-increase percentage for [billId], computed from
+  /// this account+payee+category's *real* transaction history - never from
+  /// [APP_TRANSACTION_BILL_LINKS] (which only covers transactions recorded
+  /// by this app from the day that table was added on, so a bill that
+  /// predates it - the common case for a file imported from years of real
+  /// MMEX desktop use - would show almost no history there). Matches by
+  /// [BillDeposit.payeeId] + [BillDeposit.accountId] + [BillDeposit.transCode]
+  /// + [BillDeposit.categoryId] instead, the same identity [_billLabel]-style
+  /// UI already uses to name a bill, plus category - not perfectly precise
+  /// (an unrelated payment sharing the same payee *and* category would
+  /// still count too) but the only thing that actually reaches back before
+  /// this app existed, and the result is always a *suggestion* the user
+  /// reviews before saving, never applied silently. Category matters: a
+  /// payee is very often a whole bank or company with several unrelated
+  /// real bills under it (a mortgage, several separate insurance premiums,
+  /// ...) - payee alone used to silently mix all of them together (found
+  /// 2026-09 via a real user report of a nonsensical suggested rate).
+  ///
+  /// Compound annual growth rate between the very first and very last
+  /// matching transaction on record: `(last/first)^(1/yearsSpan) - 1`. Null
+  /// when there's fewer than 2 matching transactions, or when they don't
+  /// span at least 3 years (2026-09 user decision: one or two isolated
+  /// data points aren't statistically meaningful for a rate that then gets
+  /// compounded over a multi-decade simulation).
+  ({double percent, DateTime anchor, double yearsSpan})? suggestedAnnualIncrease(
+      int billId) {
+    BillDeposit? bill;
+    for (final b in getBillDeposits()) {
+      if (b.id == billId) {
+        bill = b;
+        break;
+      }
+    }
+    if (bill == null || bill.transCode == TransCode.transfer) return null;
+    // Also filtered by category, not just payee+account+transcode (found
+    // 2026-09 via a real user report: a bank ("Crédit Agricole") is a
+    // single payee for *several* completely different real bills - the
+    // mortgage itself, several separate insurance premiums - so payee alone
+    // silently mixed a mortgage's real installment history together with
+    // unrelated insurance payments, producing a nonsensical suggested rate
+    // (-43.8%/an on a fixed-rate mortgage that doesn't change at all).
+    // `CATEGID IS ?` (not `= ?`) so this still matches correctly when the
+    // bill has no category at all (both sides null) - SQLite's IS, unlike
+    // plain `=`, compares NULL to NULL as true.
+    //
+    // Category still isn't always enough: found the same day, on the same
+    // user's real data, that *two separate loans to the same bank* (a
+    // mortgage "Prêt appart" and a works loan "Prêt travaux") share payee +
+    // account + category + transcode, distinguished only by NOTES - without
+    // this extra filter their histories got interleaved by date, still
+    // producing a nonsensical rate (-27%/an on two loans that are each
+    // individually flat). MMEX has no real link from a real transaction
+    // back to the bill template it came from, so this is a heuristic like
+    // the category filter above, not a guaranteed-correct join - only
+    // applied when the bill actually has notes to match on, so bills
+    // without this ambiguity (the common case) aren't restricted further.
+    final notes = bill.notes;
+    final matchNotes = notes != null && notes.trim().isNotEmpty;
+    final rows = db.query(
+      'SELECT TRANSDATE, TRANSAMOUNT FROM CHECKINGACCOUNT_V1 '
+      'WHERE PAYEEID = ? AND ACCOUNTID = ? AND TRANSCODE = ? AND CATEGID IS ? '
+      "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '') "
+      '${matchNotes ? 'AND NOTES = ? ' : ''}'
+      'ORDER BY TRANSDATE',
+      [
+        bill.payeeId,
+        bill.accountId,
+        transCodeToString(bill.transCode),
+        bill.categoryId,
+        if (matchNotes) notes,
+      ],
+    );
+    if (rows.length < 2) return null;
+    final firstDate = DateTime.tryParse(rows.first['TRANSDATE'] as String? ?? '');
+    final lastDate = DateTime.tryParse(rows.last['TRANSDATE'] as String? ?? '');
+    final firstAmount = (rows.first['TRANSAMOUNT'] as num?)?.toDouble();
+    final lastAmount = (rows.last['TRANSAMOUNT'] as num?)?.toDouble();
+    if (firstDate == null ||
+        lastDate == null ||
+        firstAmount == null ||
+        firstAmount <= 0 ||
+        lastAmount == null) {
+      return null;
+    }
+    final yearsSpan = lastDate.difference(firstDate).inDays / 365.25;
+    if (yearsSpan < 3) return null;
+    final percent =
+        (pow(lastAmount / firstAmount, 1 / yearsSpan) - 1).toDouble() * 100;
+    // A category match alone still can't rule out a one-off outlier sharing
+    // it (an early repayment, a claim refund posted under the same
+    // category...) - a genuine metered/indexed increase realistically
+    // never compounds past ±30%/an over a multi-year span, so anything
+    // beyond that is far more likely contaminated data than a real rate.
+    // Never applied silently either way (see this method's own doc
+    // comment) - this only decides whether there's anything worth
+    // suggesting at all.
+    if (percent.abs() > 30) return null;
+    return (percent: percent, anchor: lastDate, yearsSpan: yearsSpan);
   }
 
   int insertBillDeposit({
@@ -2438,7 +2609,8 @@ class MmexRepository {
         final jitter = bill.variancePercent > 0
             ? _seededMonthlyJitter(bill.id, bucket, bill.variancePercent)
             : 0.0;
-        result[bucket] = current + signedAmount * (1 + jitter);
+        final growth = _annualGrowthFactor(bill, occurrence);
+        result[bucket] = current + signedAmount * growth * (1 + jitter);
       }
     }
     return result;
@@ -2458,6 +2630,28 @@ class MmexRepository {
     final seed = billId * 1000003 + month.year * 100 + month.month;
     final fraction = Random(seed).nextDouble() * 2 - 1; // [-1, 1)
     return fraction * (variancePercent / 100);
+  }
+
+  /// Compounded "augmentation annuelle" multiplier for one occurrence of
+  /// [bill] - see [BillDeposit.annualIncreasePercent]'s own doc comment.
+  /// 1.0 (no change) whenever it's not configured. Otherwise
+  /// `(1 + percent/100) ^ yearsElapsed`, where [yearsElapsed] counts how
+  /// many times [BillDeposit.annualIncreaseAnchor]'s month/day has been
+  /// reached on or before [occurrence] - so the very first anniversary
+  /// itself already carries the first bump (a bill due exactly on its
+  /// anchor date has already "had its birthday" that day), and every
+  /// occurrence between two anniversaries shares the same, already-bumped
+  /// amount rather than drifting continuously.
+  double _annualGrowthFactor(BillDeposit bill, DateTime occurrence) {
+    final anchor = bill.annualIncreaseAnchor;
+    if (bill.annualIncreasePercent == 0 || anchor == null) return 1.0;
+    var years = occurrence.year - anchor.year;
+    if (occurrence.month < anchor.month ||
+        (occurrence.month == anchor.month && occurrence.day < anchor.day)) {
+      years -= 1;
+    }
+    if (years <= 0) return 1.0;
+    return pow(1 + bill.annualIncreasePercent / 100, years).toDouble();
   }
 
   /// Public wrapper around the private occurrence-projection engine, for
@@ -2611,11 +2805,13 @@ class MmexRepository {
     required RecurrencePeriod period,
     int numOccurrences = -1,
     double variancePercent = 0,
+    double annualIncreasePercent = 0,
+    DateTime? annualIncreaseAnchor,
   }) {
     return db.execute(
       'INSERT INTO APP_SIM_VIRTUAL_BILLS '
-      '(SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, START_DATE, PERIOD, NUM_OCCURRENCES, VARIANCE_PERCENT) '
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      '(SCENARIOID, ACCOUNTID, LABEL, TRANSCODE, AMOUNT, START_DATE, PERIOD, NUM_OCCURRENCES, VARIANCE_PERCENT, ANNUAL_INCREASE_PERCENT, ANNUAL_INCREASE_ANCHOR) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         scenarioId,
         accountId,
@@ -2626,6 +2822,8 @@ class MmexRepository {
         period.name,
         numOccurrences,
         variancePercent,
+        annualIncreasePercent,
+        annualIncreaseAnchor?.toIso8601String(),
       ],
     );
   }
@@ -2825,7 +3023,8 @@ class MmexRepository {
         final jitter = bill.variancePercent > 0
             ? _seededMonthlyJitter(bill.id, key, bill.variancePercent)
             : 0.0;
-        result[key] = result[key]! + signedAmount * (1 + jitter);
+        final growth = _annualGrowthFactor(bill, occurrence);
+        result[key] = result[key]! + signedAmount * growth * (1 + jitter);
       }
     }
     return result;

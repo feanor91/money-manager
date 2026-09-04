@@ -129,6 +129,12 @@ class SimVirtualBill {
   /// same amount every occurrence, same as before this field existed.
   final double variancePercent;
 
+  /// See [BillDeposit.annualIncreasePercent]/[annualIncreaseAnchor] - always
+  /// manual here (no real transaction history to suggest one from, unlike
+  /// a real bill).
+  final double annualIncreasePercent;
+  final DateTime? annualIncreaseAnchor;
+
   const SimVirtualBill({
     required this.id,
     required this.scenarioId,
@@ -140,6 +146,8 @@ class SimVirtualBill {
     required this.period,
     this.numOccurrences = -1,
     this.variancePercent = 0,
+    this.annualIncreasePercent = 0,
+    this.annualIncreaseAnchor,
   });
 
   /// Reuses the exact same occurrence-projection code real bills go
@@ -160,6 +168,8 @@ class SimVirtualBill {
         numOccurrences: numOccurrences,
         notes: label,
         variancePercent: variancePercent,
+        annualIncreasePercent: annualIncreasePercent,
+        annualIncreaseAnchor: annualIncreaseAnchor,
       );
 
   factory SimVirtualBill.fromRow(Map<String, Object?> row) {
@@ -183,6 +193,10 @@ class SimVirtualBill {
               RecurrencePeriod.none,
       numOccurrences: (row['NUM_OCCURRENCES'] as num?)?.toInt() ?? -1,
       variancePercent: (row['VARIANCE_PERCENT'] as num?)?.toDouble() ?? 0,
+      annualIncreasePercent:
+          (row['ANNUAL_INCREASE_PERCENT'] as num?)?.toDouble() ?? 0,
+      annualIncreaseAnchor:
+          DateTime.tryParse(row['ANNUAL_INCREASE_ANCHOR'] as String? ?? ''),
     );
   }
 }
