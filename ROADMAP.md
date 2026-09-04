@@ -38,6 +38,16 @@ courses, pas des engagements.
     d'autre que son utilisateur actuel - gros travail mécanique (extraire
     toutes les chaînes) plutôt que complexe, mais pas prioritaire tant
     qu'il n'y a qu'un seul utilisateur francophone.
+- **Synchronisation via Google Drive ou Dropbox**, en plus du WebDAV
+  actuel (Nextcloud). Pas juste un changement de config : `WebDavConfig`
+  construit son URL en dur sur la structure spécifique de Nextcloud
+  (`/remote.php/dav/files/<utilisateur>/...`, voir `webdav_client.dart`),
+  et ni Drive ni Dropbox ne parlent WebDAV nativement de toute façon
+  (Dropbox l'a retiré il y a des années, Drive ne l'a jamais eu) - il
+  faudrait un vrai backend de sync séparé sur leurs API propres, pas une
+  extension du client WebDAV existant. Noté 2026-09-03 suite à une
+  question de l'utilisateur, pour ne pas l'oublier si le besoin se
+  présente un jour - pas de demande concrète pour l'instant.
 
 ## Récemment fait
 
