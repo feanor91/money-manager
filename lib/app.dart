@@ -51,6 +51,10 @@ class MoneyManagerApp extends StatelessWidget {
         '/settings': (_) => const SettingsScreen(),
       },
       home: const HomeShell(),
+      // Lets InactivityLockWatcher tell any dialog/bottom sheet/popup menu
+      // apart from genuine idleness - see DialogActivityObserver's own doc
+      // comment.
+      navigatorObservers: [dialogActivityObserver],
       // Wraps *every* route this MaterialApp ever builds - home, "/settings",
       // or any future one - not just "/". This is deliberate: on web, a
       // browser refresh while the address bar shows a named route (e.g.
