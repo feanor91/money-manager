@@ -75,12 +75,12 @@ class _RecurringScreenState extends State<RecurringScreen> {
       return haystack.contains(query);
     }
 
-    // Paused operations first, so they stay visible/easy to find (and
-    // un-pause) instead of blending into the rest of the list - everything
-    // else sorted by next-occurrence date, soonest first.
+    // Paused operations last, out of the way of the active schedule -
+    // everything else sorted by next-occurrence date, soonest first (2026-09
+    // user request, reversing the original "paused first" order).
     final bills = allBills.where(matchesBill).toList()
       ..sort((a, b) {
-        if (a.paused != b.paused) return a.paused ? -1 : 1;
+        if (a.paused != b.paused) return a.paused ? 1 : -1;
         return a.nextOccurrence.compareTo(b.nextOccurrence);
       });
 
