@@ -284,6 +284,36 @@ class MmexRepository {
         'REAL NOT NULL DEFAULT 0');
     _tryAddColumn(
         'APP_SIM_VIRTUAL_BILLS', 'ANNUAL_INCREASE_ANCHOR', 'TEXT');
+    // "Retour à l'équilibre" (2026-09-04 user report, replacing "solde
+    // final supposé" above) - the old mechanism forced a scenario's
+    // running balance to snap to one fixed value every month, but real
+    // data flatly contradicts that shape: a strong negative correlation
+    // (-0.60 to -0.78, measured on two real accounts) between "balance at
+    // the start of a pay cycle" and "real net change over that cycle"
+    // shows this user's spending expands to consume whatever surplus
+    // exists and contracts when the balance runs low - a genuine
+    // mean-reverting process, not a fixed target. See
+    // MmexRepository.simulatedDailyNetWithMeanReversion for the
+    // replacement calculation. ENABLED is its own column, independent of
+    // every other value here, specifically so switching the effect off
+    // and back on never requires re-entering EQUILIBRIUM/STRENGTH/
+    // NOISE_PERCENT (2026-09-04 user request: the old feature could only
+    // be turned off by clearing its one text field, losing the number).
+    // EQUILIBRIUM is nullable for the same "still means something at
+    // NULL" reason APP_SIM_ASSUMED_FINAL_BALANCES.AMOUNT is: a saved NULL
+    // means "use the auto-computed suggestion, whatever it is *this*
+    // time", not "0" - see [getSimMeanReversion]'s own doc comment.
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_SIM_MEAN_REVERSION (
+        SCENARIOID INTEGER NOT NULL,
+        ACCOUNTID INTEGER NOT NULL,
+        ENABLED INTEGER NOT NULL DEFAULT 1,
+        EQUILIBRIUM REAL,
+        STRENGTH REAL NOT NULL DEFAULT 0.5,
+        NOISE_PERCENT REAL NOT NULL DEFAULT 100,
+        PRIMARY KEY (SCENARIOID, ACCOUNTID)
+      )
+    ''');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1622,6 +1652,101 @@ class MmexRepository {
     return (net: net, appliedDates: appliedDates, ignoredDates: ignoredDates);
   }
 
+  /// Deterministic, reproducible "noise" for
+  /// [simulatedDailyNetWithMeanReversion]'s random monthly jitter - same
+  /// (scenario, account, month) always yields the same value, same
+  /// reliability property [_seededMonthlyJitter] gives bill variance.
+  /// Uniform in [-noiseAmount, +noiseAmount] - [noiseAmount] is already an
+  /// absolute euro figure by the time it reaches here (the caller scales
+  /// this account's own real historical volatility by a percentage), not
+  /// a percent-of-something-else the way [_seededMonthlyJitter]'s is,
+  /// since a mean-reversion target can legitimately sit near zero (no
+  /// natural "base amount" to take a percentage of).
+  double _seededReversionJitter(
+      int scenarioId, int accountId, DateTime month, double noiseAmount) {
+    final seed =
+        scenarioId * 7919 + accountId * 1000003 + month.year * 100 + month.month;
+    final fraction = Random(seed).nextDouble() * 2 - 1; // [-1, 1)
+    return fraction * noiseAmount;
+  }
+
+  /// Replaces [simulatedDailyNetWithAssumedFinalBalance] with a
+  /// "retour à l'équilibre" (mean-reverting) adjustment (2026-09-04 user
+  /// report, backed by real data): comparing this user's real balance
+  /// history to what recurring bills alone would predict revealed a
+  /// strong *negative* correlation (-0.60 on one real account, -0.78 on
+  /// another) between "balance at the start of a pay cycle" and "real net
+  /// change over that cycle" - i.e. a surplus tends to get spent, and a
+  /// shortfall tends to get reined in. That's a genuine mean-reverting
+  /// process, not a fixed monthly target the old mechanism assumed - a
+  /// model that only ever snaps to (or adds) one constant number has no
+  /// way to represent it, and drifts monotonically over a long horizon in
+  /// a way this user's own 3 years of history flatly contradicts.
+  ///
+  /// At every monthly occurrence of [forecastDay], this pulls the
+  /// *running* projected balance a [strength] fraction of the way back
+  /// toward [equilibrium] (0 = no pull at all; 1 = snap exactly to
+  /// [equilibrium] every time, which degrades to behaving like the old
+  /// mechanism's "always applied" case; something like 0.3-0.6 for a
+  /// realistic partial correction), then adds a deterministic-per-month
+  /// random jitter of up to ±[noiseAmount] (see
+  /// [_seededReversionJitter]) - unlike the old mechanism, this is never
+  /// skipped based on the running total's sign: real life pulls back
+  /// toward the equilibrium from *both* directions (see the negative
+  /// correlation above), so gating on positive-only would silently
+  /// reintroduce the exact asymmetry this replaces. [enabled]: false
+  /// short-circuits to the unmodified [simulatedDailyNet] series with an
+  /// empty [appliedDates] - "activer/désactiver" (2026-09-04 user
+  /// request) without needing to forget [equilibrium]/[strength]/
+  /// [noiseAmount] to turn the effect off. Never touches the baseline
+  /// ("sans changement") series - only ever called for the *scenario*
+  /// line, same convention the old mechanism followed.
+  ({Map<DateTime, double> net, List<DateTime> appliedDates})
+      simulatedDailyNetWithMeanReversion({
+    required int scenarioId,
+    required int accountId,
+    required bool enabled,
+    required double equilibrium,
+    required double strength,
+    required double noiseAmount,
+    required DateTime anchor,
+    required int days,
+    required int forecastDay,
+  }) {
+    final net = simulatedDailyNet(
+        scenarioId: scenarioId, anchor: anchor, days: days, accountId: accountId);
+    if (!enabled) return (net: net, appliedDates: const []);
+
+    final anchorDay = DateTime(anchor.year, anchor.month, anchor.day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    var runningTotal = accountBalance(accountId, asOf: today);
+    final futureReal =
+        futureDailyNet(after: today, end: anchorDay, accountId: accountId);
+
+    final appliedDates = <DateTime>[];
+    var cursor = _addDays(today, 1);
+    var checkpoint = nextForecastDay(today, forecastDay);
+    while (!checkpoint.isAfter(anchorDay)) {
+      while (!cursor.isAfter(checkpoint)) {
+        runningTotal += (net[cursor] ?? 0.0) + (futureReal[cursor] ?? 0.0);
+        cursor = _addDays(cursor, 1);
+      }
+      final gap = runningTotal - equilibrium;
+      final correction = -strength * gap;
+      final jitter = noiseAmount > 0
+          ? _seededReversionJitter(scenarioId, accountId, checkpoint, noiseAmount)
+          : 0.0;
+      final delta = correction + jitter;
+      net[checkpoint] = (net[checkpoint] ?? 0) + delta;
+      runningTotal += delta;
+      appliedDates.add(checkpoint);
+      checkpoint = nextForecastDay(_addDays(checkpoint, 1), forecastDay);
+    }
+
+    return (net: net, appliedDates: appliedDates);
+  }
+
   /// First future calendar day [accountId]'s projected running balance dips
   /// below zero, projecting forward from today with the same mechanical
   /// simulation [forecastAccountBalance] uses (known recurring bills via
@@ -2556,17 +2681,76 @@ class MmexRepository {
     required int startDay,
     int months = 12,
   }) {
-    if (months <= 0) return 0;
+    final residuals = _discretionaryResiduals(
+        accountId: accountId, anchor: anchor, startDay: startDay, months: months);
+    if (residuals.isEmpty) return 0;
+    return residuals.reduce((a, b) => a + b) / residuals.length;
+  }
+
+  /// Standard deviation of the same per-pay-cycle residual series
+  /// [historicalDiscretionaryMonthlyAverage] averages - the natural
+  /// real-world scale for a "retour à l'équilibre" simulation's random
+  /// noise term (2026-09-04, see [simulatedDailyNetWithMeanReversion]).
+  /// 0 if there are fewer than 2 data points (can't measure spread from
+  /// one number).
+  double historicalDiscretionaryMonthlyStdev({
+    int? accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) {
+    final residuals = _discretionaryResiduals(
+        accountId: accountId, anchor: anchor, startDay: startDay, months: months);
+    if (residuals.length < 2) return 0;
+    final mean = residuals.reduce((a, b) => a + b) / residuals.length;
+    final variance = residuals
+            .map((r) => (r - mean) * (r - mean))
+            .reduce((a, b) => a + b) /
+        residuals.length;
+    return sqrt(variance);
+  }
+
+  /// Shared "real minus recurring" per-pay-cycle series behind
+  /// [historicalDiscretionaryMonthlyAverage]/[historicalDiscretionaryMonthlyStdev] -
+  /// one mechanism computing it, not two that could quietly drift apart.
+  List<double> _discretionaryResiduals({
+    int? accountId,
+    required DateTime anchor,
+    required int startDay,
+    required int months,
+  }) {
+    if (months <= 0) return const [];
     final windows = _consecutiveWindowsEndingAt(anchor, months, startDay);
     final real = _realNetByWindows(windows, accountId: accountId);
     final recurring =
         _netForBillsByWindows(getBillDeposits(), windows, accountId: accountId);
-    var totalResidual = 0.0;
+    return [
+      for (final w in windows)
+        (real[w.lastIncludedDay] ?? 0) - (recurring[w.lastIncludedDay] ?? 0),
+    ];
+  }
+
+  /// Average *real* account balance as of the pay-cycle date itself
+  /// ([startDay]), over the last [months] pay cycles up to [anchor] - the
+  /// natural "equilibrium" a mean-reverting simulation pulls back toward
+  /// (2026-09-04, see [simulatedDailyNetWithMeanReversion]'s own doc
+  /// comment for why a *level* like this, not just an average *delta*
+  /// like [historicalDiscretionaryMonthlyAverage], is what a reversion
+  /// term needs to aim at). 0 if [months] <= 0.
+  double historicalEquilibriumBalance({
+    required int accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) {
+    if (months <= 0) return 0;
+    final windows = _consecutiveWindowsEndingAt(anchor, months, startDay);
+    if (windows.isEmpty) return 0;
+    var total = 0.0;
     for (final w in windows) {
-      final key = w.lastIncludedDay;
-      totalResidual += (real[key] ?? 0) - (recurring[key] ?? 0);
+      total += accountBalance(accountId, asOf: w.lastIncludedDay);
     }
-    return totalResidual / months;
+    return total / windows.length;
   }
 
   /// Shared bucketing core behind [recurringMonthlyNet] and
@@ -2734,13 +2918,92 @@ class MmexRepository {
     );
   }
 
+  /// [scenarioId]'s "retour à l'équilibre" settings for one specific
+  /// [accountId] - see [simulatedDailyNetWithMeanReversion]'s own doc
+  /// comment for the full replacement-for-"solde final supposé" story.
+  /// Null means this account has never had this configured at all (not
+  /// the same as `enabled: false` - a *deliberately disabled* setting
+  /// still returns its saved [equilibrium]/[strength]/[noisePercent], so
+  /// re-enabling it doesn't lose them). [equilibrium] is null when the
+  /// user has never overridden the auto-computed suggestion - callers
+  /// should fall back to [historicalEquilibriumBalance] in that case
+  /// (exactly like [_MeanReversionDialogState] does).
+  ({bool enabled, double? equilibrium, double strength, double noisePercent})?
+      getSimMeanReversion(int scenarioId, int accountId) {
+    final rows = db.query(
+      'SELECT ENABLED, EQUILIBRIUM, STRENGTH, NOISE_PERCENT FROM APP_SIM_MEAN_REVERSION '
+      'WHERE SCENARIOID = ? AND ACCOUNTID = ?',
+      [scenarioId, accountId],
+    );
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return (
+      enabled: (row['ENABLED'] as int? ?? 1) != 0,
+      equilibrium: (row['EQUILIBRIUM'] as num?)?.toDouble(),
+      strength: (row['STRENGTH'] as num?)?.toDouble() ?? 0.5,
+      noisePercent: (row['NOISE_PERCENT'] as num?)?.toDouble() ?? 100,
+    );
+  }
+
+  /// Saves [accountId]'s full "retour à l'équilibre" configuration within
+  /// [scenarioId] - a second call for the same (scenario, account) pair
+  /// replaces the first, same upsert convention as
+  /// [upsertSimBillOverride]. Pass [equilibrium] as null to mean "always
+  /// use the auto-computed suggestion, even if it changes later" rather
+  /// than freezing today's number.
+  void setSimMeanReversion(
+    int scenarioId,
+    int accountId, {
+    required bool enabled,
+    double? equilibrium,
+    required double strength,
+    required double noisePercent,
+  }) {
+    db.execute(
+      'INSERT INTO APP_SIM_MEAN_REVERSION '
+      '(SCENARIOID, ACCOUNTID, ENABLED, EQUILIBRIUM, STRENGTH, NOISE_PERCENT) '
+      'VALUES (?, ?, ?, ?, ?, ?) '
+      'ON CONFLICT(SCENARIOID, ACCOUNTID) DO UPDATE SET '
+      'ENABLED = excluded.ENABLED, EQUILIBRIUM = excluded.EQUILIBRIUM, '
+      'STRENGTH = excluded.STRENGTH, NOISE_PERCENT = excluded.NOISE_PERCENT',
+      [scenarioId, accountId, enabled ? 1 : 0, equilibrium, strength, noisePercent],
+    );
+    db.execute(
+      'UPDATE APP_SIM_SCENARIOS SET UPDATED_AT = ? WHERE SCENARIOID = ?',
+      [DateTime.now().toIso8601String(), scenarioId],
+    );
+  }
+
+  /// Flips [accountId]'s "retour à l'équilibre" on/off within [scenarioId]
+  /// without touching [equilibrium]/[strength]/[noisePercent] - the direct
+  /// answer to "il faut pouvoir activer ou désactiver le solde final
+  /// supposé" (2026-09-04 user request). Does nothing if this account has
+  /// no saved configuration yet - [setSimMeanReversion] creates one.
+  void setSimMeanReversionEnabled(int scenarioId, int accountId, bool enabled) {
+    db.execute(
+      'UPDATE APP_SIM_MEAN_REVERSION SET ENABLED = ? WHERE SCENARIOID = ? AND ACCOUNTID = ?',
+      [enabled ? 1 : 0, scenarioId, accountId],
+    );
+  }
+
+  /// Removes [accountId]'s "retour à l'équilibre" configuration entirely
+  /// within [scenarioId] - distinct from [setSimMeanReversionEnabled]
+  /// `false`, which keeps the saved numbers around for later.
+  void deleteSimMeanReversion(int scenarioId, int accountId) {
+    db.execute(
+      'DELETE FROM APP_SIM_MEAN_REVERSION WHERE SCENARIOID = ? AND ACCOUNTID = ?',
+      [scenarioId, accountId],
+    );
+  }
+
   /// Creates a new scenario named [newName], deep-copying every adjustment
   /// saved under [sourceScenarioId] - bill overrides, virtual bills,
-  /// one-off events, and every "solde final supposé" (both the current
-  /// per-account rows and the legacy scenario-wide fallback column, so a
-  /// duplicate behaves identically to its source until independently
-  /// edited - see [getSimAssumedFinalBalance]'s own doc comment on that
-  /// fallback). "Dupliquer ce scénario" (2026-09-03 user request): lets a
+  /// one-off events, "retour à l'équilibre" settings, and every "solde
+  /// final supposé" (both the current per-account rows and the legacy
+  /// scenario-wide fallback column, so a duplicate behaves identically to
+  /// its source until independently edited - see
+  /// [getSimAssumedFinalBalance]'s own doc comment on that fallback).
+  /// "Dupliquer ce scénario" (2026-09-03 user request): lets a
   /// variant ("et si je pars 2 ans plus tôt ?") start from a known-good
   /// scenario instead of rebuilding every adjustment from scratch. Returns
   /// the new scenario's id. Never touches [sourceScenarioId] itself.
@@ -2799,6 +3062,26 @@ class MmexRepository {
         [legacyValue, newId],
       );
     }
+    final reversionRows = db.query(
+      'SELECT ACCOUNTID, ENABLED, EQUILIBRIUM, STRENGTH, NOISE_PERCENT '
+      'FROM APP_SIM_MEAN_REVERSION WHERE SCENARIOID = ?',
+      [sourceScenarioId],
+    );
+    for (final row in reversionRows) {
+      db.execute(
+        'INSERT INTO APP_SIM_MEAN_REVERSION '
+        '(SCENARIOID, ACCOUNTID, ENABLED, EQUILIBRIUM, STRENGTH, NOISE_PERCENT) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        [
+          newId,
+          row['ACCOUNTID'],
+          row['ENABLED'],
+          row['EQUILIBRIUM'],
+          row['STRENGTH'],
+          row['NOISE_PERCENT'],
+        ],
+      );
+    }
     return newId;
   }
 
@@ -2813,6 +3096,9 @@ class MmexRepository {
         [scenarioId]);
     db.execute(
         'DELETE FROM APP_SIM_ASSUMED_FINAL_BALANCES WHERE SCENARIOID = ?',
+        [scenarioId]);
+    db.execute(
+        'DELETE FROM APP_SIM_MEAN_REVERSION WHERE SCENARIOID = ?',
         [scenarioId]);
     db.execute(
         'DELETE FROM APP_SIM_SCENARIOS WHERE SCENARIOID = ?', [scenarioId]);

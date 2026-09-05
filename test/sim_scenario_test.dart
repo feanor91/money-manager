@@ -128,6 +128,8 @@ void main() {
       );
       repo.setSimAssumedFinalBalance(sourceId, accountId, 2000);
       repo.setSimAssumedFinalBalance(sourceId, otherAccountId, -100);
+      repo.setSimMeanReversion(sourceId, accountId,
+          enabled: false, equilibrium: 300, strength: 0.4, noisePercent: 60);
 
       final newId = repo.duplicateSimScenario(sourceId, 'Original (copie)');
 
@@ -156,6 +158,12 @@ void main() {
 
       expect(repo.getSimAssumedFinalBalance(newId, accountId), 2000.0);
       expect(repo.getSimAssumedFinalBalance(newId, otherAccountId), -100.0);
+
+      final reversion = repo.getSimMeanReversion(newId, accountId)!;
+      expect(reversion.enabled, isFalse);
+      expect(reversion.equilibrium, 300.0);
+      expect(reversion.strength, 0.4);
+      expect(reversion.noisePercent, 60.0);
 
       // The source scenario is completely unaffected by the copy.
       expect(repo.getSimBillOverrides(sourceId), hasLength(1));
@@ -666,6 +674,388 @@ void main() {
               months: 0,
               startDay: 1),
           0.0);
+    });
+  });
+
+  group('historicalDiscretionaryMonthlyStdev', () {
+    test('0 when the residual is identical every month - nothing to '
+        'measure spread from', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2025, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      for (var m = 1; m <= 12; m++) {
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.deposit,
+          amount: 3000,
+          date: DateTime(2025, m, 1),
+        );
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.withdrawal,
+          amount: 150,
+          date: DateTime(2025, m, 15),
+        );
+      }
+
+      expect(
+          repo.historicalDiscretionaryMonthlyStdev(
+              accountId: accountId,
+              anchor: DateTime(2025, 12, 1),
+              months: 12,
+              startDay: 1),
+          0.0);
+    });
+
+    test('reflects real month-to-month spread when the discretionary '
+        'residual alternates', () {
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: -1,
+        transCode: TransCode.deposit,
+        amount: 3000,
+        nextOccurrence: DateTime(2025, 1, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      // Alternates -100 / +100 discretionary residual every other month -
+      // average 0, but real, measurable spread.
+      for (var m = 1; m <= 12; m++) {
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.deposit,
+          amount: 3000,
+          date: DateTime(2025, m, 1),
+        );
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: m.isOdd ? TransCode.withdrawal : TransCode.deposit,
+          amount: 100,
+          date: DateTime(2025, m, 15),
+        );
+      }
+
+      final average = repo.historicalDiscretionaryMonthlyAverage(
+          accountId: accountId,
+          anchor: DateTime(2025, 12, 1),
+          months: 12,
+          startDay: 1);
+      final stdev = repo.historicalDiscretionaryMonthlyStdev(
+          accountId: accountId,
+          anchor: DateTime(2025, 12, 1),
+          months: 12,
+          startDay: 1);
+
+      expect(average, 0.0);
+      expect(stdev, 100.0); // every residual is exactly ±100 from the mean
+    });
+
+    test('0 when months <= 0 or fewer than 2 data points', () {
+      expect(
+          repo.historicalDiscretionaryMonthlyStdev(
+              accountId: accountId,
+              anchor: DateTime(2025, 12, 1),
+              months: 0,
+              startDay: 1),
+          0.0);
+      expect(
+          repo.historicalDiscretionaryMonthlyStdev(
+              accountId: accountId,
+              anchor: DateTime(2025, 12, 1),
+              months: 1,
+              startDay: 1),
+          0.0);
+    });
+  });
+
+  group('historicalEquilibriumBalance', () {
+    test('averages the real balance as of the pay-cycle date itself, not '
+        'a delta', () {
+      // initialBalance 1000, then a net +100 each month via a deposit -
+      // balance at the 1st of each month climbs 1000, 1100, 1200, ...
+      for (var m = 1; m <= 3; m++) {
+        repo.insertTransaction(
+          accountId: accountId,
+          payeeId: -1,
+          transCode: TransCode.deposit,
+          amount: 100,
+          date: DateTime(2025, m, 1),
+        );
+      }
+
+      final equilibrium = repo.historicalEquilibriumBalance(
+          accountId: accountId,
+          anchor: DateTime(2025, 3, 1),
+          months: 3,
+          startDay: 1);
+
+      // Windows ending at 2025-01-31, 2025-02-28, 2025-03-31: balances
+      // 1100, 1200, 1300 respectively (the first month's deposit already
+      // landed by its own window's last day).
+      expect(equilibrium, 1200.0);
+    });
+
+    test('0 when months <= 0', () {
+      expect(
+          repo.historicalEquilibriumBalance(
+              accountId: accountId,
+              anchor: DateTime(2025, 12, 1),
+              months: 0,
+              startDay: 1),
+          0.0);
+    });
+  });
+
+  group('mean reversion CRUD ("retour à l\'équilibre", replacing "solde '
+      'final supposé", 2026-09-04)', () {
+    test('a fresh scenario/account pair has no configuration', () {
+      final id = repo.createSimScenario('S');
+      expect(repo.getSimMeanReversion(id, accountId), isNull);
+    });
+
+    test('setting is readable back, including a null equilibrium meaning '
+        '"always use the auto-computed suggestion"', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimMeanReversion(id, accountId,
+          enabled: true, equilibrium: null, strength: 0.4, noisePercent: 80);
+
+      final saved = repo.getSimMeanReversion(id, accountId)!;
+      expect(saved.enabled, isTrue);
+      expect(saved.equilibrium, isNull);
+      expect(saved.strength, 0.4);
+      expect(saved.noisePercent, 80.0);
+    });
+
+    test('setSimMeanReversionEnabled toggles enabled without touching the '
+        'other saved values - the whole point of the 2026-09-04 request '
+        '("il faut pouvoir activer ou désactiver")', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimMeanReversion(id, accountId,
+          enabled: true, equilibrium: 250, strength: 0.6, noisePercent: 120);
+
+      repo.setSimMeanReversionEnabled(id, accountId, false);
+      var saved = repo.getSimMeanReversion(id, accountId)!;
+      expect(saved.enabled, isFalse);
+      expect(saved.equilibrium, 250.0);
+      expect(saved.strength, 0.6);
+      expect(saved.noisePercent, 120.0);
+
+      repo.setSimMeanReversionEnabled(id, accountId, true);
+      saved = repo.getSimMeanReversion(id, accountId)!;
+      expect(saved.enabled, isTrue);
+      expect(saved.equilibrium, 250.0);
+    });
+
+    test('deleteSimMeanReversion removes the row entirely, unlike disabling',
+        () {
+      final id = repo.createSimScenario('S');
+      repo.setSimMeanReversion(id, accountId,
+          enabled: true, equilibrium: 250, strength: 0.5, noisePercent: 100);
+
+      repo.deleteSimMeanReversion(id, accountId);
+
+      expect(repo.getSimMeanReversion(id, accountId), isNull);
+    });
+
+    test('a second call for the same (scenario, account) pair replaces '
+        'rather than duplicates', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimMeanReversion(id, accountId,
+          enabled: true, equilibrium: 100, strength: 0.5, noisePercent: 100);
+      repo.setSimMeanReversion(id, accountId,
+          enabled: false, equilibrium: 200, strength: 0.3, noisePercent: 50);
+
+      final saved = repo.getSimMeanReversion(id, accountId)!;
+      expect(saved.enabled, isFalse);
+      expect(saved.equilibrium, 200.0);
+      expect(saved.strength, 0.3);
+      expect(saved.noisePercent, 50.0);
+    });
+
+    test('is independent per account within the same scenario', () {
+      final id = repo.createSimScenario('S');
+      repo.setSimMeanReversion(id, accountId,
+          enabled: true, equilibrium: 100, strength: 0.5, noisePercent: 100);
+
+      expect(repo.getSimMeanReversion(id, otherAccountId), isNull);
+    });
+  });
+
+  group('simulatedDailyNetWithMeanReversion (2026-09-04, replacing '
+      '"solde final supposé")', () {
+    test('enabled: false returns the plain simulatedDailyNet series '
+        'unchanged, with no applied dates - "activer/désactiver" must be '
+        'a true no-op when off', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final anchor = todayMidnight.add(const Duration(days: 60));
+      final plain = repo.simulatedDailyNet(
+          scenarioId: id, anchor: anchor, days: 61, accountId: accountId);
+
+      final result = repo.simulatedDailyNetWithMeanReversion(
+        scenarioId: id,
+        accountId: accountId,
+        enabled: false,
+        equilibrium: 0,
+        strength: 0.9,
+        noiseAmount: 500,
+        anchor: anchor,
+        days: 61,
+        forecastDay: todayMidnight.day,
+      );
+
+      expect(result.appliedDates, isEmpty);
+      expect(result.net, plain);
+    });
+
+    test('pulls the running balance toward equilibrium by exactly '
+        '[strength] of the gap, from above', () {
+      final id = repo.createSimScenario('S');
+      // accountId starts at 1000 (see setUp) - well above an equilibrium
+      // of 200, so every checkpoint should pull it down.
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = checkpoint.day;
+
+      final result = repo.simulatedDailyNetWithMeanReversion(
+        scenarioId: id,
+        accountId: accountId,
+        enabled: true,
+        equilibrium: 200,
+        strength: 0.5,
+        noiseAmount: 0,
+        anchor: checkpoint,
+        days: checkpoint.difference(todayMidnight).inDays + 1,
+        forecastDay: forecastDay,
+      );
+
+      expect(result.appliedDates, [checkpoint]);
+      // gap = 1000 - 200 = 800; correction = -0.5 * 800 = -400.
+      expect(result.net[checkpoint], -400.0);
+    });
+
+    test('pulls upward just as readily when the running balance is below '
+        'equilibrium - unlike the old mechanism, never gated on sign', () {
+      final id = repo.createSimScenario('S');
+      // otherAccountId starts at 0 (see setUp) - below an equilibrium of
+      // 500.
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+      final forecastDay = checkpoint.day;
+
+      final result = repo.simulatedDailyNetWithMeanReversion(
+        scenarioId: id,
+        accountId: otherAccountId,
+        enabled: true,
+        equilibrium: 500,
+        strength: 0.5,
+        noiseAmount: 0,
+        anchor: checkpoint,
+        days: checkpoint.difference(todayMidnight).inDays + 1,
+        forecastDay: forecastDay,
+      );
+
+      expect(result.appliedDates, [checkpoint]);
+      // gap = 0 - 500 = -500; correction = -0.5 * -500 = +250.
+      expect(result.net[checkpoint], 250.0);
+    });
+
+    test('strength 0 never moves the balance even far from equilibrium - '
+        'the "no effect" end of the slider', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+
+      final result = repo.simulatedDailyNetWithMeanReversion(
+        scenarioId: id,
+        accountId: accountId,
+        enabled: true,
+        equilibrium: 999999,
+        strength: 0,
+        noiseAmount: 0,
+        anchor: checkpoint,
+        days: checkpoint.difference(todayMidnight).inDays + 1,
+        forecastDay: checkpoint.day,
+      );
+
+      expect(result.net[checkpoint], 0.0);
+    });
+
+    test('the same (scenario, account, month) always yields the same '
+        'noise - reproducible across rebuilds, same reliability guarantee '
+        'as bill variance jitter', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final checkpoint = todayMidnight.add(const Duration(days: 5));
+
+      ({Map<DateTime, double> net, List<DateTime> appliedDates}) run() =>
+          repo.simulatedDailyNetWithMeanReversion(
+            scenarioId: id,
+            accountId: accountId,
+            enabled: true,
+            equilibrium: 1000, // equal to the starting balance - no pull
+            strength: 0.5,
+            noiseAmount: 300,
+            anchor: checkpoint,
+            days: checkpoint.difference(todayMidnight).inDays + 1,
+            forecastDay: checkpoint.day,
+          );
+
+      final first = run().net[checkpoint];
+      final second = run().net[checkpoint];
+      expect(first, second);
+      expect(first, inInclusiveRange(-300.0, 300.0));
+    });
+
+    test('recovers over successive checkpoints - each one judges the '
+        '*running* total, which already includes the previous pull', () {
+      final id = repo.createSimScenario('S');
+      final today = DateTime.now();
+      final todayMidnight = DateTime(today.year, today.month, today.day);
+      final forecastDay = todayMidnight.day;
+      var checkpoint = nextForecastDay(todayMidnight, forecastDay);
+      final checkpoints = <DateTime>[];
+      for (var i = 0; i < 3; i++) {
+        checkpoints.add(checkpoint);
+        checkpoint = nextForecastDay(
+            checkpoint.add(const Duration(days: 1)), forecastDay);
+      }
+      final anchor = checkpoints.last;
+
+      final result = repo.simulatedDailyNetWithMeanReversion(
+        scenarioId: id,
+        accountId: accountId,
+        enabled: true,
+        equilibrium: 200,
+        strength: 0.5,
+        noiseAmount: 0,
+        anchor: anchor,
+        days: anchor.difference(todayMidnight).inDays + 1,
+        forecastDay: forecastDay,
+      );
+
+      expect(result.appliedDates, checkpoints);
+      // Start 1000 -> gap 800 -> correction -400 -> running 600.
+      expect(result.net[checkpoints[0]], -400.0);
+      // running 600 -> gap 400 -> correction -200 -> running 400.
+      expect(result.net[checkpoints[1]], -200.0);
+      // running 400 -> gap 200 -> correction -100 -> running 300.
+      expect(result.net[checkpoints[2]], -100.0);
     });
   });
 

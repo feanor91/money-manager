@@ -9,7 +9,6 @@ import 'package:provider/provider.dart';
 import '../data/mmex_repository.dart';
 import '../models/account.dart';
 import '../models/bill_deposit.dart';
-import '../models/budget_period.dart' show nextForecastDay;
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
@@ -238,12 +237,13 @@ class _SimulationScreenState extends State<SimulationScreen> {
         ? accounts.where((a) => savedIds.contains(a.id)).toList()
         : accounts.where((a) => a.id == dbProvider.selectedAccountId).toList();
     // "Jour de prévision du solde" (Paramètres) - the day of the month
-    // "Solde final supposé" recurs on, every month (2026-09-02 user
-    // request, corrected to recur monthly rather than once on 2026-09-03).
-    // Same date the dashboard's own near-term forecast already anchors to
-    // (dashboard_screen.dart) - now computed inside _AdjustmentsPanel
-    // itself (its "solde final supposé" flag button moved there, one per
-    // account, 2026-09 - see MmexRepository.getSimAssumedFinalBalance).
+    // "Retour à l'équilibre" recurs on, every month (2026-09-02 user
+    // request for the mechanism it replaces, "solde final supposé";
+    // redesigned 2026-09-04 - see
+    // MmexRepository.simulatedDailyNetWithMeanReversion). Same date the
+    // dashboard's own near-term forecast already anchors to
+    // (dashboard_screen.dart) - computed inside _AdjustmentsPanel itself
+    // (its flag button lives there, one per account).
 
     return Scaffold(
       appBar: AppBar(
@@ -822,25 +822,23 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
                   child: Text('Opérations virtuelles',
                       style: Theme.of(context).textTheme.labelLarge)),
               () {
-                final assumed =
-                    repo.getSimAssumedFinalBalance(scenario.id, account.id);
-                final nextDate = nextForecastDay(DateTime.now(), startDay);
-                final dateLabel = DateFormat('d MMM yyyy', 'fr_FR').format(nextDate);
+                final reversion =
+                    repo.getSimMeanReversion(scenario.id, account.id);
                 return IconButton(
-                  tooltip: assumed != null
-                      ? 'Solde final supposé : '
-                          '${currency?.format(assumed) ?? assumed.toStringAsFixed(2)} '
-                          'reporté chaque fin de mois (prochaine : $dateLabel)'
-                      : 'Définir un solde final supposé pour ce compte, '
-                          'reporté chaque fin de mois (prochaine : $dateLabel)',
+                  tooltip: reversion == null
+                      ? 'Configurer le retour à l\'équilibre pour ce compte'
+                      : reversion.enabled
+                          ? 'Retour à l\'équilibre activé pour ce compte'
+                          : 'Retour à l\'équilibre désactivé pour ce compte '
+                              '(réglages conservés)',
                   icon: Icon(
-                    Icons.flag_outlined,
-                    color: assumed != null
+                    Icons.balance,
+                    color: reversion != null && reversion.enabled
                         ? Theme.of(context).colorScheme.primary
                         : null,
                   ),
                   onPressed: () =>
-                      _setAssumedFinalBalance(context, account, nextDate, assumed),
+                      _openMeanReversionDialog(context, account.id),
                 );
               }(),
               IconButton(
@@ -1005,34 +1003,41 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
     return payeesById[bill.payeeId]?.name ?? 'Tiers inconnu';
   }
 
-  /// "Solde final supposé" (2026-09-02 user request, made per-account
-  /// 2026-09 - see [MmexRepository.getSimAssumedFinalBalance]'s own doc
-  /// comment for why) - see `_SimulationChart`'s own doc comment for the
-  /// full "uniquement si positif" rule this feeds. [nextDate] is always the
-  /// app's existing "Jour de prévision du solde" date, shown in the prompt
-  /// so the user knows exactly which date their number applies to.
-  Future<void> _setAssumedFinalBalance(BuildContext context, Account account,
-      DateTime nextDate, double? currentValue) async {
-    final text = await _promptText(
-      context,
-      title: 'Solde final supposé - ${account.name}',
-      label: 'Montant',
-      helperText: 'Reporté chaque fin de mois (prochaine : '
-          '${DateFormat('d MMM yyyy', 'fr_FR').format(nextDate)}), '
-          'sauf si le calcul est déjà négatif ce mois-là. Laisse vide pour '
-          'annuler.',
-      initialValue: currentValue?.toStringAsFixed(2) ?? '',
+  /// "Retour à l'équilibre" (2026-09-04, replacing "solde final supposé" -
+  /// see [MmexRepository.simulatedDailyNetWithMeanReversion]'s own doc
+  /// comment for why). Same "reopen for an account that already has a
+  /// setting starts from its saved values" convention as
+  /// [_openDiscretionaryAdjustmentDialog].
+  Future<void> _openMeanReversionDialog(
+      BuildContext context, int forAccountId) async {
+    final result = await showDialog<_MeanReversionResult>(
+      context: context,
+      builder: (context) => _MeanReversionDialog(
+        repo: repo,
+        accounts: accounts,
+        currency: currency,
+        startDay: startDay,
+        initialAccountId: forAccountId,
+        existingByAccountId: {
+          for (final a in accounts)
+            if (repo.getSimMeanReversion(scenario.id, a.id) != null)
+              a.id: repo.getSimMeanReversion(scenario.id, a.id)!,
+        },
+      ),
     );
-    if (text == null) return; // dialog dismissed - nothing changes
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) {
-      repo.setSimAssumedFinalBalance(scenario.id, account.id, null);
-      onChanged();
-      return;
+    if (result == null) return;
+    if (result.delete) {
+      repo.deleteSimMeanReversion(scenario.id, result.accountId);
+    } else {
+      repo.setSimMeanReversion(
+        scenario.id,
+        result.accountId,
+        enabled: result.enabled,
+        equilibrium: result.equilibrium,
+        strength: result.strength,
+        noisePercent: result.noisePercent,
+      );
     }
-    final value = double.tryParse(trimmed.replaceAll(',', '.'));
-    if (value == null) return; // not a number - silently ignored, same as leaving the field untouched
-    repo.setSimAssumedFinalBalance(scenario.id, account.id, value);
     onChanged();
   }
 
@@ -1761,6 +1766,268 @@ class _DiscretionaryAdjustmentDialogState
   }
 }
 
+class _MeanReversionResult {
+  /// True when "Supprimer ce réglage" was tapped - the caller should
+  /// remove the whole configuration rather than save the fields below
+  /// (which are then meaningless/stale, left at whatever the dialog's
+  /// controls happened to show at the time).
+  final bool delete;
+  final int accountId;
+  final bool enabled;
+  final double equilibrium;
+  final double strength;
+  final double noisePercent;
+
+  const _MeanReversionResult({
+    this.delete = false,
+    required this.accountId,
+    required this.enabled,
+    required this.equilibrium,
+    required this.strength,
+    required this.noisePercent,
+  });
+}
+
+/// "Retour à l'équilibre" (2026-09-04, replacing "solde final supposé" -
+/// see [MmexRepository.simulatedDailyNetWithMeanReversion]'s own doc
+/// comment for the full story). Same guided-flow shape as
+/// [_DiscretionaryAdjustmentDialog] - a real, data-derived starting point
+/// ([MmexRepository.historicalEquilibriumBalance]) rather than a number
+/// invented from scratch, adjustable before saving.
+class _MeanReversionDialog extends StatefulWidget {
+  final MmexRepository repo;
+  final List<Account> accounts;
+  final CurrencyFormat? currency;
+  final int startDay;
+  final int? initialAccountId;
+
+  /// This scenario's existing setting per account (if any) - re-opening
+  /// this dialog for an account that already has one starts every control
+  /// from its saved values instead of silently discarding a previous tweak
+  /// in favor of the freshly-computed suggestion.
+  final Map<int, ({bool enabled, double? equilibrium, double strength, double noisePercent})>
+      existingByAccountId;
+
+  const _MeanReversionDialog({
+    required this.repo,
+    required this.accounts,
+    required this.currency,
+    required this.startDay,
+    required this.existingByAccountId,
+    this.initialAccountId,
+  });
+
+  @override
+  State<_MeanReversionDialog> createState() => _MeanReversionDialogState();
+}
+
+class _MeanReversionDialogState extends State<_MeanReversionDialog> {
+  late int _accountId = widget.initialAccountId ?? widget.accounts.first.id;
+  int _historyMonths = 12;
+  late double _suggestedEquilibrium = _computeSuggestedEquilibrium(_accountId);
+  late double _equilibrium = _initialEquilibrium(_accountId);
+  late double _strength =
+      widget.existingByAccountId[_accountId]?.strength ?? 0.5;
+  late double _noisePercent =
+      widget.existingByAccountId[_accountId]?.noisePercent ?? 100;
+  late bool _enabled = widget.existingByAccountId[_accountId]?.enabled ?? true;
+
+  double _computeSuggestedEquilibrium(int accountId) =>
+      widget.repo.historicalEquilibriumBalance(
+        accountId: accountId,
+        anchor: DateTime.now(),
+        startDay: widget.startDay,
+        months: _historyMonths,
+      );
+
+  double _computeStdev(int accountId) =>
+      widget.repo.historicalDiscretionaryMonthlyStdev(
+        accountId: accountId,
+        anchor: DateTime.now(),
+        startDay: widget.startDay,
+        months: _historyMonths,
+      );
+
+  double _initialEquilibrium(int accountId) =>
+      widget.existingByAccountId[accountId]?.equilibrium ??
+      _suggestedEquilibrium;
+
+  void _selectAccount(int accountId) {
+    setState(() {
+      _accountId = accountId;
+      _suggestedEquilibrium = _computeSuggestedEquilibrium(accountId);
+      _equilibrium = _initialEquilibrium(accountId);
+      _strength = widget.existingByAccountId[accountId]?.strength ?? 0.5;
+      _noisePercent =
+          widget.existingByAccountId[accountId]?.noisePercent ?? 100;
+      _enabled = widget.existingByAccountId[accountId]?.enabled ?? true;
+    });
+  }
+
+  void _selectHistoryMonths(int months) {
+    setState(() {
+      final wasAtSuggested = _equilibrium == _suggestedEquilibrium;
+      _historyMonths = months;
+      _suggestedEquilibrium = _computeSuggestedEquilibrium(_accountId);
+      if (wasAtSuggested) _equilibrium = _suggestedEquilibrium;
+    });
+  }
+
+  String _formatAmount(double amount) =>
+      widget.currency?.format(amount) ?? amount.toStringAsFixed(2);
+
+  @override
+  Widget build(BuildContext context) {
+    final range = max(500.0, _suggestedEquilibrium.abs() * 2);
+    final clampedEquilibrium = _equilibrium.clamp(-range, range);
+    final stdev = _computeStdev(_accountId);
+    final noiseAmount = stdev * _noisePercent / 100;
+    final hasExisting = widget.existingByAccountId.containsKey(_accountId);
+    return AlertDialog(
+      title: const Text('Retour à l\'équilibre'),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Ton solde réel ne dérive pas indéfiniment : quand il y a de '
+                'la marge, elle finit dépensée : quand il en manque, les '
+                'dépenses se resserrent. Ce réglage tire chaque mois le '
+                'solde projeté vers une valeur d\'équilibre calculée sur ton '
+                'historique réel, au lieu de le laisser dériver sans fin.',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Activé'),
+                subtitle: Text(_enabled
+                    ? 'Appliqué à chaque échéance mensuelle'
+                    : 'Réglages conservés, mais pas appliqués'),
+                value: _enabled,
+                onChanged: (v) => setState(() => _enabled = v),
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<int>(
+                initialValue: _accountId,
+                decoration: const InputDecoration(labelText: 'Compte'),
+                items: [
+                  for (final a in widget.accounts)
+                    DropdownMenuItem(value: a.id, child: Text(a.name)),
+                ],
+                onChanged: (id) => _selectAccount(id!),
+              ),
+              const SizedBox(height: 12),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 12, label: Text('12 mois')),
+                  ButtonSegment(value: 24, label: Text('24 mois')),
+                  ButtonSegment(value: 36, label: Text('36 mois')),
+                ],
+                selected: {_historyMonths},
+                onSelectionChanged: (s) => _selectHistoryMonths(s.first),
+              ),
+              const SizedBox(height: 12),
+              Text.rich(
+                TextSpan(
+                  style: const TextStyle(fontSize: 12),
+                  children: [
+                    TextSpan(
+                        text: 'Sur les $_historyMonths derniers mois, solde '
+                            'moyen constaté au jour de prévision : '),
+                    TextSpan(
+                      text: _formatAmount(_suggestedEquilibrium),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(
+                        text: ' (variation réelle typique : ±'
+                            '${_formatAmount(stdev)}/mois).'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: 'Équilibre cible : '),
+                    TextSpan(
+                      text: _formatAmount(_equilibrium),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              Slider(
+                value: clampedEquilibrium,
+                min: -range,
+                max: range,
+                divisions: 200,
+                label: _formatAmount(_equilibrium),
+                onChanged: (v) => setState(() => _equilibrium = v),
+              ),
+              const SizedBox(height: 8),
+              Text('Force de rappel : ${(_strength * 100).round()} % '
+                  '(0 % = aucun effet, 100 % = revient pile à l\'équilibre '
+                  'chaque mois)'),
+              Slider(
+                value: _strength,
+                min: 0,
+                max: 1,
+                divisions: 20,
+                label: '${(_strength * 100).round()} %',
+                onChanged: (v) => setState(() => _strength = v),
+              ),
+              const SizedBox(height: 8),
+              Text(_noisePercent == 0
+                  ? 'Aucune variation aléatoire'
+                  : 'Variation aléatoire : ±${_formatAmount(noiseAmount)}/mois '
+                      '(${_noisePercent.round()} % de la variation typique)'),
+              Slider(
+                value: _noisePercent,
+                min: 0,
+                max: 200,
+                divisions: 40,
+                label: '${_noisePercent.round()} %',
+                onChanged: (v) => setState(() => _noisePercent = v),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (hasExisting)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(_MeanReversionResult(
+              delete: true,
+              accountId: _accountId,
+              enabled: _enabled,
+              equilibrium: _equilibrium,
+              strength: _strength,
+              noisePercent: _noisePercent,
+            )),
+            child: const Text('Supprimer ce réglage'),
+          ),
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Annuler')),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_MeanReversionResult(
+            accountId: _accountId,
+            enabled: _enabled,
+            equilibrium: _equilibrium,
+            strength: _strength,
+            noisePercent: _noisePercent,
+          )),
+          child: const Text('Enregistrer'),
+        ),
+      ],
+    );
+  }
+}
+
 class _OneOffEventFormResult {
   final int accountId;
   final String label;
@@ -1947,11 +2214,12 @@ class _AccountSeries {
 ///
 /// [startDay] itself (Settings' "Jour de prévision du solde") no longer
 /// changes how this chart buckets - only the exact calendar day matters now
-/// - but is still threaded through, since the "Ajustement réaliste" dialog
-/// reached from this same screen still needs it for
-/// [MmexRepository.historicalDiscretionaryMonthlyAverage], and since
-/// 2026-09-02 also anchors [assumedFinalBalance] - see that field's own doc
-/// comment.
+/// - but is still threaded through, since the "Ajustement réaliste" and
+/// "Retour à l'équilibre" dialogs reached from this same screen still need
+/// it for [MmexRepository.historicalDiscretionaryMonthlyAverage]/
+/// [MmexRepository.historicalEquilibriumBalance], and since 2026-09-02
+/// also anchors the "retour à l'équilibre" monthly checkpoints themselves
+/// (see [MmexRepository.simulatedDailyNetWithMeanReversion]).
 class _SimulationChart extends StatefulWidget {
   final MmexRepository repo;
   final int scenarioId;
@@ -2019,34 +2287,34 @@ class _SimulationChartState extends State<_SimulationChart> {
       final startingBalance = repo.accountBalance(id, asOf: DateTime.now());
       final baselineNet =
           repo.recurringDailyNet(anchor: anchor, days: days, accountId: id);
-      final assumedFinalBalance = repo.getSimAssumedFinalBalance(scenarioId, id);
-      final scenarioResult = repo.simulatedDailyNetWithAssumedFinalBalance(
+      final reversion = repo.getSimMeanReversion(scenarioId, id);
+      final equilibrium = reversion?.equilibrium ??
+          repo.historicalEquilibriumBalance(
+              accountId: id, anchor: DateTime.now(), startDay: startDay);
+      final stdev = repo.historicalDiscretionaryMonthlyStdev(
+          accountId: id, anchor: DateTime.now(), startDay: startDay);
+      final scenarioResult = repo.simulatedDailyNetWithMeanReversion(
         scenarioId: scenarioId,
-        assumedFinalBalance: assumedFinalBalance,
+        accountId: id,
+        enabled: reversion?.enabled ?? false,
+        equilibrium: equilibrium,
+        strength: reversion?.strength ?? 0.5,
+        noiseAmount: stdev * (reversion?.noisePercent ?? 100) / 100,
         anchor: anchor,
         days: days,
-        accountId: id,
         forecastDay: startDay,
       );
 
       String? assumedBalanceNote;
-      if (assumedFinalBalance != null) {
-        final applied = scenarioResult.appliedDates.length;
-        final ignored = scenarioResult.ignoredDates.length;
-        final amountLabel = currency?.format(assumedFinalBalance) ??
-            assumedFinalBalance.toStringAsFixed(2);
-        if (applied == 0 && ignored == 0) {
-          assumedBalanceNote =
-              '${account.name} : solde final supposé hors de l\'horizon affiché';
-        } else if (ignored == 0) {
-          assumedBalanceNote = '${account.name} : solde final supposé '
-              '($amountLabel) reporté chaque fin de mois ($applied fois sur '
-              'l\'horizon affiché)';
-        } else {
-          assumedBalanceNote = '${account.name} : solde final supposé '
-              '($amountLabel) reporté $applied fois ; laissé au calcul '
-              '(déjà négatif) $ignored fois';
-        }
+      if (reversion != null && !reversion.enabled) {
+        assumedBalanceNote =
+            '${account.name} : retour à l\'équilibre désactivé (réglages conservés)';
+      } else if (scenarioResult.appliedDates.isNotEmpty) {
+        final equilibriumLabel =
+            currency?.format(equilibrium) ?? equilibrium.toStringAsFixed(2);
+        assumedBalanceNote = '${account.name} : retour à l\'équilibre '
+            '($equilibriumLabel) appliqué ${scenarioResult.appliedDates.length} '
+            'fois sur l\'horizon affiché';
       }
 
       series.add(_AccountSeries(
