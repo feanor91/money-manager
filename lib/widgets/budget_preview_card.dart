@@ -54,8 +54,11 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
         ? const <BudgetEnvelope>[]
         : repo.getBudgetEnvelopes(widget.accountId!);
     final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: widget.accountId);
-    final rawSpend =
-        repo.categorySpendForPeriod(window.start, window.end, accountId: widget.accountId);
+    // includeCategorizedTransfersAsExpense: true, same convention as the
+    // full Budget screen (2026-09-05 user request) - keeps this preview's
+    // totals agreeing with it for the same account/category.
+    final rawSpend = repo.categorySpendForPeriod(window.start, window.end,
+        accountId: widget.accountId, includeCategorizedTransfersAsExpense: true);
 
     // Same hover-tooltip principle as the full Budget screen's envelope
     // detail: group the period's transactions by category so a row can
@@ -64,7 +67,13 @@ class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
     final transactionsByCategory = <int, List<MoneyTransaction>>{};
     for (final t in repo.getTransactions(
         accountId: widget.accountId, from: window.start, to: window.end, limit: 500)) {
-      if (t.categoryId == null || t.transCode != TransCode.withdrawal || t.isVoid) continue;
+      if (t.categoryId == null || t.isVoid) continue;
+      // A categorized transfer only counts here when this account is its
+      // source - matches rawSpend's own includeCategorizedTransfersAsExpense
+      // rule above (see MmexRepository.categorySpendForPeriod).
+      final countsAsExpense = t.transCode == TransCode.withdrawal ||
+          (t.transCode == TransCode.transfer && t.accountId == widget.accountId);
+      if (!countsAsExpense) continue;
       transactionsByCategory.putIfAbsent(t.categoryId!, () => []).add(t);
     }
     final dateFormat = DateFormat('d MMM', 'fr_FR');

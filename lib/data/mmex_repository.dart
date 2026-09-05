@@ -1894,12 +1894,30 @@ class MmexRepository {
   /// Same as [categorySpendForMonth] but over an arbitrary [start, end)
   /// window instead of a fixed calendar month - e.g. a budget window that
   /// starts mid-month, see BudgetScreen and models/budget_period.dart.
+  ///
+  /// [includeCategorizedTransfersAsExpense] (2026-09-05 user request):
+  /// when true *and* [accountId] is given, a categorized `Transfer` row
+  /// also counts, exactly like a `Withdrawal` - "un virement de 700€ du
+  /// Crédit Agricole vers Boursorama, c'est une dépense sur le Crédit
+  /// Agricole" (money genuinely left this account, whatever it's tagged
+  /// as). Never a double-count on the *destination* side: a transfer only
+  /// ever matches the [accountId] filter below via its `ACCOUNTID`
+  /// (MMEX's own source-account column), never `TOACCOUNTID` - scoped to
+  /// the destination account instead, the exact same row simply doesn't
+  /// match at all, the same way [incomeForPeriod] already treats it as
+  /// income there instead. Defaults to false (unchanged behavior) since
+  /// this method backs the natural-language "dépenses" answers, the
+  /// discretionary-spending average, and more - only the *envelope*
+  /// budget view opts in, deliberately, not every caller.
   Map<int, double> categorySpendForPeriod(DateTime start, DateTime end,
-      {int? accountId}) {
+      {int? accountId, bool includeCategorizedTransfersAsExpense = false}) {
+    final includeTransfers = includeCategorizedTransfersAsExpense && accountId != null;
     final where = <String>[
       "TRANSDATE >= ?",
       "TRANSDATE < ?",
-      "TRANSCODE = 'Withdrawal'",
+      includeTransfers
+          ? "(TRANSCODE = 'Withdrawal' OR TRANSCODE = 'Transfer')"
+          : "TRANSCODE = 'Withdrawal'",
       "UPPER(TRIM(STATUS)) != 'V'",
       "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
     ];

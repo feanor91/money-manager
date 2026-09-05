@@ -162,6 +162,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
               usedCategoryIds: usedCategoryIds,
               accountId: accountId,
               currency: currency,
+              startDay: dbProvider.forecastDay,
               onAddMember: () {
                 final coveredIds = item.members.map((m) => m.category.id).toSet();
                 final candidates = [
@@ -224,7 +225,11 @@ class _BudgetScreenState extends State<BudgetScreen> {
 
     final envelopes = accountId == null ? const <BudgetEnvelope>[] : repo.getBudgetEnvelopes(accountId);
     final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: accountId);
-    final rawSpend = repo.categorySpendForPeriod(window.start, window.end, accountId: accountId);
+    // includeCategorizedTransfersAsExpense: true (2026-09-05 user request) -
+    // a categorized transfer *out* of this account is a real expense for
+    // its budget, even though MMEX itself never calls it a "Withdrawal".
+    final rawSpend = repo.categorySpendForPeriod(window.start, window.end,
+        accountId: accountId, includeCategorizedTransfersAsExpense: true);
     // Every category id genuinely relevant to this account (ever used on
     // a real transaction here, or with an active recurring bill) - keeps
     // the "budget a subcategory" picker from listing subcategories that
@@ -286,7 +291,12 @@ class _BudgetScreenState extends State<BudgetScreen> {
           name: e.name,
         ));
       }
-      members.sort((a, b) => b.target.compareTo(a.target));
+      // Alphabetical, not by amount (2026-09-05 user request: a stable
+      // order that doesn't reshuffle every time spending changes) - same
+      // convention MmexRepository.getCategories/the Catégories settings
+      // screen/every category picker in the app already use.
+      members.sort((a, b) =>
+          a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
 
       items.add(_EnvelopeItem(
         topCategory: topCategory,
@@ -298,15 +308,19 @@ class _BudgetScreenState extends State<BudgetScreen> {
         spentActual: rolledUpSpend(topCategory.id, rawSpend, categories),
       ));
     }
-    items.sort((a, b) => b.target.compareTo(a.target));
+    // Alphabetical, not by amount (2026-09-05 user request) - a stable
+    // order the user can memorize, instead of every category reshuffling
+    // position as soon as its spend/target changes.
+    items.sort((a, b) =>
+        a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
 
-    // Ranked by actual spend (not target) for the bar chart below - "where
-    // does my money actually go" is the point of that view, distinct from
-    // [items]' own target-based order (used elsewhere, e.g. detail lookup).
-    // Every bar's length is plotted on this same shared scale so categories
-    // are directly comparable, instead of each bar being self-scaled to its
-    // own target as the old vertical gauges were.
-    final barItems = [...items]..sort((a, b) => b.spentTotal.compareTo(a.spentTotal));
+    // The bar chart below uses the same stable, alphabetical order as
+    // [items] rather than its own separate spend-based ranking - "always
+    // in the same place" was the whole point of the 2026-09-05 request,
+    // which a second, independently-sorted copy would have undermined.
+    // Every bar's length is still plotted on the same shared scale below,
+    // so categories remain directly comparable by eye even unranked.
+    final barItems = items;
     final maxScaleRaw = items.fold(
         0.0, (m, i) => [m, i.spentTotal, i.target].reduce((a, b) => a > b ? a : b));
     final maxScale = maxScaleRaw <= 0 ? 1.0 : maxScaleRaw;
@@ -1429,6 +1443,42 @@ class _Suggestion {
 
 const _suggestionHistoryMonths = 12;
 
+/// Average real spend for [categoryId] alone (not rolled up into its
+/// subcategories - matches one envelope's own granularity) over the last
+/// [months] *closed* budget windows before now, plus the most recent date
+/// any of that spend actually happened - the same formula
+/// [_openSuggestions] bases a brand-new envelope's suggested amount on,
+/// extracted here so an *existing* envelope can be recomputed the exact
+/// same way after the fact (2026-09-05 user request: "je puisse
+/// recalculer le montant d'une catégorie à posteriori... comme en
+/// création"). Deliberately not shared code with [_openSuggestions]
+/// itself, which fetches every category's history in [months] queries
+/// total rather than [months] queries *per category* - fine for this
+/// single-category case, wasteful for suggesting dozens of envelopes at
+/// once.
+({double average, DateTime? lastSpend}) _historicalMonthlyAverage({
+  required MmexRepository repo,
+  required int categoryId,
+  required int accountId,
+  required int startDay,
+  int months = _suggestionHistoryMonths,
+}) {
+  var window = previousBudgetWindow(budgetWindowContaining(DateTime.now(), startDay), startDay);
+  var total = 0.0;
+  DateTime? earliestStart;
+  for (var i = 0; i < months; i++) {
+    final spend = repo.categorySpendForPeriod(window.start, window.end,
+        accountId: accountId, includeCategorizedTransfersAsExpense: true);
+    total += spend[categoryId] ?? 0;
+    earliestStart = window.start;
+    window = previousBudgetWindow(window, startDay);
+  }
+  final lastSpend = earliestStart == null
+      ? null
+      : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId)[categoryId];
+  return (average: total / months, lastSpend: lastSpend);
+}
+
 /// Builds envelope suggestions for [accountId] from data that's already
 /// in the file - a recurring bill is a near-certain monthly cost, and
 /// categories with a real spending history (even without a recurring
@@ -1463,7 +1513,8 @@ Future<void> _openSuggestions({
   final historyTotals = <int, double>{};
   DateTime? earliestStart;
   for (var i = 0; i < _suggestionHistoryMonths; i++) {
-    final spend = repo.categorySpendForPeriod(window.start, window.end, accountId: accountId);
+    final spend = repo.categorySpendForPeriod(window.start, window.end,
+        accountId: accountId, includeCategorizedTransfersAsExpense: true);
     spend.forEach((categoryId, amount) {
       historyTotals[categoryId] = (historyTotals[categoryId] ?? 0) + amount;
     });
@@ -2148,6 +2199,12 @@ class _EnvelopeDetail extends StatefulWidget {
   final CurrencyFormat? currency;
   final VoidCallback onAddMember;
 
+  /// "Jour de prévision du solde" (Paramètres) - the same pay-cycle start
+  /// day the budget window itself is built from, needed to walk the exact
+  /// same closed windows [_historicalMonthlyAverage] does for "Recalculer
+  /// depuis l'historique" (2026-09-05).
+  final int startDay;
+
   /// Called after the top envelope (name/amount) is saved or deleted from
   /// this card, so the caller can persist the change (dbProvider.touch()).
   final VoidCallback onDone;
@@ -2161,6 +2218,7 @@ class _EnvelopeDetail extends StatefulWidget {
     required this.usedCategoryIds,
     required this.onAddMember,
     required this.onDone,
+    required this.startDay,
     this.accountId,
     this.currency,
   });
@@ -2216,6 +2274,36 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     widget.onDone();
   }
 
+  /// "Recalculer depuis l'historique" (2026-09-05 user request) - fills
+  /// [_amountController] with the exact same 12-month real-spend average
+  /// [_openSuggestions] would suggest for a brand-new envelope on this
+  /// category, so an existing one can be refreshed the same way instead of
+  /// only ever keeping whatever number was typed in months ago. Only
+  /// updates the text field - still requires "Enregistrer" to actually
+  /// save, same as typing a number in by hand.
+  void _recalculateFromHistory() {
+    if (widget.accountId == null) return;
+    final result = _historicalMonthlyAverage(
+      repo: widget.repo,
+      categoryId: widget.item.topCategory.id,
+      accountId: widget.accountId!,
+      startDay: widget.startDay,
+    );
+    setState(() {
+      _amountController.text = result.average.toStringAsFixed(2);
+    });
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    final staleNote = (result.lastSpend == null ||
+            result.lastSpend!.isBefore(DateTime.now().subtract(const Duration(days: 90))))
+        ? ' - aucune dépense récente dans cette catégorie, chiffre à vérifier'
+        : '';
+    messenger.showSnackBar(SnackBar(
+      content: Text(
+          'Moyenne sur 12 mois : ${widget.currency?.format(result.average) ?? result.average.toStringAsFixed(2)}$staleNote'),
+    ));
+  }
+
   void _delete() {
     final top = _topMember;
     if (top == null) return;
@@ -2258,8 +2346,14 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
         .where((t) =>
             t.categoryId != null &&
             relevantIds.contains(t.categoryId) &&
-            t.transCode == TransCode.withdrawal &&
-            !t.isVoid)
+            !t.isVoid &&
+            // A categorized transfer counts here too, but only when this
+            // account is the source (getTransactions itself already
+            // returns it for either side) - matches rawSpend's own
+            // includeCategorizedTransfersAsExpense rule above, so the
+            // drill-down list always agrees with the total it backs.
+            (t.transCode == TransCode.withdrawal ||
+                (t.transCode == TransCode.transfer && t.accountId == accountId)))
         .toList()
       ..sort((a, b) => b.date.compareTo(a.date));
 
@@ -2342,10 +2436,23 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
               decoration: const InputDecoration(labelText: 'Nom de l\'enveloppe'),
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _amountController,
-              decoration: const InputDecoration(labelText: 'Montant mensuel'),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _amountController,
+                    decoration: const InputDecoration(labelText: 'Montant mensuel'),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  ),
+                ),
+                if (accountId != null)
+                  IconButton(
+                    tooltip: 'Recalculer depuis l\'historique (moyenne sur 12 mois)',
+                    icon: const Icon(Icons.calculate_outlined),
+                    onPressed: _recalculateFromHistory,
+                  ),
+              ],
             ),
             if (topMember?.isAuto ?? false) ...[
               const SizedBox(height: 8),
