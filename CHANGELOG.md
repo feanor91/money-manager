@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.107] - 2026-09-05
+
+- feat(budget): revenus attendus modifiable, détail des revenus, virement toujours compté en dépense
+
 ## [1.0.106] - 2026-09-05
 
 - feat(budget): ordre alphabétique fixe, recalcul d'enveloppe, virements sortants comptés
