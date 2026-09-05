@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.102] - 2026-09-05
+
+- fix(ai): laisser l'IA se corriger avant d'abandonner sur une requête SQL
+
 ## [1.0.101] - 2026-09-05
 
 - fix(simulation): remplacer le solde final supposé par un retour à l'équilibre
