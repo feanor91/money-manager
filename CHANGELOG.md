@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.101] - 2026-09-05
+
+- fix(simulation): remplacer le solde final supposé par un retour à l'équilibre
+
 ## [1.0.100] - 2026-09-04
 
 - feat(simulation): dupliquer un scénario de simulation
