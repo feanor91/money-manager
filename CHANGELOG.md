@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.106] - 2026-09-05
+
+- feat(budget): ordre alphabétique fixe, recalcul d'enveloppe, virements sortants comptés
+
 ## [1.0.105] - 2026-09-05
 
 - fix(backup): charger les réglages avant de sauvegarder, pas après
