@@ -159,6 +159,38 @@ void main() {
       expect(totals[categoryId], isNull);
     });
 
+    test(
+        'a transfer tagged under an income category ("Revenus") still '
+        'counts as an expense on the source account when opted in - '
+        '2026-09-05 explicit user correction: "un virement en sortie d\'un '
+        'compte est une dépense et doit apparaître comme tel quel que soit '
+        'son sujet" (whatever its category, no exception)', () {
+      // The blank test schema already seeds a top-level "Revenus" category
+      // - reuse it rather than inserting a duplicate (CATEGNAME+PARENTID
+      // is unique).
+      final revenus =
+          repo.getCategories(onlyActive: false).firstWhere((c) => c.name == 'Revenus').id;
+      final salaireBruno = repo.insertCategory(name: 'Salaire Bruno', parentId: revenus);
+      repo.insertTransaction(
+        accountId: sourceAccountId,
+        toAccountId: destAccountId,
+        payeeId: payeeId,
+        transCode: TransCode.transfer,
+        amount: 700,
+        categoryId: salaireBruno,
+        date: DateTime(2026, 8, 25),
+      );
+
+      final totals = repo.categorySpendForPeriod(
+        DateTime(2026, 8, 1),
+        DateTime(2026, 9, 1),
+        accountId: sourceAccountId,
+        includeCategorizedTransfersAsExpense: true,
+      );
+
+      expect(totals[salaireBruno], 700.0);
+    });
+
     test('a real withdrawal in the same category still counts normally '
         'alongside a categorized transfer', () {
       repo.insertTransaction(

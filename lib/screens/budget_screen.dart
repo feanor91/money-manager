@@ -16,6 +16,7 @@ import '../widgets/envelope_gauge.dart';
 import '../widgets/hover_tooltip.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+import '../widgets/transaction_entry_flow.dart';
 
 /// Adds [months] calendar months to [date], clamping to the destination
 /// month's real last day - same small helper every screen that needs it
@@ -192,6 +193,45 @@ class _BudgetScreenState extends State<BudgetScreen> {
     if (mounted) setState(() => _selectedCategoryId = null);
   }
 
+  /// "Détail des revenus" (2026-09-05 user request: "faire apparaître la
+  /// fenêtre avec le détail des revenus comme pour les dépenses") - the
+  /// "Revenus" gauge's own equivalent of [_openEnvelopeDetail]. Income
+  /// itself isn't budgeted per category here (no name/delete), but the
+  /// "Revenus attendus" total is editable - see MmexRepository's
+  /// APP_INCOME_TARGETS/expectedIncomeForBudget.
+  Future<void> _openIncomeDetail({
+    required BuildContext context,
+    required MmexRepository repo,
+    required BudgetWindow window,
+    required int accountId,
+    required CurrencyFormat? currency,
+    required double income,
+    required double expectedIncome,
+    required DatabaseProvider dbProvider,
+  }) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.85),
+          child: SingleChildScrollView(
+            child: _IncomeDetail(
+              repo: repo,
+              window: window,
+              accountId: accountId,
+              currency: currency,
+              income: income,
+              expectedIncome: expectedIncome,
+              onChanged: () => dbProvider.touch(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
@@ -330,16 +370,19 @@ class _BudgetScreenState extends State<BudgetScreen> {
     // the very first gauge, not tied to any envelope, so the budget
     // screen doesn't read as purely about spending.
     final income = accountId == null ? 0.0 : repo.incomeForPeriod(window.start, window.end, accountId: accountId);
-    final expectedIncome = accountId == null ? 0.0 : repo.monthlyRecurringIncome(accountId: accountId);
+    // expectedIncomeForBudget prefers a manual override (2026-09-05 user
+    // request) over the automatic recurring-bill total, when one is set -
+    // see MmexRepository.expectedIncomeForBudget's own doc comment.
+    final expectedIncome = accountId == null ? 0.0 : repo.expectedIncomeForBudget(accountId);
 
-    // "Reste a vivre" is the real forecasted account balance at the date
-    // this budget window resets - not a budget-only calculation (target
-    // minus spent). That's what actually answers "how much do I really
-    // have", the same number the dashboard's own balance forecast would
-    // give for that date (real balance if the window's already closed,
-    // real balance + every recurring transaction still due before the
-    // reset date otherwise).
-    final remaining = accountId == null ? 0.0 : repo.forecastAccountBalance(accountId, window.end);
+    // "Reste à vivre" = revenu budgété - dépenses budgétées (2026-09-05
+    // user request, reversing the previous "real forecasted account
+    // balance" design - see CLAUDE.md's note on this exact figure's
+    // history): a fixed planning total for the whole window, not a
+    // running real balance - it doesn't move as spending actually happens
+    // during the month, only when the budgeted amounts themselves change.
+    final totalBudgetedExpenses = items.fold(0.0, (sum, i) => sum + i.target);
+    final remaining = expectedIncome - totalBudgetedExpenses;
 
     void Function()? openAddDialog = accountId == null
         ? null
@@ -463,7 +506,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   : null,
             ),
             const SizedBox(height: 12),
-            _RemainingCard(remaining: remaining, resetDate: window.end, currency: currency),
+            _RemainingCard(remaining: remaining, currency: currency),
             const SizedBox(height: 20),
             if (accountId != null) ...[
               _CategoryBarRow(
@@ -472,6 +515,16 @@ class _BudgetScreenState extends State<BudgetScreen> {
                 target: expectedIncome,
                 moreIsBetter: true,
                 currency: currency,
+                onTap: () => _openIncomeDetail(
+                  context: context,
+                  repo: repo,
+                  window: window,
+                  accountId: accountId,
+                  currency: currency,
+                  income: income,
+                  expectedIncome: expectedIncome,
+                  dbProvider: dbProvider,
+                ),
               ),
               for (final item in barItems) ...[
                 const SizedBox(height: 18),
@@ -1617,6 +1670,7 @@ Future<void> _openSuggestions({
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           final selectedGroups = groupOrder.where((g) => groups[g]!.any((s) => s.selected)).length;
+          final allSelected = suggestions.every((s) => s.selected);
           void updateGroupSum(int groupId) {
             if (overriddenGroups.contains(groupId)) return;
             groupControllers[groupId]!.text = groups[groupId]!
@@ -1625,10 +1679,31 @@ Future<void> _openSuggestions({
                 .toStringAsFixed(2);
           }
 
+          // "Cocher/décocher tout" (2026-09-05 user request) - with many
+          // suggestions, checking each one individually just to add most of
+          // them was tedious; toggles every suggestion in one tap, then
+          // refreshes every group header's own sum the same way an
+          // individual checkbox change does (skipping a group whose header
+          // amount was manually overridden, same rule as everywhere else).
+          void toggleAllSuggestions() => setDialogState(() {
+                final newValue = !allSelected;
+                for (final s in suggestions) {
+                  s.selected = newValue;
+                }
+                for (final groupId in groupOrder) {
+                  updateGroupSum(groupId);
+                }
+              });
+
           return AlertDialog(
             title: Row(
               children: [
                 const Expanded(child: Text('Enveloppes suggérées')),
+                IconButton(
+                  tooltip: allSelected ? 'Tout décocher' : 'Tout cocher',
+                  icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+                  onPressed: toggleAllSuggestions,
+                ),
                 IconButton(
                   tooltip: 'Analyser les dépenses par catégorie',
                   icon: const Icon(Icons.query_stats),
@@ -1894,10 +1969,9 @@ class _PeriodNav extends StatelessWidget {
 
 class _RemainingCard extends StatelessWidget {
   final double remaining;
-  final DateTime resetDate;
   final CurrencyFormat? currency;
 
-  const _RemainingCard({required this.remaining, required this.resetDate, this.currency});
+  const _RemainingCard({required this.remaining, this.currency});
 
   @override
   Widget build(BuildContext context) {
@@ -1920,7 +1994,7 @@ class _RemainingCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              'Solde prévu au ${DateFormat('d MMM', 'fr_FR').format(resetDate)}',
+              'Revenus budgétés - dépenses budgétées',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -2546,6 +2620,245 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ],
+                  ),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Détail des revenus" (2026-09-05) - the counterpart of [_EnvelopeDetail]
+/// for the "Revenus" gauge: no name/amount editor for the gauge itself
+/// (income isn't budgeted per category here) - but each transaction row is
+/// tappable and opens the same [openTransactionEditor] sheet as everywhere
+/// else in the app (ledger, dashboard), because a real report showed a
+/// transaction miscategorized as income (e.g. an insurance reimbursement
+/// or an internal transfer wrongly counted alongside real salary) with no
+/// way to fix it from here - "je ne peux pas modifier la catégorie revenu,
+/// il faut que je puisse le faire". Same "tap the row to edit" convention
+/// as the transactions ledger (see CLAUDE.md's UI-consistency note), not a
+/// bespoke category-only picker.
+class _IncomeDetail extends StatefulWidget {
+  final MmexRepository repo;
+  final BudgetWindow window;
+  final int accountId;
+  final CurrencyFormat? currency;
+  final double income;
+  final double expectedIncome;
+
+  /// Called after a change here should be persisted to disk (a
+  /// transaction edit, or a "Revenus attendus" override save/reset) - the
+  /// caller passes `dbProvider.touch()`.
+  final VoidCallback onChanged;
+
+  const _IncomeDetail({
+    required this.repo,
+    required this.window,
+    required this.accountId,
+    required this.income,
+    required this.expectedIncome,
+    required this.onChanged,
+    this.currency,
+  });
+
+  @override
+  State<_IncomeDetail> createState() => _IncomeDetailState();
+}
+
+class _IncomeDetailState extends State<_IncomeDetail> {
+  late final TextEditingController _expectedController;
+
+  @override
+  void initState() {
+    super.initState();
+    _expectedController =
+        TextEditingController(text: widget.expectedIncome.toStringAsFixed(2));
+  }
+
+  @override
+  void dispose() {
+    _expectedController.dispose();
+    super.dispose();
+  }
+
+  /// Reopens the standard transaction editor for [t], then refreshes this
+  /// card's breakdown/list from the repo - a category-only edit never
+  /// changes the account's total income (incomeForPeriod filters by
+  /// TRANSCODE, not category), so [widget.income] (computed once by the
+  /// caller before this sheet opened) stays valid; only the per-category
+  /// and per-transaction breakdown needs refetching.
+  Future<void> _editTransaction(MoneyTransaction t) async {
+    await openTransactionEditor(context, existing: t);
+    if (mounted) setState(() {});
+  }
+
+  /// "Revenus attendus" (2026-09-05 user request: "il faut que je puisse
+  /// modifier la valeur globale attendus") - saves whatever's typed as a
+  /// manual override, taking priority over the automatic recurring-bill
+  /// total from here on (see MmexRepository.expectedIncomeForBudget).
+  void _saveExpectedOverride() {
+    final amount = double.tryParse(_expectedController.text.replaceAll(',', '.'));
+    if (amount == null) return;
+    widget.repo.setIncomeTargetOverride(widget.accountId, amount);
+    widget.onChanged();
+    setState(() {});
+  }
+
+  /// Clears the manual override and refills the field with the automatic
+  /// total - the "Revenus attendus" equivalent of stopping a custom
+  /// envelope amount from overriding its recurring-bill total.
+  void _resetToAutomatic() {
+    widget.repo.clearIncomeTargetOverride(widget.accountId);
+    widget.onChanged();
+    setState(() {
+      _expectedController.text =
+          widget.repo.monthlyRecurringIncome(accountId: widget.accountId).toStringAsFixed(2);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = widget.repo;
+    final window = widget.window;
+    final accountId = widget.accountId;
+    final currency = widget.currency;
+    final income = widget.income;
+    final hasOverride = repo.getIncomeTargetOverride(accountId) != null;
+    final categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
+    final totalsByCategory = repo.incomeCategoryTotalsForPeriod(window.start, window.end,
+        accountId: accountId);
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+
+    // Same convention the transfer-as-expense side uses: a Deposit counts
+    // via ACCOUNTID, an incoming Transfer via TOACCOUNTID - matches
+    // MmexRepository.incomeCategoryTotalsForPeriod's own filter exactly,
+    // so this list always agrees with the totals it backs.
+    final transactions = repo
+        .getTransactions(accountId: accountId, from: window.start, to: window.end, limit: 500)
+        .where((t) =>
+            t.categoryId != null &&
+            !t.isVoid &&
+            (t.transCode == TransCode.deposit ||
+                (t.transCode == TransCode.transfer && t.toAccountId == accountId)))
+        .toList()
+      ..sort((a, b) => b.date.compareTo(a.date));
+
+    final dateFormat = DateFormat('d MMM', 'fr_FR');
+    String fmt(double v) => currency?.format(v) ?? v.toStringAsFixed(2);
+
+    // Alphabetical, same stable-order convention as the rest of the
+    // 2026-09-05 budget changes - a category with real income but no
+    // longer any transaction this period simply doesn't appear.
+    final categoryRows = totalsByCategory.entries.toList()
+      ..sort((a, b) => (categoriesById[a.key]?.name ?? '')
+          .toLowerCase()
+          .compareTo((categoriesById[b.key]?.name ?? '').toLowerCase()));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Revenus', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const SizedBox(height: 8),
+            Text('Réel : ${fmt(income)}', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _expectedController,
+              decoration: const InputDecoration(labelText: 'Revenus attendus (mensuel)'),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              hasOverride
+                  ? 'Valeur fixée manuellement - elle prime sur le calcul automatique.'
+                  : 'Calculée automatiquement depuis les opérations récurrentes actives.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: hasOverride ? _resetToAutomatic : null,
+                  child: const Text('Revenir au calcul automatique'),
+                ),
+                const Spacer(),
+                FilledButton(
+                  onPressed: _saveExpectedOverride,
+                  child: const Text('Enregistrer'),
+                ),
+              ],
+            ),
+            if (categoryRows.isNotEmpty) ...[
+              const Divider(height: 24),
+              Text('Par catégorie', style: Theme.of(context).textTheme.bodySmall),
+              const SizedBox(height: 4),
+              for (final entry in categoryRows)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          categoriesById[entry.key]?.name ?? 'Catégorie inconnue',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(fmt(entry.value), style: const TextStyle(fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+            ],
+            const Divider(height: 24),
+            Text('Opérations de la période', style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 4),
+            if (transactions.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: Text('Aucune opération sur cette période.'),
+              )
+            else
+              for (final t in transactions)
+                InkWell(
+                  onTap: () => _editTransaction(t),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          child: Text(dateFormat.format(t.date), style: Theme.of(context).textTheme.bodySmall),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                payees[t.payeeId]?.name ?? 'Tiers inconnu',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                categoriesById[t.categoryId]?.name ?? 'Sans catégorie',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          currency?.format(t.amount) ?? t.amount.toStringAsFixed(2),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
           ],

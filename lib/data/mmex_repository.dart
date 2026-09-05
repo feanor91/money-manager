@@ -314,6 +314,24 @@ class MmexRepository {
         PRIMARY KEY (SCENARIOID, ACCOUNTID)
       )
     ''');
+    // Manual override of "Revenus attendus" on the Budget screen, per
+    // account (2026-09-05 user report): [monthlyRecurringIncome] sums
+    // *active recurring bill templates*, and a one-off transfer or
+    // insurance reimbursement that was (wrongly, or no longer relevantly)
+    // set up as a recurring deposit/transfer bill inflates that total with
+    // no way to fix it short of hunting down and editing the bill itself.
+    // Once set, this always wins over the automatic total (the opposite
+    // priority from APP_BUDGET_ENVELOPES, where the automatic recurring
+    // total always wins over a manual amount) - the point here is
+    // specifically to let the user override a total they've found to be
+    // wrong. See [expectedIncomeForBudget]/[setIncomeTargetOverride]/
+    // [clearIncomeTargetOverride].
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS APP_INCOME_TARGETS (
+        ACCOUNTID INTEGER PRIMARY KEY,
+        AMOUNT REAL NOT NULL
+      )
+    ''');
   }
 
   void _tryAddColumn(String table, String column, String type) {
@@ -1895,20 +1913,31 @@ class MmexRepository {
   /// window instead of a fixed calendar month - e.g. a budget window that
   /// starts mid-month, see BudgetScreen and models/budget_period.dart.
   ///
-  /// [includeCategorizedTransfersAsExpense] (2026-09-05 user request):
-  /// when true *and* [accountId] is given, a categorized `Transfer` row
-  /// also counts, exactly like a `Withdrawal` - "un virement de 700€ du
-  /// Crédit Agricole vers Boursorama, c'est une dépense sur le Crédit
-  /// Agricole" (money genuinely left this account, whatever it's tagged
-  /// as). Never a double-count on the *destination* side: a transfer only
-  /// ever matches the [accountId] filter below via its `ACCOUNTID`
-  /// (MMEX's own source-account column), never `TOACCOUNTID` - scoped to
-  /// the destination account instead, the exact same row simply doesn't
-  /// match at all, the same way [incomeForPeriod] already treats it as
-  /// income there instead. Defaults to false (unchanged behavior) since
-  /// this method backs the natural-language "dépenses" answers, the
-  /// discretionary-spending average, and more - only the *envelope*
-  /// budget view opts in, deliberately, not every caller.
+  /// [includeCategorizedTransfersAsExpense] (2026-09-05 user request,
+  /// reaffirmed unconditionally the same day: "un virement en sortie d'un
+  /// compte est une dépense et doit apparaître comme tel quel que soit son
+  /// sujet" - a transfer out counts as an expense whatever category it's
+  /// tagged under, no exception): when true *and* [accountId] is given, a
+  /// categorized `Transfer` row also counts, exactly like a `Withdrawal` -
+  /// money genuinely left this account. Never a double-count on the
+  /// *destination* side: a transfer only ever matches the [accountId]
+  /// filter below via its `ACCOUNTID` (MMEX's own source-account column),
+  /// never `TOACCOUNTID` - scoped to the destination account instead, the
+  /// exact same row simply doesn't match at all, the same way
+  /// [incomeForPeriod] already treats it as income there instead. Defaults
+  /// to false (unchanged behavior) since this method backs the
+  /// natural-language "dépenses" answers, the discretionary-spending
+  /// average, and more - only the *envelope* budget view opts in,
+  /// deliberately, not every caller.
+  ///
+  /// An earlier version of this also skipped a transfer tagged under a
+  /// category named "Revenus" - removed 2026-09-05 per explicit user
+  /// correction above: the category a transfer happens to be tagged under
+  /// is irrelevant to whether it's an expense on the source account. If a
+  /// transfer's category label looks wrong for an expense (e.g. "Revenus:
+  /// Salaire Bruno" for what should be tagged "Virement"), that's a
+  /// data-tagging problem to fix on the transaction itself, not something
+  /// this method should silently work around.
   Map<int, double> categorySpendForPeriod(DateTime start, DateTime end,
       {int? accountId, bool includeCategorizedTransfersAsExpense = false}) {
     final includeTransfers = includeCategorizedTransfersAsExpense && accountId != null;
@@ -4086,6 +4115,58 @@ class MmexRepository {
     return total;
   }
 
+  /// Same computation as [incomeForPeriod], broken down by category
+  /// (`categoryId -> total`) instead of collapsed into one figure - backs
+  /// the "Détail des revenus" sheet (2026-09-05 user request: "faire
+  /// apparaître la fenêtre avec le détail des revenus comme pour les
+  /// dépenses"), the income-side counterpart to how
+  /// [categorySpendForPeriod] backs an expense envelope's own detail.
+  /// Deliberately two separate methods sharing the same filter logic
+  /// rather than [incomeForPeriod] calling this and summing - that would
+  /// mean every plain "what's my income" caller pays for a category
+  /// breakdown it never uses.
+  Map<int, double> incomeCategoryTotalsForPeriod(DateTime start, DateTime end,
+      {int? accountId}) {
+    final where = <String>[
+      "TRANSDATE >= ?",
+      "TRANSDATE < ?",
+      "(TRANSCODE = 'Deposit' OR TRANSCODE = 'Transfer')",
+      "UPPER(TRIM(STATUS)) != 'V'",
+      "(DELETEDTIME IS NULL OR DELETEDTIME = '')",
+    ];
+    final params = <Object?>[_isoDate(start), _isoDate(end)];
+    if (accountId != null) {
+      where.add('(ACCOUNTID = ? OR TOACCOUNTID = ?)');
+      params.addAll([accountId, accountId]);
+    }
+    final rows = db.query(
+      'SELECT TRANSCODE, ACCOUNTID, TOACCOUNTID, TRANSAMOUNT, TOTRANSAMOUNT, CATEGID '
+      'FROM CHECKINGACCOUNT_V1 WHERE ${where.join(' AND ')}',
+      params,
+    );
+    final categoriesById = {
+      for (final c in getCategories(onlyActive: false)) c.id: c
+    };
+    final totals = <int, double>{};
+    for (final row in rows) {
+      final categId = row['CATEGID'] as int?;
+      if (categId == null) continue;
+      if (_isSavingsCategory(categId, categoriesById)) continue;
+      double amount;
+      if (row['TRANSCODE'] == 'Deposit') {
+        if (accountId != null && row['ACCOUNTID'] != accountId) continue;
+        amount = (row['TRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      } else if (row['TRANSCODE'] == 'Transfer') {
+        if (accountId != null && row['TOACCOUNTID'] != accountId) continue;
+        amount = (row['TOTRANSAMOUNT'] as num?)?.toDouble() ?? 0;
+      } else {
+        continue;
+      }
+      totals[categId] = (totals[categId] ?? 0) + amount;
+    }
+    return totals;
+  }
+
   /// Monthly-equivalent total of every active, still-recurring deposit
   /// (or incoming, non-savings transfer) bill for [accountId] - expected
   /// income, same idea as [categoryMonthlyRecurringTotals] but for income
@@ -4116,6 +4197,40 @@ class MmexRepository {
               factor;
     }
     return total;
+  }
+
+  /// What the Budget screen's "Revenus attendus" figure actually shows -
+  /// [getIncomeTargetOverride] when the user has set one (2026-09-05: a
+  /// manual correction for when [monthlyRecurringIncome]'s automatic total
+  /// is wrong, e.g. inflated by a one-off transfer or reimbursement that
+  /// happens to still have an active recurring bill template), otherwise
+  /// falling back to the automatic total exactly as before.
+  double expectedIncomeForBudget(int accountId) =>
+      getIncomeTargetOverride(accountId) ?? monthlyRecurringIncome(accountId: accountId);
+
+  /// The manual "Revenus attendus" override for [accountId], if the user
+  /// has set one - see [APP_INCOME_TARGETS] in [ensureAppSchema].
+  double? getIncomeTargetOverride(int accountId) {
+    final rows =
+        db.query('SELECT AMOUNT FROM APP_INCOME_TARGETS WHERE ACCOUNTID = ?', [accountId]);
+    if (rows.isEmpty) return null;
+    return (rows.first['AMOUNT'] as num?)?.toDouble();
+  }
+
+  /// Sets (or replaces) the manual "Revenus attendus" override for
+  /// [accountId] - see [APP_INCOME_TARGETS] in [ensureAppSchema].
+  void setIncomeTargetOverride(int accountId, double amount) {
+    db.execute(
+      'INSERT INTO APP_INCOME_TARGETS (ACCOUNTID, AMOUNT) VALUES (?, ?) '
+      'ON CONFLICT(ACCOUNTID) DO UPDATE SET AMOUNT = excluded.AMOUNT',
+      [accountId, amount],
+    );
+  }
+
+  /// Clears [accountId]'s manual override, reverting "Revenus attendus" to
+  /// the automatic [monthlyRecurringIncome] total.
+  void clearIncomeTargetOverride(int accountId) {
+    db.execute('DELETE FROM APP_INCOME_TARGETS WHERE ACCOUNTID = ?', [accountId]);
   }
 
   /// Per-category counterpart to [monthlyRecurringIncome] - identical

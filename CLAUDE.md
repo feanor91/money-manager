@@ -128,7 +128,13 @@ tables, and guarded `ALTER TABLE ... ADD COLUMN` (wrapped in try/catch)
 when adding columns to a table that might already exist with an older
 shape on someone's already-open file. Existing examples:
 `APP_BUDGET_ENVELOPES`, `APP_BILL_OCCURRENCE_TOTALS`,
-`APP_TRANSACTION_BILL_LINKS`.
+`APP_TRANSACTION_BILL_LINKS`, `APP_INCOME_TARGETS` (manual override of the
+Budget screen's "Revenus attendus" figure per account - see
+`MmexRepository.expectedIncomeForBudget`; unlike the budget envelopes,
+here the manual value always wins over the automatic recurring-bill total
+once set, since it exists specifically to correct a wrong automatic
+total, e.g. a one-off transfer/reimbursement counted via a stale
+recurring bill template).
 
 ## Desktop: reopening a missing path must never silently create an empty file
 
@@ -408,10 +414,16 @@ this happened for real before the fix.
 
 ## Known semantics worth remembering
 
-- "Reste à vivre" (budget screen) is the real forecasted account balance
-  (`repo.forecastAccountBalance`), **not** a sum of budget envelopes -
-  this was explicitly corrected after user pushback; don't reintroduce
-  budget-math for it.
+- "Reste à vivre" (budget screen) is `revenu budgété - dépenses
+  budgétées` (`expectedIncome - sum of each _EnvelopeItem.target`) - a
+  fixed planning total for the window, **not** a running real balance.
+  Reversed again 2026-09-05: an earlier version used the real forecasted
+  account balance (`repo.forecastAccountBalance`) instead, itself a
+  correction of an even earlier "sum of budget envelopes" version - the
+  user rejected the forecasted-balance version this time ("ce n'est pas
+  ça que je veux, je veux voir le calcul revenu budgeté - dépenses
+  budgétées"). Given this has now flipped twice, don't "fix" it back to
+  either previous version without the user asking again.
 - MMEX's `NUMOCCURRENCES` column on a limited-duration recurring bill
   counts *down* to zero as occurrences fire - it never remembers the
   original total. `APP_BILL_OCCURRENCE_TOTALS` stores that total
