@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.104] - 2026-09-05
+
+- feat(backup): nettoyer automatiquement les sauvegardes anciennes
+
 ## [1.0.103] - 2026-09-05
 
 - docs: détailler le simulateur et le fractionnement dans le guide, export PDF
