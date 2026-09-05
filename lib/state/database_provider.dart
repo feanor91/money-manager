@@ -830,9 +830,15 @@ class DatabaseProvider extends ChangeNotifier {
   /// sibling file next to it, always reachable (no permission to lack).
   Future<void> _finishOpeningNative(MmexDatabase db) async {
     await _swapDatabase(db);
-    _backupNow(db);
+    // Companion settings (specifically backupRetentionWeeks) must be loaded
+    // *before* _backupNow runs, or it prunes using this field's compile-time
+    // default (4) instead of whatever the user actually configured - found
+    // 2026-09-05 live-testing: a real backup folder with retentionWeeks
+    // persisted as 1 never had anything deleted, because _backupNow used to
+    // fire here first, always seeing the untouched default.
     final prefs = await DatabaseCompanionSettings.forNativePath(db.label);
     await _applyCompanionSettings(prefs);
+    _backupNow(db);
     status = DbStatus.ready;
   }
 
@@ -842,9 +848,12 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> _finishOpeningWeb(MmexDatabase db, WebFileLink link) async {
     await _swapDatabase(db);
     _webFileLink = link;
-    _backupNow(db);
+    // See _finishOpeningNative's identical fix (2026-09-05) for why
+    // companion settings must load before _backupNow - otherwise
+    // backupRetentionWeeks is still this field's compile-time default.
     final prefs = await DatabaseCompanionSettings.forWebLink(link);
     await _applyCompanionSettings(prefs, webLinkAvailableButUnreachable: prefs == null);
+    _backupNow(db);
     status = DbStatus.ready;
   }
 
@@ -857,9 +866,12 @@ class DatabaseProvider extends ChangeNotifier {
   Future<void> _finishOpeningAndroid(MmexDatabase db, AndroidFileLink link) async {
     await _swapDatabase(db);
     _androidFileLink = link;
-    _backupNow(db);
+    // See _finishOpeningNative's identical fix (2026-09-05) for why
+    // companion settings must load before _backupNow - otherwise
+    // backupRetentionWeeks is still this field's compile-time default.
     final prefs = await DatabaseCompanionSettings.forAndroidLink(link);
     await _applyCompanionSettings(prefs);
+    _backupNow(db);
     status = DbStatus.ready;
   }
 
