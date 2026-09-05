@@ -225,15 +225,18 @@ void main() {
     expect(outcome, isA<sql_engine.SqlAccessUnavailable>());
   });
 
-  test('askLocalLlmWithFullDataAccess is unavailable on invalid SQL plan',
-      () async {
+  test(
+      'askLocalLlmWithFullDataAccess is unavailable on invalid SQL plan, '
+      'even after the one whole-plan retry (sql_query_engine.dart, '
+      '2026-09-05) also comes back invalid - a DROP TABLE plan is never '
+      'executed, however many attempts it takes to give up', () async {
     final db = await openBlankTestDb();
     final repo = MmexRepository(db);
     await pointAtServer();
     await setLocalLlmEnabled(true);
     nextResponses = [
       '{"content":"{\\"sql\\":\\"DROP TABLE ACCOUNTLIST_V1\\"}"}',
-      '{"content":"ne devrait jamais être utilisé"}',
+      '{"content":"toujours invalide, pas du JSON"}',
     ];
 
     final outcome = await askLocalLlmWithFullDataAccess(
@@ -242,7 +245,9 @@ void main() {
     );
 
     expect(outcome, isA<sql_engine.SqlAccessUnavailable>());
-    expect(receivedBodies, hasLength(1));
+    // The SQL-generation call, then the one whole-plan retry - never a
+    // third call, and never anything reaching the database either way.
+    expect(receivedBodies, hasLength(2));
   });
 
   test('isLocalLlmServerReachable reflects the health endpoint', () async {

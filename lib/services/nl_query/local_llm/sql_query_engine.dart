@@ -780,6 +780,32 @@ String formatChatHistory(List<ChatTurn> history) {
   return buffer.toString();
 }
 
+/// How many times [answerViaFullSqlAccess] gives a failing SQL step a
+/// chance to be corrected (by the model itself, shown its own error)
+/// before giving up and surfacing a raw SqliteException to the user. 1
+/// covers the common case cheaply (2026-09-05 user report: the model
+/// wrote "TRANSSDATE" instead of "TRANSDATE" deep inside an otherwise-
+/// correct query - a plain typo it can very likely spot and fix once
+/// shown the exact error) without piling up unbounded extra network
+/// round-trips for a query that's fundamentally not fixable this way.
+const _maxSqlFixAttempts = 1;
+
+/// Prompt sent back to the model when one of its own SQL steps failed
+/// against the real database - includes the failing SQL and SQLite's own
+/// error message verbatim, and asks for a single corrected query in the
+/// same minimal `{"sql": "..."}` shape [extractValidatedSql] expects
+/// (deliberately not the multi-step `{"steps": [...]}` shape - only the
+/// one failing step is being redone, not the whole plan).
+String _buildSqlFixPrompt(String failingSql, String errorMessage) => '''
+La requête SQL suivante a échoué à l'exécution contre la vraie base de données SQLite :
+
+$failingSql
+
+Erreur SQLite : $errorMessage
+
+Corrige uniquement cette requête (il s'agit probablement d'une faute de frappe dans un nom de colonne ou de table, ou d'une erreur de syntaxe). Réponds UNIQUEMENT avec le JSON `{"sql": "..."}` contenant la requête corrigée, sans aucune explication ni texte autour.
+''';
+
 /// Two-call flow, the "full data access" alternative to the closed
 /// QueryKind.adHoc vocabulary: (1) ask the model to write SQL against
 /// [systemPrompt]'s schema - either one query or a multi-step plan (see
@@ -802,12 +828,13 @@ String formatChatHistory(List<ChatTurn> history) {
 ///
 /// Returns [SqlAccessError] (never throws) whenever either HTTP call to
 /// [engine] itself failed, or the SQL it wrote errored against the real
-/// schema - told apart from [SqlAccessUnavailable] (invalid/declined SQL,
-/// an empty model response) so a genuine backend failure is never silently
-/// mistaken for "the AI had nothing to add" (see [SqlAccessOutcome]'s own
-/// doc comment). Same never-throws contract as every other local-AI entry
-/// point here, so the caller (nl_query_dialog.dart) always has a safe
-/// fallback either way.
+/// schema *and* couldn't be fixed within [_maxSqlFixAttempts] retries (see
+/// [_buildSqlFixPrompt]) - told apart from [SqlAccessUnavailable]
+/// (invalid/declined SQL, an empty model response) so a genuine backend
+/// failure is never silently mistaken for "the AI had nothing to add"
+/// (see [SqlAccessOutcome]'s own doc comment). Same never-throws contract
+/// as every other local-AI entry point here, so the caller
+/// (nl_query_dialog.dart) always has a safe fallback either way.
 Future<SqlAccessOutcome> answerViaFullSqlAccess({
   required String question,
   required MmexRepository readOnlyRepo,
@@ -815,27 +842,67 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
   required LlmEngine engine,
   List<ChatTurn> history = const [],
 }) async {
-  final LlmResponse rawPlan;
+  final composedQuestion = '${formatChatHistory(history)}$question';
+  LlmResponse rawPlan;
   try {
-    rawPlan = await engine.askWithSystemPrompt(
-        systemPrompt, '${formatChatHistory(history)}$question');
+    rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion);
   } catch (e) {
     return SqlAccessError(_describeError(e));
   }
-  final plan = extractValidatedSqlPlan(rawPlan.text);
-  if (plan == null) return const SqlAccessUnavailable();
+  var plan = extractValidatedSqlPlan(rawPlan.text);
+  if (plan == null) {
+    // One retry of the *whole* plan before giving up - a model
+    // occasionally returns narration or malformed JSON on a given attempt
+    // (2026-09-05 user report: the very next question, unrelated to the
+    // first, was declined this way and fell all the way to a plain,
+    // data-blind AI reply that had to explain it couldn't see the user's
+    // finances - see CLAUDE.md's own note on free "reasoning" models
+    // burning their token budget on hidden narration) but a second, fresh
+    // attempt at the identical prompt often succeeds outright.
+    try {
+      rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion);
+    } catch (e) {
+      return SqlAccessError(_describeError(e));
+    }
+    plan = extractValidatedSqlPlan(rawPlan.text);
+    if (plan == null) return const SqlAccessUnavailable();
+  }
 
   final results = <StepResult>[];
   var anyTruncated = false;
-  for (final step in plan) {
-    final List<Map<String, Object?>> rawRows;
-    try {
-      rawRows = readOnlyRepo.db.query('SELECT * FROM (${step.sql}) LIMIT 5000');
-    } catch (e) {
-      return SqlAccessError(
-          "La requête écrite par l'IA n'a pas pu s'exécuter (${_describeError(e)}).");
+  for (final originalStep in plan) {
+    var step = originalStep;
+    List<Map<String, Object?>>? rawRows;
+    Object? lastError;
+    for (var attempt = 0; attempt <= _maxSqlFixAttempts; attempt++) {
+      try {
+        rawRows = readOnlyRepo.db.query('SELECT * FROM (${step.sql}) LIMIT 5000');
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (attempt == _maxSqlFixAttempts) break;
+        // Give the model one chance to notice and fix its own mistake
+        // (2026-09-05 user report: it wrote "TRANSSDATE" instead of
+        // "TRANSDATE" deep inside an otherwise-correct query) before
+        // surfacing a raw SqliteException the user can't act on.
+        final LlmResponse fixResponse;
+        try {
+          fixResponse = await engine.askWithSystemPrompt(
+              systemPrompt, _buildSqlFixPrompt(step.sql, _describeError(e)));
+        } catch (_) {
+          break; // engine call itself failed mid-retry - stop, report below
+        }
+        final fixedSql = extractValidatedSql(fixResponse.text);
+        if (fixedSql == null) break; // no usable correction - stop, report below
+        step = SqlQueryStep(objectif: step.objectif, sql: fixedSql);
+      }
     }
-    final fit = _fitRowsToBudget(rawRows, _resultBudgetChars);
+    if (lastError != null) {
+      return SqlAccessError(
+          "La requête écrite par l'IA n'a pas pu s'exécuter (${_describeError(lastError)}).");
+    }
+    final fit = _fitRowsToBudget(rawRows!, _resultBudgetChars);
     final truncated = fit.dropped > 0;
     if (truncated) anyTruncated = true;
     results.add(StepResult(

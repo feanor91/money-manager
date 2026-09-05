@@ -594,11 +594,13 @@ void main() {
       expect(repo.executed, ['SELECT * FROM (SELECT 1) LIMIT 5000']);
     });
 
-    test('an invalid plan is reported as unavailable, not an error, without '
-        'touching the database', () async {
+    test('an invalid plan is retried once, and reported as unavailable '
+        '(not an error) if the retry is invalid too, without touching the '
+        'database', () async {
       final repo = _FakeRepo(perStepResults: []);
       final engine = _FakeEngine(responses: [
         '{"raison":"non"}',
+        '{"raison":"non"}', // the one whole-plan retry - still declines
       ]);
       final outcome = await answerViaFullSqlAccess(
         question: 'x',
@@ -608,20 +610,46 @@ void main() {
       );
       expect(outcome, isA<SqlAccessUnavailable>());
       expect(repo.executed, isEmpty);
-      expect(engine.systemPrompts, hasLength(1));
-      // Only the SQL-generation call happened - no answer-formatting call.
-      expect(engine.prompts, hasLength(1));
+      expect(engine.systemPrompts, hasLength(2));
+      // Two SQL-generation attempts - no answer-formatting call.
+      expect(engine.prompts, hasLength(2));
+    });
+
+    test('an invalid plan on the first attempt is retried once and '
+        'succeeds if the second attempt is valid - regression test for the '
+        '2026-09-05 user report of a question falling all the way to a '
+        'plain, data-blind AI reply ("je n\'ai pas accès à vos données...") '
+        'that a fresh identical attempt would very likely have answered',
+        () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 42}]
+      ]);
+      final engine = _FakeEngine(responses: [
+        'Voici une explication au lieu du JSON attendu.',
+        '{"sql":"SELECT 1"}',
+        'Réponse finale.',
+      ]);
+      final outcome = await answerViaFullSqlAccess(
+        question: 'x',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect((outcome as SqlAccessSuccess).answer.text, 'Réponse finale.');
+      expect(engine.systemPrompts, hasLength(2));
     });
 
     test(
-        'a query that errors fails closed with a real SqlAccessError, never '
-        'throws and never silently looks like "not understood" - regression '
-        'test for the 2026-09-01 user report of a real cloud AI failure '
-        'surfacing as a misleading fallback answer instead of a real error',
-        () async {
+        'a query that keeps erroring even after a fix attempt fails closed '
+        'with a real SqlAccessError, never throws and never silently looks '
+        'like "not understood" - regression test for the 2026-09-01 user '
+        'report of a real cloud AI failure surfacing as a misleading '
+        'fallback answer instead of a real error', () async {
       final repo = _FakeRepo(perStepResults: [], failOnQuery: true);
       final engine = _FakeEngine(responses: [
         '{"sql":"SELECT 1"}',
+        '{"sql":"SELECT 1"}', // the one fix attempt - still fails, repo
+        // always fails regardless of the SQL text.
       ]);
       final outcome = await answerViaFullSqlAccess(
         question: 'x',
@@ -630,8 +658,41 @@ void main() {
         engine: engine,
       );
       expect(outcome, isA<SqlAccessError>());
-      // Only the SQL-generation call happened - no answer-formatting call.
-      expect(engine.prompts, hasLength(1));
+      // The SQL-generation call, then one fix attempt - no answer-
+      // formatting call, since the SQL never actually ran successfully.
+      expect(engine.prompts, hasLength(2));
+    });
+
+    test(
+        'a query with a typo the model can fix is retried once and '
+        'succeeds - regression test for the 2026-09-05 user report of '
+        '"TRANSSDATE" (typo for TRANSDATE) surfacing as a raw '
+        'SqliteException instead of ever giving the model a chance to '
+        'notice and correct its own mistake', () async {
+      final repo = _FakeRepo(
+        perStepResults: [
+          [{'total': 42}]
+        ],
+        failFirstNQueries: 1,
+      );
+      final engine = _FakeEngine(responses: [
+        '{"sql":"SELECT T.TRANSSDATE FROM CHECKINGACCOUNT_V1 T"}',
+        '{"sql":"SELECT T.TRANSDATE FROM CHECKINGACCOUNT_V1 T"}', // the fix
+        'Réponse finale.',
+      ]);
+      final outcome = await answerViaFullSqlAccess(
+        question: 'x',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+      );
+      expect((outcome as SqlAccessSuccess).answer.text, 'Réponse finale.');
+      // The fix prompt names the exact failing SQL and the real error.
+      expect(engine.prompts[1], contains('TRANSSDATE'));
+      expect(engine.prompts[1], contains('erreur simulée'));
+      // The corrected SQL is what actually reached the database.
+      expect(repo.executed.last,
+          'SELECT * FROM (SELECT T.TRANSDATE FROM CHECKINGACCOUNT_V1 T) LIMIT 5000');
     });
 
     test('the SQL-generation call itself failing is reported as a '
@@ -737,9 +798,11 @@ class _FakeRepo implements MmexRepository {
   _FakeRepo({
     required List<List<Map<String, Object?>>> perStepResults,
     bool failOnQuery = false,
+    int failFirstNQueries = 0,
   }) : _db = _FakeDb(
             results: perStepResults,
             failOnQuery: failOnQuery,
+            failFirstNQueries: failFirstNQueries,
           );
 
   List<String> get executed => _db.executed;
@@ -756,10 +819,16 @@ class _FakeDb implements MmexDatabase {
   final List<List<Map<String, Object?>>> results;
   final List<String> executed = [];
   final bool failOnQuery;
+
+  /// The first [failFirstNQueries] calls to [query] throw - lets a test
+  /// simulate the model's *fixed* SQL (once retried) actually succeeding,
+  /// unlike [failOnQuery] which fails forever.
+  final int failFirstNQueries;
   int _call = 0;
   _FakeDb({
     required this.results,
     required this.failOnQuery,
+    this.failFirstNQueries = 0,
   });
 
   @override
@@ -771,7 +840,9 @@ class _FakeDb implements MmexDatabase {
   @override
   List<Map<String, Object?>> query(String sql, [List<Object?> params = const []]) {
     executed.add(sql);
-    if (failOnQuery) throw StateError('erreur simulée');
+    if (failOnQuery || executed.length <= failFirstNQueries) {
+      throw StateError('erreur simulée');
+    }
     final result = results[_call % results.length];
     _call++;
     return result;
