@@ -1,16 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
+import 'db_backup.dart' show backupFileNamesToDelete;
 import 'web_file_link.dart';
 
 const _dbName = 'money_manager_file_handles';
 const _storeName = 'handles';
 final _handleKey = 'lastFile'.toJS;
 final _dirHandleKey = 'backupDir'.toJS;
+final _backupManifestKey = 'backupManifest'.toJS;
 
 // --- Raw interop not (yet) covered by package:web -------------------------
 //
@@ -102,6 +105,33 @@ Future<void> _storeDirHandle(web.FileSystemDirectoryHandle handle) =>
     _storeValue(_dirHandleKey, handle);
 Future<web.FileSystemDirectoryHandle?> _loadStoredDirHandle() =>
     _loadValue<web.FileSystemDirectoryHandle>(_dirHandleKey);
+
+// --- Backup retention (2026-09-05) ------------------------------------------
+//
+// The File System Access API has no method to list a directory's entries in
+// package:web 1.1.1 (unlike a plain FileSystemDirectoryHandle in a real
+// browser, which does support `entries()`/`values()` - just not modeled
+// here yet). Rather than hand-write the raw async-iterator interop that
+// would take to enumerate the real `backup` folder, this tracks its own
+// manifest of filenames it has written there, in the same IndexedDB store
+// already used for the file/folder handles - one more small, structured-
+// clonable value, no new store needed. A backup made by a *different*
+// browser/device sharing the same synced folder is invisible to this
+// manifest and never touched by this browser's own cleanup - each
+// browser/device only ever prunes what it itself wrote, which is the best
+// this API surface allows without much more machinery.
+Future<List<String>> _loadBackupManifest() async {
+  final json = await _loadValue<JSString>(_backupManifestKey);
+  if (json == null) return [];
+  try {
+    return (jsonDecode(json.toDart) as List).cast<String>();
+  } catch (_) {
+    return [];
+  }
+}
+
+Future<void> _saveBackupManifest(List<String> fileNames) =>
+    _storeValue(_backupManifestKey, jsonEncode(fileNames).toJS);
 
 // --- Public API --------------------------------------------------------
 
@@ -236,7 +266,8 @@ class _WebFileLinkImpl implements WebFileLink {
   }
 
   @override
-  Future<void> writeBackup(List<int> bytes, String fileName) async {
+  Future<void> writeBackup(
+      List<int> bytes, String fileName, int retentionWeeks) async {
     final dir = _dirHandle;
     if (dir == null) return;
     try {
@@ -250,6 +281,21 @@ class _WebFileLinkImpl implements WebFileLink {
       final stream = await fileHandle.createWritable().toDart;
       await stream.write(Uint8List.fromList(bytes).toJS).toDart;
       await stream.close().toDart;
+
+      final manifest = await _loadBackupManifest();
+      if (!manifest.contains(fileName)) manifest.add(fileName);
+      final toDelete = backupFileNamesToDelete(manifest,
+              retentionWeeks: retentionWeeks)
+          .toSet();
+      for (final name in toDelete) {
+        try {
+          await backupDir.removeEntry(name).toDart;
+        } catch (_) {
+          // Best-effort - already gone, or some other transient failure.
+        }
+      }
+      await _saveBackupManifest(
+          manifest.where((n) => !toDelete.contains(n)).toList());
     } catch (_) {
       // Folder access revoked, wrong folder picked, quota, etc. - a failed
       // backup must never block the app from working.

@@ -293,6 +293,23 @@ class DatabaseProvider extends ChangeNotifier {
     await prefs.setInt(_prefsKeyForecastDay, forecastDay);
   }
 
+  /// How many rolling weeks of automatic database backups (see [_backupNow])
+  /// are kept before older ones are deleted - "par défaut on ne garderait
+  /// que 4 semaines glissantes" (2026-09-05 user request), configurable
+  /// here since backups can otherwise accumulate indefinitely in a synced
+  /// folder. Enforced by each platform's own `writeBackup`/`DbBackup.save`
+  /// right after writing a fresh one - see db_backup.dart's
+  /// `backupFileNamesToDelete` for the actual "older than N weeks" rule.
+  int backupRetentionWeeks = 4;
+
+  Future<void> setBackupRetentionWeeks(int weeks) async {
+    backupRetentionWeeks = weeks.clamp(1, 52);
+    notifyListeners();
+    final prefs = companionSettings;
+    if (prefs == null) return;
+    await prefs.setInt(_prefsKeyBackupRetentionWeeks, backupRetentionWeeks);
+  }
+
   /// Accent-color palette (see [AppTheme.applyPalette]). Starts at the
   /// default until a database's companion settings load (there is, by
   /// construction, nowhere else to read a customised palette from before
@@ -783,16 +800,21 @@ class DatabaseProvider extends ChangeNotifier {
     if (kIsWeb) {
       final link = _webFileLink;
       if (link == null) return;
-      unawaited(
-          link.writeBackup(bytes, backupFileName(db.label)).catchError((_) {}));
+      unawaited(link
+          .writeBackup(bytes, backupFileName(db.label), backupRetentionWeeks)
+          .catchError((_) {}));
     } else if (_isAndroid) {
       final link = _androidFileLink;
       if (link == null) return;
-      unawaited(
-          link.writeBackup(bytes, backupFileName(db.label)).catchError((_) {}));
+      unawaited(link
+          .writeBackup(bytes, backupFileName(db.label), backupRetentionWeeks)
+          .catchError((_) {}));
     } else {
-      unawaited(
-          DbBackup.save(label: db.label, bytes: bytes).catchError((_) {}));
+      unawaited(DbBackup.save(
+              label: db.label,
+              bytes: bytes,
+              retentionWeeks: backupRetentionWeeks)
+          .catchError((_) {}));
     }
   }
 
@@ -871,6 +893,8 @@ class DatabaseProvider extends ChangeNotifier {
       ledgerHiddenColumns =
           (prefs.getStringList(_prefsKeyLedgerHiddenColumns) ?? []).toSet();
       forecastDay = prefs.getInt(_prefsKeyForecastDay) ?? 24;
+      backupRetentionWeeks =
+          prefs.getInt(_prefsKeyBackupRetentionWeeks) ?? 4;
       palette = AppPalette.values.firstWhere(
         (p) => p.name == prefs.getString(_prefsKeyPalette),
         orElse: () => AppPalette.indigo,
@@ -890,6 +914,7 @@ class DatabaseProvider extends ChangeNotifier {
       ledgerColumnOrder = [];
       ledgerHiddenColumns = {};
       forecastDay = 24;
+      backupRetentionWeeks = 4;
       palette = AppPalette.indigo;
       themeMode = ThemeMode.system;
     }
@@ -1154,7 +1179,8 @@ class DatabaseProvider extends ChangeNotifier {
     if (sync == null || link == null || info == null) return;
     try {
       final resolution = await sync.resolveConflict(choice: choice, info: info);
-      await link.writeBackup(resolution.losingBytes, backupFileName(link.name));
+      await link.writeBackup(resolution.losingBytes, backupFileName(link.name),
+          backupRetentionWeeks);
       if (!resolution.localWon) {
         await link.writeBytes(resolution.winningBytes);
         final newDb =
@@ -1207,6 +1233,7 @@ const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
 const _prefsKeyAccountOrder = 'mmex_account_order';
 const _prefsKeySimulationAccounts = 'mmex_simulation_selected_account_ids';
 const _prefsKeyForecastDay = 'mmex_forecast_day';
+const _prefsKeyBackupRetentionWeeks = 'mmex_backup_retention_weeks';
 const _prefsKeyPalette = 'mmex_app_palette';
 const _prefsKeyThemeMode = 'mmex_app_theme_mode';
 const _prefsKeyLedgerColumnOrder = 'mmex_ledger_column_order';

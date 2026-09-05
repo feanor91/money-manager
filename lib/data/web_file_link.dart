@@ -72,8 +72,13 @@ abstract class WebFileLink {
   /// A no-op if that folder access was never granted or its permission has
   /// lapsed - there's no way to write anywhere on disk on the web without
   /// an explicit grant, so this fails silently rather than nagging the user
-  /// every single time the app opens.
-  Future<void> writeBackup(List<int> bytes, String fileName);
+  /// every single time the app opens. Also prunes anything in that folder
+  /// older than [retentionWeeks] rolling weeks (see db_backup.dart's
+  /// `backupFileNamesToDelete`) - package:web has no directory-listing
+  /// method for the File System Access API, so the web implementation
+  /// tracks its own manifest of filenames it wrote, rather than actually
+  /// enumerating the folder.
+  Future<void> writeBackup(List<int> bytes, String fileName, int retentionWeeks);
 
   /// True if a directory handle was ever remembered for this link - not
   /// necessarily still permitted (see [ensureDirectoryPermission]), just

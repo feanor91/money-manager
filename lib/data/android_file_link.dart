@@ -48,8 +48,14 @@ abstract class AndroidFileLink {
   Future<void> writeBytes(List<int> bytes);
 
   /// Writes a dated snapshot into a `backup` subfolder, same principle as
-  /// WebFileLink.writeBackup - best-effort, never throws.
-  Future<void> writeBackup(List<int> bytes, String backupFileName);
+  /// WebFileLink.writeBackup - best-effort, never throws. Also prunes
+  /// anything in that folder older than [retentionWeeks] rolling weeks
+  /// (see db_backup.dart's `backupFileNamesToDelete`) - unlike the web
+  /// version, SAF genuinely supports listing a folder's real contents
+  /// (see `_safUtil.list`), so this always reflects what's actually there,
+  /// not a locally-tracked guess.
+  Future<void> writeBackup(
+      List<int> bytes, String backupFileName, int retentionWeeks);
 
   /// Reads a file directly inside the same folder as the main database -
   /// null if it doesn't exist yet or can't be read (matches

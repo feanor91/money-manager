@@ -5,6 +5,7 @@ import 'package:saf_util/saf_util.dart';
 
 import '../state/app_preferences.dart';
 import 'android_file_link.dart';
+import 'db_backup.dart' show backupFileNamesToDelete;
 
 const _prefsKeyDirectoryUri = 'mmex_android_dir_uri';
 const _prefsKeyFileName = 'mmex_android_file_name';
@@ -92,7 +93,8 @@ class _AndroidFileLinkImpl implements AndroidFileLink {
   }
 
   @override
-  Future<void> writeBackup(List<int> bytes, String backupFileName) async {
+  Future<void> writeBackup(
+      List<int> bytes, String backupFileName, int retentionWeeks) async {
     try {
       final backupDir = await _safUtil.mkdirp(directoryUri, ['backup']);
       await _safStream.writeFileBytes(
@@ -102,6 +104,20 @@ class _AndroidFileLinkImpl implements AndroidFileLink {
         Uint8List.fromList(bytes),
         overwrite: true,
       );
+      final entries = await _safUtil.list(backupDir.uri);
+      final files = entries.where((e) => !e.isDir).toList();
+      final toDelete = backupFileNamesToDelete(
+        [for (final f in files) f.name],
+        retentionWeeks: retentionWeeks,
+      ).toSet();
+      for (final file in files) {
+        if (!toDelete.contains(file.name)) continue;
+        try {
+          await _safUtil.delete(file.uri, false);
+        } catch (_) {
+          // Best-effort - already gone, or some other transient failure.
+        }
+      }
     } catch (_) {
       // Best-effort, same as WebFileLink.writeBackup.
     }

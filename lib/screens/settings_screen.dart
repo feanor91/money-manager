@@ -175,6 +175,39 @@ class SettingsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Card(
+            child: ListTile(
+              leading: const Icon(Icons.folder_delete_outlined),
+              title: const Text('Sauvegardes conservées'),
+              subtitle: const Text(
+                  'Les sauvegardes automatiques (dossier "backup") plus '
+                  'anciennes que cette durée sont supprimées à chaque '
+                  'nouvelle sauvegarde'),
+              trailing: DropdownButton<int>(
+                value: dbProvider.backupRetentionWeeks,
+                items: [
+                  for (final weeks in <int>{
+                    1,
+                    2,
+                    4,
+                    8,
+                    12,
+                    26,
+                    52,
+                    dbProvider.backupRetentionWeeks,
+                  }.toList()
+                    ..sort())
+                    DropdownMenuItem(
+                        value: weeks,
+                        child: Text(weeks == 1 ? '1 semaine' : '$weeks semaines')),
+                ],
+                onChanged: (weeks) {
+                  if (weeks != null) dbProvider.setBackupRetentionWeeks(weeks);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
