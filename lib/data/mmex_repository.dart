@@ -92,6 +92,12 @@ class MmexRepository {
     // own name - null means "use the category name" (the default when an
     // envelope is created, manually or via suggestions).
     _tryAddColumn('APP_BUDGET_ENVELOPES', 'NAME', 'TEXT');
+    // See [BudgetEnvelope.manualOverride] - 0 (the default, and the only
+    // possibility before this column existed) preserves every existing
+    // envelope's behavior exactly: an active recurring bill's own total
+    // always wins. Only set to 1 via an explicit checkbox in
+    // _EnvelopeDetail, never implicitly.
+    _tryAddColumn('APP_BUDGET_ENVELOPES', 'MANUAL_OVERRIDE', 'INTEGER NOT NULL DEFAULT 0');
     // A named, saveable "what if" budget - separate from the real
     // APP_BUDGET_ENVELOPES (never touched by these), so simulating doesn't
     // risk the actual budget. Several can exist per account; the user
@@ -3737,18 +3743,24 @@ class MmexRepository {
     required int categoryId,
     required double amount,
     Object? name = _unset,
+    Object? manualOverride = _unset,
   }) {
     if (id != null) {
-      if (identical(name, _unset)) {
-        db.execute(
-            'UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ? WHERE ENVELOPEID = ?',
-            [amount, id]);
-      } else {
-        db.execute(
-          'UPDATE APP_BUDGET_ENVELOPES SET AMOUNT = ?, NAME = ? WHERE ENVELOPEID = ?',
-          [amount, name, id],
-        );
+      final sets = <String>['AMOUNT = ?'];
+      final params = <Object?>[amount];
+      if (!identical(name, _unset)) {
+        sets.add('NAME = ?');
+        params.add(name);
       }
+      if (!identical(manualOverride, _unset)) {
+        sets.add('MANUAL_OVERRIDE = ?');
+        params.add((manualOverride as bool) ? 1 : 0);
+      }
+      params.add(id);
+      db.execute(
+        'UPDATE APP_BUDGET_ENVELOPES SET ${sets.join(', ')} WHERE ENVELOPEID = ?',
+        params,
+      );
     } else {
       // ON CONFLICT covers the (rare, but possible via the suggestions
       // dialog racing a manual add) case of already having an envelope

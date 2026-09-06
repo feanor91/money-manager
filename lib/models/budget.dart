@@ -19,6 +19,18 @@ class BudgetEnvelope {
   /// itself or anything else that shows it (transactions, recurring bills...).
   final String? name;
 
+  /// When this envelope's category has an active recurring bill (an
+  /// "auto" envelope), [amount] is normally ignored in favour of that
+  /// bill's own live total - see BudgetScreen's `target = auto ? autoTotal
+  /// : e.amount`. Checking this (2026-09-06 user report: "je veux changer
+  /// le montant prévu pour assurance et la sauvegarde ne fonctionne pas" -
+  /// the recalculate-from-history button was silently a no-op on an auto
+  /// envelope) flips that priority for this one envelope, the same
+  /// explicit-opt-in shape as APP_BUDGET_SCENARIO_AMOUNTS.MANUAL. Always
+  /// false (and irrelevant) for a non-auto envelope, where [amount] was
+  /// already the only value that mattered.
+  final bool manualOverride;
+
   const BudgetEnvelope({
     required this.id,
     required this.accountId,
@@ -26,6 +38,7 @@ class BudgetEnvelope {
     required this.amount,
     required this.active,
     this.name,
+    this.manualOverride = false,
   });
 
   factory BudgetEnvelope.fromRow(Map<String, Object?> row) {
@@ -36,6 +49,7 @@ class BudgetEnvelope {
       amount: (row['AMOUNT'] as num?)?.toDouble() ?? 0,
       active: (row['ACTIVE'] as int? ?? 1) == 1,
       name: row['NAME'] as String?,
+      manualOverride: (row['MANUAL_OVERRIDE'] as int? ?? 0) == 1,
     );
   }
 }

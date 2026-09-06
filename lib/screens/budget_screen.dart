@@ -44,6 +44,16 @@ class _MemberEnvelope {
   final double forecastExtra;
   final bool isAuto;
 
+  /// The raw recurring-bill total for this category, regardless of
+  /// [manualOverride] - unlike [isAuto] (which is false once overridden),
+  /// this stays >0 as long as an active recurring bill actually exists, so
+  /// [_EnvelopeDetail] can still offer "remplacer le calcul automatique"
+  /// even after the override is on.
+  final double recurringAutoTotal;
+
+  /// See [BudgetEnvelope.manualOverride].
+  final bool manualOverride;
+
   /// This envelope's own custom label, if the user set one - see
   /// [BudgetEnvelope.name]. Prefer [displayName] for anything shown to the
   /// user; this raw field is for pre-filling the rename field itself.
@@ -57,6 +67,8 @@ class _MemberEnvelope {
     required this.spentSimulated,
     required this.forecastExtra,
     required this.isAuto,
+    required this.recurringAutoTotal,
+    required this.manualOverride,
     this.name,
   });
 
@@ -178,6 +190,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   candidateCategories: candidates,
                   categoriesById: categoriesById,
                   recurringTotals: recurringTotals,
+                  allCategories: categories,
+                  coveredCategoryIds: coveredIds,
                   onDone: () => dbProvider.touch(),
                 );
               },
@@ -304,11 +318,39 @@ class _BudgetScreenState extends State<BudgetScreen> {
       final topCategory = categoriesById[topEntry.key];
       if (topCategory == null) continue;
 
+      // Every category already covered by its own envelope entry in this
+      // group - excluded from the top envelope's own rollup below so a
+      // separately-budgeted subcategory's recurring bill is never counted
+      // twice (once via that subcategory's own entry, once folded into the
+      // parent's).
+      final ownEnvelopeCategoryIds = topEntry.value.map((x) => x.categoryId).toSet();
+
       final members = <_MemberEnvelope>[];
       for (final e in topEntry.value) {
         final category = categoriesById[e.categoryId]!;
-        final autoTotal = recurringTotals[e.categoryId] ?? 0;
-        final auto = autoTotal > 0;
+        var autoTotal = recurringTotals[e.categoryId] ?? 0;
+        // A top-level envelope must also pick up a recurring bill tagged
+        // directly to one of its *unbudgeted* subcategories (2026-09-06
+        // user report: "Taxes" has real recurring bills on "Taxe foncière"/
+        // "Taxes d'habitation" etc., but no envelope of its own for those,
+        // and the parent envelope's auto-detection was an exact CATEGID
+        // match only - it silently missed them, showing no ↻ icon and
+        // falling back to a stale manual amount). Mirrors how
+        // [rolledUpSpend] already rolls real spend up from children into
+        // the parent bar.
+        if (e.categoryId == topCategory.id) {
+          for (final c in categories) {
+            if (c.parentId == topCategory.id && !ownEnvelopeCategoryIds.contains(c.id)) {
+              autoTotal += recurringTotals[c.id] ?? 0;
+            }
+          }
+        }
+        // manualOverride (2026-09-06 user report: "je veux changer le
+        // montant prévu pour assurance et la sauvegarde ne fonctionne pas")
+        // flips this envelope's own priority - a typed/saved amount wins
+        // over its category's live recurring-bill total, exactly the same
+        // way a non-auto envelope's amount always did.
+        final auto = autoTotal > 0 && !e.manualOverride;
         final target = auto ? autoTotal : e.amount;
         final spentOwn = rawSpend[e.categoryId] ?? 0;
         final spentSimulated = simulatedExtraFor(e.categoryId);
@@ -328,6 +370,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
           spentSimulated: spentSimulated,
           forecastExtra: forecastExtra,
           isAuto: auto,
+          recurringAutoTotal: autoTotal,
+          manualOverride: e.manualOverride,
           name: e.name,
         ));
       }
@@ -358,12 +402,14 @@ class _BudgetScreenState extends State<BudgetScreen> {
     // [items] rather than its own separate spend-based ranking - "always
     // in the same place" was the whole point of the 2026-09-05 request,
     // which a second, independently-sorted copy would have undermined.
-    // Every bar's length is still plotted on the same shared scale below,
-    // so categories remain directly comparable by eye even unranked.
+    // Each bar is self-scaled to its own target (2026-09-06 user request:
+    // a shared cross-category scale made a bar's fill misleading at a
+    // glance - "j'ai l'impression d'avoir dépensé 1/4 du budget, alors
+    // qu'en vrai je suis à 90%" - the fill was relative to whichever
+    // category had the biggest amount on screen, not to this category's
+    // own target) - no more directly comparing two bars' absolute lengths,
+    // but each one now reads correctly on its own.
     final barItems = items;
-    final maxScaleRaw = items.fold(
-        0.0, (m, i) => [m, i.spentTotal, i.target].reduce((a, b) => a > b ? a : b));
-    final maxScale = maxScaleRaw <= 0 ? 1.0 : maxScaleRaw;
 
     // Real income this window, and the expected/forecast income from
     // still-active recurring deposits (salary, etc.) - always shown as
@@ -394,6 +440,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   activeCategories.where((c) => !envelopes.any((e) => e.categoryId == c.id)).toList(),
               categoriesById: categoriesById,
               recurringTotals: recurringTotals,
+              allCategories: categories,
+              coveredCategoryIds: envelopes.map((e) => e.categoryId).toSet(),
               onDone: () => dbProvider.touch(),
             );
 
@@ -534,7 +582,6 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   spent: item.spentTotal,
                   target: item.target,
                   forecastExtra: item.forecastExtra,
-                  maxScale: maxScale,
                   currency: currency,
                   selected: item.topCategory.id == _selectedCategoryId,
                   onTap: () => _openEnvelopeDetail(
@@ -1411,15 +1458,34 @@ Future<void> _addEnvelope({
   required Map<int, Category> categoriesById,
   required Map<int, double> recurringTotals,
   required VoidCallback onDone,
+  List<Category> allCategories = const [],
+  Set<int> coveredCategoryIds = const {},
 }) async {
   Category? category;
   final amountController = TextEditingController();
+
+  // Same rollup as BudgetScreen's own member-building loop applies to an
+  // existing top-level envelope (2026-09-06 user report re: "Taxes" -
+  // a parent category's recurring total must include a child category's
+  // recurring bill too, unless that child is already separately budgeted).
+  // Without this, prefilling a brand-new top-level envelope (e.g. "Taxes")
+  // from its recurring total would silently show 0 the same way the
+  // existing envelope's own auto-detection used to.
+  double rolledUpAutoTotal(int categoryId) {
+    var total = recurringTotals[categoryId] ?? 0;
+    for (final c in allCategories) {
+      if (c.parentId == categoryId && !coveredCategoryIds.contains(c.id)) {
+        total += recurringTotals[c.id] ?? 0;
+      }
+    }
+    return total;
+  }
 
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => StatefulBuilder(
       builder: (context, setDialogState) {
-        final autoTotal = category == null ? null : recurringTotals[category!.id];
+        final autoTotal = category == null ? null : rolledUpAutoTotal(category!.id);
         return AlertDialog(
           title: const Text('Nouvelle enveloppe'),
           content: SizedBox(
@@ -1434,8 +1500,8 @@ Future<void> _addEnvelope({
                   labelOf: (c) => categoryFullPath(c.id, categoriesById),
                   onSelected: (c) => setDialogState(() {
                     category = c;
-                    if (c != null && (recurringTotals[c.id] ?? 0) > 0) {
-                      amountController.text = recurringTotals[c.id]!.toStringAsFixed(2);
+                    if (c != null && rolledUpAutoTotal(c.id) > 0) {
+                      amountController.text = rolledUpAutoTotal(c.id).toStringAsFixed(2);
                     }
                   }),
                 ),
@@ -1496,11 +1562,11 @@ class _Suggestion {
 
 const _suggestionHistoryMonths = 12;
 
-/// Average real spend for [categoryId] alone (not rolled up into its
-/// subcategories - matches one envelope's own granularity) over the last
-/// [months] *closed* budget windows before now, plus the most recent date
-/// any of that spend actually happened - the same formula
-/// [_openSuggestions] bases a brand-new envelope's suggested amount on,
+/// Average real spend for [categoryId] over the last [months] *closed*
+/// budget windows before now, plus the most recent date any of that spend
+/// actually happened - the same formula [_openSuggestions] bases a
+/// brand-new *leaf* envelope's suggested amount on (called there with
+/// [categories] omitted, matching one leaf envelope's own granularity),
 /// extracted here so an *existing* envelope can be recomputed the exact
 /// same way after the fact (2026-09-05 user request: "je puisse
 /// recalculer le montant d'une catégorie à posteriori... comme en
@@ -1509,26 +1575,54 @@ const _suggestionHistoryMonths = 12;
 /// total rather than [months] queries *per category* - fine for this
 /// single-category case, wasteful for suggesting dozens of envelopes at
 /// once.
+///
+/// [categories] (2026-09-06 user report: "pour assurance le calcul trouve
+/// une moyenne de 28.56 alors que je paye quasi toujours la même chose" -
+/// "Assurances" only had one combined top-level envelope, but its real
+/// spend is recorded against several subcategories, e.g. "Assurances:Vie"/
+/// "Assurances:Automobile" - the exact-CATEGID-only average completely
+/// missed them, the same class of bug as the recurring-total rollup fix
+/// just above): when given, rolls a direct child's spend into [categoryId]
+/// too, unless that child is in [excludeCategoryIds] (already budgeted
+/// with its own separate envelope, and so must not be double-counted into
+/// the parent's own recalculated amount).
 ({double average, DateTime? lastSpend}) _historicalMonthlyAverage({
   required MmexRepository repo,
   required int categoryId,
   required int accountId,
   required int startDay,
   int months = _suggestionHistoryMonths,
+  List<Category> categories = const [],
+  Set<int> excludeCategoryIds = const {},
 }) {
   var window = previousBudgetWindow(budgetWindowContaining(DateTime.now(), startDay), startDay);
   var total = 0.0;
   DateTime? earliestStart;
+  final relevantIds = {
+    categoryId,
+    for (final c in categories)
+      if (c.parentId == categoryId && !excludeCategoryIds.contains(c.id)) c.id,
+  };
   for (var i = 0; i < months; i++) {
     final spend = repo.categorySpendForPeriod(window.start, window.end,
         accountId: accountId, includeCategorizedTransfersAsExpense: true);
-    total += spend[categoryId] ?? 0;
+    for (final id in relevantIds) {
+      total += spend[id] ?? 0;
+    }
     earliestStart = window.start;
     window = previousBudgetWindow(window, startDay);
   }
-  final lastSpend = earliestStart == null
-      ? null
-      : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId)[categoryId];
+  final lastSpendByCategory =
+      earliestStart == null ? null : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId);
+  DateTime? lastSpend;
+  if (lastSpendByCategory != null) {
+    for (final id in relevantIds) {
+      final date = lastSpendByCategory[id];
+      if (date != null && (lastSpend == null || date.isAfter(lastSpend))) {
+        lastSpend = date;
+      }
+    }
+  }
   return (average: total / months, lastSpend: lastSpend);
 }
 
@@ -2305,6 +2399,14 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
   late final TextEditingController _nameController;
   late final TextEditingController _amountController;
 
+  /// See [BudgetEnvelope.manualOverride] - whether the typed [_amountController]
+  /// value should win over this category's own active recurring bill total,
+  /// for the top envelope only (2026-09-06 user report: "je veux changer le
+  /// montant prévu pour assurance et la sauvegarde ne fonctionne pas" - the
+  /// recalculate-from-history button was silently a no-op on an "auto"
+  /// envelope until this existed).
+  late bool _manualOverride;
+
   /// The envelope entry for the top category itself, if one exists yet -
   /// distinct from its subcategories' own entries, which are display-only
   /// here (the user explicitly asked to only edit the title/amount of the
@@ -2321,6 +2423,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     super.initState();
     _nameController = TextEditingController(text: widget.item.displayName);
     _amountController = TextEditingController(text: (_topMember?.target ?? 0).toStringAsFixed(2));
+    _manualOverride = _topMember?.manualOverride ?? false;
   }
 
   @override
@@ -2344,6 +2447,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
       categoryId: widget.item.topCategory.id,
       amount: double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0,
       name: customName,
+      manualOverride: _manualOverride,
     );
     widget.onDone();
   }
@@ -2357,11 +2461,21 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
   /// save, same as typing a number in by hand.
   void _recalculateFromHistory() {
     if (widget.accountId == null) return;
+    // Exclude a subcategory that already has its own separate envelope in
+    // this group - its history is recalculated on its own card, never
+    // folded into the top envelope's (same exclusion the recurring-total
+    // rollup above uses).
+    final excludeIds = widget.item.members
+        .map((m) => m.category.id)
+        .where((id) => id != widget.item.topCategory.id)
+        .toSet();
     final result = _historicalMonthlyAverage(
       repo: widget.repo,
       categoryId: widget.item.topCategory.id,
       accountId: widget.accountId!,
       startDay: widget.startDay,
+      categories: widget.categories,
+      excludeCategoryIds: excludeIds,
     );
     setState(() {
       _amountController.text = result.average.toStringAsFixed(2);
@@ -2388,6 +2502,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     setState(() {
       _nameController.text = widget.item.topCategory.name;
       _amountController.text = '0.00';
+      _manualOverride = false;
     });
     widget.onDone();
   }
@@ -2528,12 +2643,22 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
                   ),
               ],
             ),
-            if (topMember?.isAuto ?? false) ...[
-              const SizedBox(height: 8),
+            if ((topMember?.recurringAutoTotal ?? 0) > 0) ...[
+              const SizedBox(height: 4),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                dense: true,
+                value: _manualOverride,
+                onChanged: (v) => setState(() => _manualOverride = v ?? false),
+                title: const Text('Remplacer le calcul automatique par ce montant'),
+              ),
               Text(
-                'Cette enveloppe est actuellement calculée automatiquement depuis des '
-                'opérations récurrentes actives - ce montant ne sera utilisé que si elles '
-                'sont un jour supprimées.',
+                _manualOverride
+                    ? 'Ce montant prime sur le calcul automatique tant que cette case est cochée.'
+                    : 'Cette enveloppe est actuellement calculée automatiquement depuis des '
+                        'opérations récurrentes actives - ce montant ne sera utilisé que si elles '
+                        'sont un jour supprimées, ou si vous cochez la case ci-dessus.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
