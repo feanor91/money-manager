@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:intl/intl.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../data/mmex_repository.dart';
 import '../models/account.dart';
@@ -204,6 +206,22 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   /// (AI disabled, or "Mon PC" mode with no nameable model).
   String? _modelLabel;
 
+  /// Voice input for the question field itself (2026-09 user request:
+  /// unlike [SearchableSelectField.enableVoiceInput]/[VoiceTransactionSheet]
+  /// (both deliberately Android-only - see their own doc comments), this one
+  /// is meant to work on every platform this app ships. `speech_to_text`
+  /// 7.x actually ships federated web (`speech_to_text_web`) and Windows
+  /// (`speech_to_text_windows`) implementations alongside Android - the
+  /// earlier Android-only gates predate those, or were just never
+  /// revisited - so no platform check here: [stt.SpeechToText.initialize]
+  /// itself is the one source of truth for whether a given browser/OS can
+  /// actually do it (declines cleanly to `false` when it can't, e.g. a
+  /// browser without the Web Speech API), surfaced via [_speechError]
+  /// rather than assumed in advance.
+  stt.SpeechToText? _speech;
+  bool _listening = false;
+  String? _speechError;
+
   @override
   void initState() {
     super.initState();
@@ -217,6 +235,10 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
 
   @override
   void dispose() {
+    // Belt-and-braces, same reasoning as VoiceTransactionSheet.dispose: don't
+    // leave the recognizer running past the widget that owns its callbacks
+    // if the dialog is closed mid-listen.
+    if (_listening) _speech?.cancel();
     _controller.dispose();
     _questionFocusNode.dispose();
     _scrollController.dispose();
@@ -229,6 +251,87 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // actually exit.
     shutdownLocalLlmEngine();
     super.dispose();
+  }
+
+  /// Dictates directly into [_controller], same "type-to-filter"-style
+  /// pattern as [SearchableSelectField]'s mic button but with
+  /// [stt.ListenMode.dictation] and a longer window (a question is a
+  /// sentence, not a couple of words - same settings [VoiceTransactionSheet]
+  /// uses for that reason). Never auto-submits: dictation can mishear a
+  /// word, so the user always reviews/edits the transcribed text before
+  /// tapping send, same "a wrong guess costs a tap to fix" principle as
+  /// every other voice entry point in this app.
+  Future<void> _toggleListening() async {
+    if (_listening) {
+      await _speech?.stop();
+      return;
+    }
+    final speech = _speech ??= stt.SpeechToText();
+    bool available;
+    try {
+      available = await speech.initialize(
+        onError: (error) {
+          if (!mounted) return;
+          setState(() {
+            _listening = false;
+            _speechError = 'Erreur de reconnaissance vocale (${error.errorMsg}).';
+          });
+        },
+        onStatus: (status) {
+          if (!mounted) return;
+          if (status == 'notListening' || status == 'done') {
+            setState(() => _listening = false);
+          }
+        },
+      );
+    } catch (_) {
+      // Unlike the native Android backend, the web (Web Speech API) and
+      // Windows backends can throw here instead of cleanly resolving to
+      // `false` - a browser with no Web Speech API support at all (e.g. not
+      // Chrome/Edge) or a denied microphone permission - found live (2026-09)
+      // testing this exact button: an uncaught exception with no visible
+      // feedback otherwise. Folded into the same "indisponible" message as a
+      // clean `false`, since from the user's perspective it's the same
+      // outcome (no dictation available right now).
+      available = false;
+    }
+    if (!mounted) return;
+    if (!available) {
+      setState(() => _speechError =
+          "Reconnaissance vocale indisponible sur cet appareil/navigateur.");
+      return;
+    }
+    setState(() {
+      _listening = true;
+      _speechError = null;
+    });
+    unawaited(speech
+        .listen(
+      onResult: (result) {
+        if (!mounted) return;
+        _controller.text = result.recognizedWords;
+        _controller.selection =
+            TextSelection.collapsed(offset: _controller.text.length);
+      },
+      listenOptions: stt.SpeechListenOptions(
+        localeId: 'fr_FR',
+        listenMode: stt.ListenMode.dictation,
+        partialResults: true,
+        pauseFor: const Duration(seconds: 3),
+        listenFor: const Duration(seconds: 30),
+      ),
+    )
+        .catchError((Object _) {
+      // Same rationale as the initialize() try/catch above - listen() can
+      // also throw on some backends rather than reporting failure through
+      // onError/onStatus.
+      if (!mounted) return;
+      setState(() {
+        _listening = false;
+        _speechError =
+            "Reconnaissance vocale indisponible sur cet appareil/navigateur.";
+      });
+    }));
   }
 
   void _scrollToBottom() {
@@ -798,6 +901,15 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                   ],
                 ),
               ),
+            if (_speechError != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                child: Text(
+                  _speechError!,
+                  style: TextStyle(
+                      fontSize: 12, color: Theme.of(context).colorScheme.error),
+                ),
+              ),
             Padding(
               padding: EdgeInsets.fromLTRB(
                   20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
@@ -820,6 +932,19 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                       enabled: !_loading,
                       onSubmitted: _ask,
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  IconButton.filled(
+                    key: const Key('nlQueryMicButton'),
+                    tooltip: _listening ? 'Arrêter la dictée' : 'Dicter la question',
+                    onPressed: _loading ? null : _toggleListening,
+                    icon: Icon(_listening ? Icons.mic : Icons.mic_none),
+                    style: _listening
+                        ? IconButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.error,
+                            foregroundColor: Theme.of(context).colorScheme.onError,
+                          )
+                        : null,
                   ),
                   const SizedBox(width: 8),
                   IconButton.filled(
