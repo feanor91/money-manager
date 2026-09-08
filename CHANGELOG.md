@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.109] - 2026-09-08
+
+- feat(ai): ajouter la dictée vocale dans la fenêtre Poser une question
+
 ## [1.0.108] - 2026-09-06
 
 - feat(budget): recalcul basé sur les récurrentes des sous-catégories, remplacement manuel d'enveloppe, jauge à échelle propre
