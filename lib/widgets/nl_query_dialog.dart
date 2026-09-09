@@ -219,8 +219,24 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   /// browser without the Web Speech API), surfaced via [_speechError]
   /// rather than assumed in advance.
   stt.SpeechToText? _speech;
-  bool _listening = false;
   String? _speechError;
+
+  /// True from the moment the mic button is tapped until the user
+  /// explicitly taps it again to stop - the one flag that actually drives
+  /// the UI and dispose() (see [_toggleListening]'s own doc comment): a raw
+  /// recognition segment can end and restart several times while this
+  /// stays true throughout, so neither Android's `pauseFor`/`listenFor`
+  /// window nor any other natural end are allowed to actually stop
+  /// dictation on their own while it's still set.
+  bool _userWantsListening = false;
+
+  /// Confirmed text from every recognition segment *before* the current
+  /// one (2026-09 user request: seamless continuous dictation across
+  /// Chrome's own ~5s "no speech" cutoff - see [_toggleListening]). Each
+  /// restarted segment's [stt.SpeechRecognitionResult.recognizedWords]
+  /// starts over from nothing, so this is what makes the field keep
+  /// growing instead of losing everything said before the restart.
+  String _confirmedText = '';
 
   @override
   void initState() {
@@ -238,7 +254,10 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // Belt-and-braces, same reasoning as VoiceTransactionSheet.dispose: don't
     // leave the recognizer running past the widget that owns its callbacks
     // if the dialog is closed mid-listen.
-    if (_listening) _speech?.cancel();
+    if (_userWantsListening) {
+      _userWantsListening = false;
+      _speech?.cancel();
+    }
     _controller.dispose();
     _questionFocusNode.dispose();
     _scrollController.dispose();
@@ -253,98 +272,128 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     super.dispose();
   }
 
-  /// True once [onResult] has actually delivered *some* recognized text for
-  /// the current listen session - lets the 'notListening'/'done' status
-  /// handler tell a genuine silent failure apart from a normal successful
-  /// dictation (2026-09-09 user report: on the web backend specifically, a
-  /// session that captures no speech at all ends with status
-  /// `'doneNoResult'` - which this widget didn't handle, so it looked
-  /// exactly like nothing had happened at all, no different from a
-  /// successful-but-empty dictation).
-  bool _gotResult = false;
+  /// Set once [stt.SpeechToText.initialize] has actually succeeded - so a
+  /// restart in [_startListeningSegment] (see [_toggleListening]'s own doc
+  /// comment) only calls `listen()` again rather than re-initializing (and
+  /// re-registering the same callbacks) every few seconds.
+  bool _speechInitialized = false;
 
   /// Dictates directly into [_controller], same "type-to-filter"-style
   /// pattern as [SearchableSelectField]'s mic button but with
-  /// [stt.ListenMode.dictation] and a longer window (a question is a
-  /// sentence, not a couple of words - same settings [VoiceTransactionSheet]
-  /// uses for that reason). Never auto-submits: dictation can mishear a
-  /// word, so the user always reviews/edits the transcribed text before
-  /// tapping send, same "a wrong guess costs a tap to fix" principle as
-  /// every other voice entry point in this app.
+  /// [stt.ListenMode.dictation] (a question is a sentence, not a couple of
+  /// words). Never auto-submits: dictation can mishear a word, so the user
+  /// always reviews/edits the transcribed text before tapping send, same "a
+  /// wrong guess costs a tap to fix" principle as every other voice entry
+  /// point in this app.
   ///
-  /// [listenOptions.pauseFor]/[listenOptions.listenFor] below are only
-  /// honoured on Android (and Windows) - confirmed 2026-09-09 by reading
-  /// `speech_to_text`'s own web source (`speech_to_text_web.dart`): its
-  /// `listen()` implementation reads `partialResults` only and silently
-  /// ignores `pauseFor`/`listenFor`/`cancelOnError` entirely. On the web
-  /// backend the browser's own SpeechRecognition engine decides when to
-  /// stop (its internal "no speech" timeout, commonly around 5 seconds,
-  /// not configurable through this package) - a real platform limitation
-  /// of the Web Speech API via this plugin, not something fixable from
-  /// this app's code.
+  /// [listenOptions.pauseFor]/[listenOptions.listenFor] passed to
+  /// [_startListeningSegment] are only honoured on Android - confirmed
+  /// 2026-09-09 by reading `speech_to_text`'s own web *and* Windows source:
+  /// web's `listen()` implementation reads `partialResults` only and
+  /// silently ignores `pauseFor`/`listenFor`/`cancelOnError` entirely, and
+  /// Windows' method channel `listen()` doesn't even include them in the
+  /// params map it sends to the native side. On both, the underlying
+  /// platform's own speech engine (Chrome's Web Speech API, Windows' UWP
+  /// `SpeechRecognizer`) decides on its own when to end a session on
+  /// silence - not configurable through this package, and not the same
+  /// cutoff on both (commonly a few seconds either way).
+  ///
+  /// Rather than accept that as a hard 5-ish-second cap on dictating a
+  /// whole question (2026-09-09 user report), [_userWantsListening] tracks
+  /// intent separately from any one segment: [_onSegmentEnded] restarts
+  /// automatically whenever a segment ends on its own (silence) while the
+  /// user hasn't explicitly tapped the mic to stop, carrying forward
+  /// whatever was already transcribed via [_confirmedText] - each new
+  /// segment's own [stt.SpeechRecognitionResult.recognizedWords] starts
+  /// from nothing, so without this every restart would silently erase what
+  /// came before it. From the user's perspective this reads as one
+  /// continuous dictation on every platform, Android's genuinely
+  /// long-running session included (a restart there is simply rarer).
   Future<void> _toggleListening() async {
-    if (_listening) {
+    if (_userWantsListening) {
+      _userWantsListening = false;
       await _speech?.stop();
       return;
     }
-    final speech = _speech ??= stt.SpeechToText();
-    bool available;
-    try {
-      available = await speech.initialize(
-        onError: (error) {
-          if (!mounted) return;
-          setState(() {
-            _listening = false;
-            _speechError = 'Erreur de reconnaissance vocale (${error.errorMsg}).';
-          });
-        },
-        onStatus: (status) {
-          if (!mounted) return;
-          setState(() {
-            if (status == 'notListening' || status == 'done') {
-              _listening = false;
-            }
-            // 'doneNoResult' (web backend only - see this method's own doc
-            // comment) means the session ended without ever recognizing
-            // anything, e.g. no speech detected before the browser's own
-            // timeout - surface that plainly instead of leaving the user
-            // looking at an unchanged field with no explanation.
-            if (status == 'doneNoResult' && !_gotResult) {
-              _speechError = "Aucune parole détectée - réessayez en parlant "
-                  "juste après avoir appuyé sur le micro.";
-            }
-          });
-        },
-      );
-    } catch (_) {
-      // Unlike the native Android backend, the web (Web Speech API) and
-      // Windows backends can throw here instead of cleanly resolving to
-      // `false` - a browser with no Web Speech API support at all (e.g. not
-      // Chrome/Edge) or a denied microphone permission - found live (2026-09)
-      // testing this exact button: an uncaught exception with no visible
-      // feedback otherwise. Folded into the same "indisponible" message as a
-      // clean `false`, since from the user's perspective it's the same
-      // outcome (no dictation available right now).
-      available = false;
-    }
+    _confirmedText = '';
+    _userWantsListening = true;
+    await _startListeningSegment();
+  }
+
+  /// Starts (or restarts) one recognition segment - see [_toggleListening].
+  void _onSegmentEnded(String status) {
     if (!mounted) return;
-    if (!available) {
-      setState(() => _speechError =
-          "Reconnaissance vocale indisponible sur cet appareil/navigateur.");
-      return;
+    // Only a truly empty attempt (nothing transcribed across *any* segment
+    // so far) counts as a real "no speech detected" failure worth
+    // interrupting the loop for - a pause between two sentences mid
+    // question must never look like an error just because *this* segment
+    // in particular came back empty.
+    final hasAnyText = _controller.text.trim().isNotEmpty;
+    if (status == 'doneNoResult' && !hasAnyText) {
+      setState(() {
+        _speechError = "Aucune parole détectée - réessayez en parlant "
+            "juste après avoir appuyé sur le micro.";
+        _userWantsListening = false;
+      });
     }
-    setState(() {
-      _listening = true;
-      _speechError = null;
-      _gotResult = false;
-    });
+    if (_userWantsListening) {
+      _confirmedText = _controller.text;
+      _startListeningSegment();
+    }
+  }
+
+  Future<void> _startListeningSegment() async {
+    final speech = _speech ??= stt.SpeechToText();
+    if (!_speechInitialized) {
+      bool available;
+      try {
+        available = await speech.initialize(
+          onError: (error) {
+            if (!mounted) return;
+            setState(() {
+              _userWantsListening = false;
+              _speechError = 'Erreur de reconnaissance vocale (${error.errorMsg}).';
+            });
+          },
+          onStatus: (status) {
+            if (status == 'notListening' || status == 'done' || status == 'doneNoResult') {
+              _onSegmentEnded(status);
+            }
+          },
+        );
+      } catch (_) {
+        // Unlike the native Android backend, the web (Web Speech API) and
+        // Windows backends can throw here instead of cleanly resolving to
+        // `false` - a browser with no Web Speech API support at all (e.g.
+        // not Chrome/Edge) or a denied microphone permission - found live
+        // (2026-09) testing this exact button: an uncaught exception with
+        // no visible feedback otherwise. Folded into the same
+        // "indisponible" message as a clean `false`, since from the user's
+        // perspective it's the same outcome (no dictation available right
+        // now).
+        available = false;
+      }
+      if (!mounted) return;
+      if (!available) {
+        setState(() {
+          _userWantsListening = false;
+          _speechError =
+              "Reconnaissance vocale indisponible sur cet appareil/navigateur.";
+        });
+        return;
+      }
+      _speechInitialized = true;
+    }
+    if (!mounted || !_userWantsListening) return;
+    setState(() => _speechError = null);
     unawaited(speech
         .listen(
       onResult: (result) {
         if (!mounted) return;
         setState(() {
-          if (result.recognizedWords.isNotEmpty) _gotResult = true;
-          _controller.text = result.recognizedWords;
+          _controller.text = _confirmedText.isEmpty
+              ? result.recognizedWords
+              : '$_confirmedText ${result.recognizedWords}';
           _controller.selection =
               TextSelection.collapsed(offset: _controller.text.length);
         });
@@ -372,7 +421,7 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // onError/onStatus.
       if (!mounted) return;
       setState(() {
-        _listening = false;
+        _userWantsListening = false;
         _speechError =
             "Reconnaissance vocale indisponible sur cet appareil/navigateur.";
       });
@@ -981,10 +1030,15 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                   const SizedBox(width: 8),
                   IconButton.filled(
                     key: const Key('nlQueryMicButton'),
-                    tooltip: _listening ? 'Arrêter la dictée' : 'Dicter la question',
+                    tooltip: _userWantsListening ? 'Arrêter la dictée' : 'Dicter la question',
                     onPressed: _loading ? null : _toggleListening,
-                    icon: Icon(_listening ? Icons.mic : Icons.mic_none),
-                    style: _listening
+                    // Driven by _userWantsListening, not _listening - the
+                    // brief gap between an auto-restarted segment ending
+                    // and the next one starting (see _toggleListening's own
+                    // doc comment) must never blink the mic off, since
+                    // dictation is still conceptually ongoing.
+                    icon: Icon(_userWantsListening ? Icons.mic : Icons.mic_none),
+                    style: _userWantsListening
                         ? IconButton.styleFrom(
                             backgroundColor: Theme.of(context).colorScheme.error,
                             foregroundColor: Theme.of(context).colorScheme.onError,
