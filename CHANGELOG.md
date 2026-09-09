@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.111] - 2026-09-09
+
+- feat(budget,simulation): créer un scénario de simulation depuis le budget
+
 ## [1.0.110] - 2026-09-09
 
 - fix(ai): corriger la locale de la dictée vocale et signaler l'absence de parole détectée
