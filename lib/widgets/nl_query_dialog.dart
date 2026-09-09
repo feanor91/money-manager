@@ -253,6 +253,16 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     super.dispose();
   }
 
+  /// True once [onResult] has actually delivered *some* recognized text for
+  /// the current listen session - lets the 'notListening'/'done' status
+  /// handler tell a genuine silent failure apart from a normal successful
+  /// dictation (2026-09-09 user report: on the web backend specifically, a
+  /// session that captures no speech at all ends with status
+  /// `'doneNoResult'` - which this widget didn't handle, so it looked
+  /// exactly like nothing had happened at all, no different from a
+  /// successful-but-empty dictation).
+  bool _gotResult = false;
+
   /// Dictates directly into [_controller], same "type-to-filter"-style
   /// pattern as [SearchableSelectField]'s mic button but with
   /// [stt.ListenMode.dictation] and a longer window (a question is a
@@ -261,6 +271,17 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   /// word, so the user always reviews/edits the transcribed text before
   /// tapping send, same "a wrong guess costs a tap to fix" principle as
   /// every other voice entry point in this app.
+  ///
+  /// [listenOptions.pauseFor]/[listenOptions.listenFor] below are only
+  /// honoured on Android (and Windows) - confirmed 2026-09-09 by reading
+  /// `speech_to_text`'s own web source (`speech_to_text_web.dart`): its
+  /// `listen()` implementation reads `partialResults` only and silently
+  /// ignores `pauseFor`/`listenFor`/`cancelOnError` entirely. On the web
+  /// backend the browser's own SpeechRecognition engine decides when to
+  /// stop (its internal "no speech" timeout, commonly around 5 seconds,
+  /// not configurable through this package) - a real platform limitation
+  /// of the Web Speech API via this plugin, not something fixable from
+  /// this app's code.
   Future<void> _toggleListening() async {
     if (_listening) {
       await _speech?.stop();
@@ -279,9 +300,20 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         },
         onStatus: (status) {
           if (!mounted) return;
-          if (status == 'notListening' || status == 'done') {
-            setState(() => _listening = false);
-          }
+          setState(() {
+            if (status == 'notListening' || status == 'done') {
+              _listening = false;
+            }
+            // 'doneNoResult' (web backend only - see this method's own doc
+            // comment) means the session ended without ever recognizing
+            // anything, e.g. no speech detected before the browser's own
+            // timeout - surface that plainly instead of leaving the user
+            // looking at an unchanged field with no explanation.
+            if (status == 'doneNoResult' && !_gotResult) {
+              _speechError = "Aucune parole détectée - réessayez en parlant "
+                  "juste après avoir appuyé sur le micro.";
+            }
+          });
         },
       );
     } catch (_) {
@@ -304,17 +336,30 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     setState(() {
       _listening = true;
       _speechError = null;
+      _gotResult = false;
     });
     unawaited(speech
         .listen(
       onResult: (result) {
         if (!mounted) return;
-        _controller.text = result.recognizedWords;
-        _controller.selection =
-            TextSelection.collapsed(offset: _controller.text.length);
+        setState(() {
+          if (result.recognizedWords.isNotEmpty) _gotResult = true;
+          _controller.text = result.recognizedWords;
+          _controller.selection =
+              TextSelection.collapsed(offset: _controller.text.length);
+        });
       },
       listenOptions: stt.SpeechListenOptions(
-        localeId: 'fr_FR',
+        // BCP-47 with a hyphen, not the underscore form used by the
+        // Android-only voice inputs elsewhere in the app (SearchableSelectField/
+        // VoiceTransactionSheet) - found 2026-09-09 reading the Android
+        // plugin's own Kotlin source: it normalizes 'fr_FR' to 'fr-FR'
+        // itself before use (`localeId.replace('_', '-')`), but the web
+        // backend passes it straight through to the browser's
+        // `SpeechRecognition.lang`, which the Web Speech API spec (and
+        // Windows' own locale API) require in hyphenated form - an
+        // underscore isn't a valid BCP-47 tag there.
+        localeId: 'fr-FR',
         listenMode: stt.ListenMode.dictation,
         partialResults: true,
         pauseFor: const Duration(seconds: 3),
