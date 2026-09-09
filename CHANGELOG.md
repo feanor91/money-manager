@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.112] - 2026-09-09
+
+- fix(ai): redémarrer automatiquement la dictée vocale à chaque coupure
+
 ## [1.0.111] - 2026-09-09
 
 - feat(budget,simulation): créer un scénario de simulation depuis le budget
