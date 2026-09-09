@@ -1118,6 +1118,130 @@ class _BudgetScreenState extends State<BudgetScreen> {
       setState(() {});
     }
 
+    // "Créer un scénario de simulation" (2026-09 user request) - bridges
+    // this one-account, single-month-figure budget simulator into the
+    // long-term (multi-year) simulator, on demand rather than any kind of
+    // live/automatic sync: the two model time too differently for a sync to
+    // stay meaningful (see MmexRepository.applyBudgetTargetsToSimScenario's
+    // own doc comment for the full reasoning, including why an existing
+    // real bill gets *overridden* rather than duplicated as a new virtual
+    // one). Asks which target scenario first (new, named after this budget
+    // scenario by default, or an existing one to update) rather than always
+    // creating a fresh one - re-running this into the same target scenario
+    // is exactly how a later budget change gets reflected, since there's no
+    // automatic link.
+    Future<void> createSimScenarioFromBudget() async {
+      final existingScenarios = repo.getSimScenarios();
+      var createNew = true;
+      int? chosenExistingId = existingScenarios.isEmpty ? null : existingScenarios.first.id;
+      final nameController =
+          TextEditingController(text: 'Budget : ${activeScenario.name}');
+
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Créer un scénario de simulation'),
+            content: SizedBox(
+              width: 400,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Les montants simulés de ce budget seront appliqués au '
+                    'scénario du simulateur : une opération récurrente réelle '
+                    'déjà connue sera ajustée, pas dupliquée ; une catégorie '
+                    'sans opération réelle derrière devient une nouvelle '
+                    'opération virtuelle.',
+                  ),
+                  const SizedBox(height: 16),
+                  if (existingScenarios.isNotEmpty)
+                    SegmentedButton<bool>(
+                      segments: const [
+                        ButtonSegment(value: true, label: Text('Nouveau scénario')),
+                        ButtonSegment(value: false, label: Text('Scénario existant')),
+                      ],
+                      selected: {createNew},
+                      onSelectionChanged: (s) => setDialogState(() => createNew = s.first),
+                    ),
+                  const SizedBox(height: 8),
+                  if (createNew)
+                    TextField(
+                      controller: nameController,
+                      autofocus: true,
+                      decoration: const InputDecoration(labelText: 'Nom du scénario'),
+                    )
+                  else if (existingScenarios.isNotEmpty)
+                    DropdownButton<int>(
+                      isExpanded: true,
+                      value: chosenExistingId,
+                      items: [
+                        for (final s in existingScenarios)
+                          DropdownMenuItem(value: s.id, child: Text(s.name)),
+                      ],
+                      onChanged: (id) => setDialogState(() => chosenExistingId = id),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+              FilledButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Appliquer')),
+            ],
+          ),
+        ),
+      );
+      if (confirmed != true || !context.mounted) return;
+      if (!createNew && chosenExistingId == null) return;
+
+      final targetScenarioId = createNew
+          ? repo.createSimScenario(
+              nameController.text.trim().isEmpty
+                  ? 'Budget : ${activeScenario.name}'
+                  : nameController.text.trim())
+          : chosenExistingId!;
+
+      final categoryNames = {
+        for (final c in categories) c.id: c.name,
+        for (final v in virtualCategories) v.id: v.name,
+      };
+      final result = repo.applyBudgetTargetsToSimScenario(
+        simScenarioId: targetScenarioId,
+        accountId: accountId,
+        // Grouped exactly the way each _ScenarioRow rolls up (top category
+        // + its direct subcategories) - never per-leaf, or a real bill
+        // living on a subcategory (e.g. "Crédits:Credit immobilier") would
+        // be invisible to a lookup keyed on its parent alone, see
+        // applyBudgetTargetsToSimScenario's own doc comment for the exact
+        // bug this caused live (2026-09).
+        targetsByGroup: {for (final row in rows) row.topCategory.id: row.simulated},
+        categoryIdsByGroup: {
+          for (final row in rows)
+            row.topCategory.id: [
+              row.topCategory.id,
+              for (final c in byParent[row.topCategory.id] ?? const <Category>[]) c.id,
+            ],
+        },
+        categoryNames: categoryNames,
+      );
+      dbProvider.touch();
+      if (!context.mounted) return;
+      final parts = <String>[
+        if (result.billsOverridden > 0) '${result.billsOverridden} opération(s) ajustée(s)',
+        if (result.virtualBillsUpserted > 0)
+          '${result.virtualBillsUpserted} opération(s) simulée(s) ajoutée(s)/mise(s) à jour',
+        if (result.billsReverted > 0) '${result.billsReverted} ajustement(s) annulé(s) (retour au réel)',
+        if (result.virtualBillsRemoved > 0)
+          '${result.virtualBillsRemoved} opération(s) simulée(s) supprimée(s)',
+      ];
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(parts.isEmpty
+            ? 'Rien à appliquer - le scénario simulé correspond déjà au réel.'
+            : parts.join(', ')),
+      ));
+    }
+
     // A subcategory's own edit dialog - separate from editAmount rather
     // than reusing it via a synthetic _ScenarioRow, because isIncomeRow's
     // sign inference (real/simulated's own sign) is unreliable for a
@@ -1292,6 +1416,14 @@ class _BudgetScreenState extends State<BudgetScreen> {
               label: const Text('Fixer le budget'),
             ),
           ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: createSimScenarioFromBudget,
+            icon: const Icon(Icons.query_stats, size: 18),
+            label: const Text('Créer un scénario de simulation'),
+          ),
+        ),
         const SizedBox(height: 12),
         Row(
           children: [

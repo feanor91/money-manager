@@ -3240,6 +3240,173 @@ class MmexRepository {
         [virtualBillId]);
   }
 
+  /// Active (non-paused) bills of [transCode] directly assigned to any of
+  /// [categoryIds] on [accountId] - same filter [categoryMonthlyRecurringTotals]/
+  /// [categoryMonthlyRecurringIncomeTotals] use (per category), factored out
+  /// so [applyBudgetTargetsToSimScenario] can get at the actual bills behind
+  /// a whole rolled-up category group, not just the combined total.
+  List<BillDeposit> _activeBillsForCategories(
+      int accountId, Iterable<int> categoryIds, TransCode transCode) {
+    final ids = categoryIds.toSet();
+    return getBillDeposits()
+        .where((b) =>
+            !b.paused &&
+            b.transCode == transCode &&
+            b.accountId == accountId &&
+            b.categoryId != null &&
+            ids.contains(b.categoryId))
+        .toList();
+  }
+
+  /// Realizes a budget simulation's per-category-group targets onto a
+  /// long-term simulation scenario ([simScenarioId]) - "Créer un scénario de
+  /// simulation à partir de ce budget" (2026-09 user request).
+  /// [targetsByGroup] is keyed by the *top-level* category id BudgetScreen's
+  /// simulation mode rolls its rows up to (a real CATEGID, or a negative
+  /// [VirtualBudgetCategory] id for a budget-only category with no real
+  /// bill possible), each value the exact same signed rolled-up monthly
+  /// figure already shown there (positive = income, negative = expense).
+  /// [categoryIdsByGroup] lists every real category id folded into that same
+  /// row's rollup (the top category itself plus its direct subcategories) -
+  /// **searching only the top id and missing its subcategories was the
+  /// exact bug a 2026-09 live test caught**: a real bill assigned to a
+  /// *subcategory* (e.g. "Crédits:Credit immobilier") was invisible to a
+  /// lookup keyed on the parent ("Crédits") alone, so the whole rolled-up
+  /// target - already including that real bill's own contribution - was
+  /// wrongly turned into a brand new virtual bill stacked on top of it
+  /// instead of adjusting it. The caller passes both maps as-is rather than
+  /// this method re-deriving them, since that rollup/"live suggestion vs
+  /// fixed vs manual" logic already lives in BudgetScreen and shouldn't
+  /// exist twice. [categoryNames] resolves each group's top id to a display
+  /// name, for a generated virtual bill's label - also the caller's
+  /// responsibility, since a virtual budget category's name isn't stored
+  /// anywhere this method already has access to (it belongs to the *budget*
+  /// scenario, not [simScenarioId]).
+  ///
+  /// For each group:
+  /// - If it's fed by one or more active real bills of the matching
+  ///   direction (Withdrawal for an expense target, Deposit for an income
+  ///   one - transfer-funded income is deliberately left untouched, out of
+  ///   scope: overriding a transfer's amount would also change the source
+  ///   account's own projection, a cross-account effect this one-account
+  ///   generator has no business causing) anywhere in [categoryIdsByGroup],
+  ///   the difference from what those bills already produce is realized by
+  ///   **overriding those bills' amounts** ([upsertSimBillOverride],
+  ///   proportionally split if more than one bill feeds the group) - never
+  ///   a new parallel virtual bill duplicating an operation the simulator
+  ///   already knows about (2026-09 user request, explicit: "je veux que ce
+  ///   ne soit pas une nouvelle opération créée mais bien l'existante
+  ///   modifiée"). A target that already matches those bills' own total
+  ///   (within a cent) instead clears any stale override left from an
+  ///   earlier run of this same method, rather than leaving it stuck.
+  /// - Otherwise (pure discretionary spending, no real bill anywhere in the
+  ///   group), the whole target becomes one monthly [SimVirtualBill],
+  ///   labeled `"Budget : <nom du groupe>"`. Re-running this method for the
+  ///   same [simScenarioId] finds that same label and replaces it (delete +
+  ///   recreate - [SimVirtualBill] has no in-place amount setter) instead
+  ///   of piling up a second one; a target that's dropped back to ~0
+  ///   removes it entirely. **Renaming the category between two runs
+  ///   breaks this re-matching** (the label changes, so a stale bill under
+  ///   the old name is orphaned rather than found) - accepted as a known
+  ///   limitation rather than storing a separate stable key, since a
+  ///   virtual bill has nothing else to key on and this is a rare edge
+  ///   case for what's meant to be a quick regenerate-on-demand tool.
+  ///
+  /// Returns counts for a post-action summary (BudgetScreen shows these in
+  /// a SnackBar) - never throws, a group this can't do anything useful with
+  /// (target already at 0 with nothing to clean up) is just skipped.
+  ({int billsOverridden, int billsReverted, int virtualBillsUpserted, int virtualBillsRemoved})
+      applyBudgetTargetsToSimScenario({
+    required int simScenarioId,
+    required int accountId,
+    required Map<int, double> targetsByGroup,
+    required Map<int, List<int>> categoryIdsByGroup,
+    required Map<int, String> categoryNames,
+    DateTime? startDate,
+  }) {
+    const tolerance = 0.01;
+    final anchor = startDate ?? DateTime.now();
+    var billsOverridden = 0;
+    var billsReverted = 0;
+    var virtualUpserted = 0;
+    var virtualRemoved = 0;
+    final existingVirtual = getSimVirtualBills(simScenarioId);
+
+    for (final entry in targetsByGroup.entries) {
+      final topCategoryId = entry.key;
+      final signedTarget = entry.value;
+      final isExpense = signedTarget < 0;
+
+      final bills = topCategoryId > 0
+          ? _activeBillsForCategories(accountId,
+              categoryIdsByGroup[topCategoryId] ?? [topCategoryId],
+              isExpense ? TransCode.withdrawal : TransCode.deposit)
+          : const <BillDeposit>[];
+
+      if (bills.isNotEmpty) {
+        final baseline = bills.fold<double>(
+            0,
+            (s, b) =>
+                s +
+                b.amount *
+                    recurrencePeriodToMonthlyFactor(b.period, b.numOccurrences));
+        final targetMagnitude = signedTarget.abs();
+        if ((targetMagnitude - baseline).abs() < tolerance) {
+          for (final b in bills) {
+            deleteSimBillOverride(simScenarioId, b.id);
+            billsReverted++;
+          }
+          continue;
+        }
+        final ratio = baseline > tolerance ? targetMagnitude / baseline : null;
+        for (final b in bills) {
+          final newAmount =
+              ratio != null ? b.amount * ratio : targetMagnitude / bills.length;
+          upsertSimBillOverride(simScenarioId, b.id, amountOverride: newAmount);
+          billsOverridden++;
+        }
+        continue;
+      }
+
+      final label = 'Budget : ${categoryNames[topCategoryId] ?? '?'}';
+      SimVirtualBill? existing;
+      for (final v in existingVirtual) {
+        if (v.label == label) {
+          existing = v;
+          break;
+        }
+      }
+      if (signedTarget.abs() < tolerance) {
+        if (existing != null) {
+          deleteSimVirtualBill(existing.id);
+          virtualRemoved++;
+        }
+        continue;
+      }
+      if (existing != null) deleteSimVirtualBill(existing.id);
+      addSimVirtualBill(
+        scenarioId: simScenarioId,
+        accountId: accountId,
+        label: label,
+        transCode: isExpense ? TransCode.withdrawal : TransCode.deposit,
+        amount: signedTarget.abs(),
+        startDate: anchor,
+        period: RecurrencePeriod.monthly,
+      );
+      virtualUpserted++;
+    }
+
+    db.execute('UPDATE APP_SIM_SCENARIOS SET UPDATED_AT = ? WHERE SCENARIOID = ?',
+        [DateTime.now().toIso8601String(), simScenarioId]);
+
+    return (
+      billsOverridden: billsOverridden,
+      billsReverted: billsReverted,
+      virtualBillsUpserted: virtualUpserted,
+      virtualBillsRemoved: virtualRemoved,
+    );
+  }
+
   List<SimOneOffEvent> getSimOneOffEvents(int scenarioId) {
     final rows = db.query(
       'SELECT * FROM APP_SIM_ONE_OFF_EVENTS WHERE SCENARIOID = ?',
