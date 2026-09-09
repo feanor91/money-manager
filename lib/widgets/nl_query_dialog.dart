@@ -7,6 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:intl/intl.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:pdf/pdf.dart' show PdfColors;
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../data/mmex_repository.dart';
@@ -350,6 +353,23 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         available = await speech.initialize(
           onError: (error) {
             if (!mounted) return;
+            // Android's own SpeechRecognizer reports "no speech since I
+            // started listening" as an *error* ('error_speech_timeout',
+            // SpeechRecognizer.ERROR_SPEECH_TIMEOUT) rather than through
+            // onStatus the way the web/Windows backends' equivalent
+            // ('doneNoResult') does - confirmed 2026-09-09 live on a real
+            // phone: a correctly-recognized sentence still surfaced this as
+            // a scary "Erreur de reconnaissance vocale" and killed the
+            // whole auto-restart loop, even though nothing had actually
+            // gone wrong - it's just the natural end of a segment after a
+            // pause, exactly like the other backends' 'doneNoResult'.
+            // Routed through the same [_onSegmentEnded] path so it only
+            // becomes a real user-visible error when nothing at all has
+            // been transcribed yet - otherwise it silently restarts.
+            if (error.errorMsg == 'error_speech_timeout') {
+              _onSegmentEnded('doneNoResult');
+              return;
+            }
             setState(() {
               _userWantsListening = false;
               _speechError = 'Erreur de reconnaissance vocale (${error.errorMsg}).';
@@ -514,6 +534,47 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       const SnackBar(
           content: Text('Réponse copiée.'), duration: Duration(seconds: 2)),
     );
+  }
+
+  /// Prints a whole answer (2026-09 user request: "envoyer la réponse vers
+  /// une imprimante", both a phone's and a PC's own network printer) - a
+  /// one-page PDF handed to [Printing.layoutPdf], which opens the
+  /// platform's own print dialog (Android/Windows/web all supported by the
+  /// `printing` package) rather than talking to any printer directly: that
+  /// dialog already lists whatever printers - network ones included - are
+  /// already set up on the device, so this app never needs to know a
+  /// printer's address itself. Renders [text] as plain wrapped paragraphs,
+  /// not full Markdown - a deliberate simplification (this app's answers
+  /// are shown as Markdown via [flutter_markdown] on screen, but rendering
+  /// that same Markdown to a PDF layout is a meaningfully bigger job for a
+  /// feature that's really about getting the words on paper, not matching
+  /// the screen pixel for pixel).
+  Future<void> _printAnswer(BuildContext context, String text) async {
+    try {
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          build: (pdfContext) => [
+            pw.Text('Money Manager',
+                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
+            pw.SizedBox(height: 4),
+            pw.Text(DateFormat('d MMMM yyyy à HH:mm', 'fr_FR').format(DateTime.now()),
+                style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+            pw.SizedBox(height: 16),
+            pw.Text(text, style: const pw.TextStyle(fontSize: 12)),
+          ],
+        ),
+      );
+      await Printing.layoutPdf(
+        onLayout: (_) async => doc.save(),
+        name: 'reponse_ia.pdf',
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Échec de l'impression : $e")),
+      );
+    }
   }
 
   /// "Interrompre" (2026-08-31 user request) - invalidates the in-flight
@@ -857,6 +918,16 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                     ),
+                  TextButton.icon(
+                    onPressed: () => _printAnswer(context, entry.text),
+                    icon: const Icon(Icons.print_outlined, size: 16),
+                    label: const Text('Imprimer'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                  ),
                 ],
               ),
               if (entry.tokensPerSecond != null)

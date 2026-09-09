@@ -60,6 +60,13 @@ dependencies:
   markdown: ^7.3.1
   flutter_markdown: ^0.7.7+1
 
+  # Imprimer une reponse de l'IA (2026-09) - genere un PDF puis ouvre la
+  # boite de dialogue d'impression native du systeme (Android/Windows/web),
+  # qui liste deja les imprimantes - y compris reseau - configurees sur
+  # l'appareil. Pas de code specifique a une imprimante ici.
+  pdf: ^3.12.0
+  printing: ^5.14.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
