@@ -308,6 +308,61 @@ et - plus largement, voir le reste de ce document - toute bascule
 effective des écritures elles-mêmes, qui reste une coupure coordonnée
 distincte, jamais graduelle comme les lectures.
 
+- ✅ **2026-09-10, plus tard le même jour - chantier écriture démarré, sur
+  demande explicite de l'utilisateur.** En testant le build Windows
+  portable, l'utilisateur a signalé qu'ajouter une transaction en mode
+  API "ne semblait rien écrire" - en fait un malentendu sur la portée
+  de la bascule (elle n'a jamais touché aux écritures), corrigé en
+  discussion. L'utilisateur a alors clarifié le vrai objectif : pouvoir
+  tester l'intégralité des fonctionnalités - y compris créer/modifier des
+  données - contre le serveur, sur la branche `client-serveur`, avec une
+  base de données de test jetable (peu importe qu'elle se corrompe, il
+  suffit de repartir d'une copie de la vraie base). Ceci **ne contredit
+  pas** la règle "coupure coordonnée" plus haut, qui concerne le *vrai*
+  passage en production avec de vraies données sur toutes les
+  plateformes en même temps - construire et éprouver le mécanisme
+  d'écriture dès maintenant, sur données jetables, est au contraire la
+  bonne façon d'arriver à cette coupure avec un mécanisme déjà validé.
+
+  Une route serveur par méthode d'écriture (même principe que les
+  lectures), branchée dans chaque écran déjà migré en lecture : quand la
+  bascule "via API" de cet écran est active ET connectée, chaque
+  écriture part vers le serveur au lieu du fichier local (sinon,
+  comportement inchangé - toujours le fichier local).
+  - **Transactions** : ajouter/modifier/supprimer/annuler-suppression une
+    opération, pointer, plus les auxiliaires (résoudre/créer un tiers à
+    la volée, suivi "en pause"). La réassignation en masse de catégorie
+    et la synchronisation du montant d'une échéance liée (deux offres de
+    suivi après un enregistrement) restent locales uniquement - elles
+    passeraient par le dépôt local sans savoir qu'une écriture vient de
+    partir vers le serveur, ce qui ferait diverger les deux.
+  - **Comptes** : ajouter/modifier/supprimer.
+  - **Tiers** : renommer/supprimer/fusionner.
+  - **Catégories** : ajouter/renommer/archiver/supprimer/fusionner/déplacer.
+  - **Opérations récurrentes** : ajouter/modifier/supprimer/mettre en
+    pause/augmentation annuelle. **Enregistrer une occurrence reste
+    local uniquement** - crée une vraie transaction (parfois répartie en
+    plusieurs mensualités), une opération plus complexe laissée de côté
+    pour cette passe.
+  - **Budget (vue enveloppes)** : ajouter/modifier/supprimer une
+    enveloppe, réinitialiser le budget du compte, "Revenus attendus". Le
+    simulateur reste 100% local, comme toujours (raison structurelle déjà
+    documentée plus haut - Simulation).
+
+  Une dizaine de nouvelles routes d'écriture découvertes au fil de
+  l'implémentation, absentes de l'inventaire initial
+  (`resolveOrCreatePayee`, `syncPausedTracking`, `billIdForTransaction`,
+  `wasReconciledBeforePause`, `moveCategory`, `ensureBillOccurrenceTotal`,
+  `resetBudgetEnvelopes`...) - trouvées en lisant chaque écran en détail
+  plutôt que supposées à l'avance. 90 tests serveur + 661 tests Flutter,
+  tous verts, `flutter analyze` propre à chaque étape malgré l'ampleur
+  (6 écrans touchés en une seule session). Non vérifié en direct dans un
+  navigateur pour cette partie précise (même blocage de reconnexion au
+  fichier après rechargement de page que pour les étapes précédentes) -
+  couvert par les tests automatisés (un test serveur par route, vérifiant
+  une vraie écriture puis une relecture) plutôt qu'un test de bout en
+  bout dans l'appli.
+
 ## Où on en est aujourd'hui
 
 L'application ouvre directement le fichier SQLite `.mmb` - sur le disque en
@@ -581,6 +636,23 @@ lourd d'un coup : prioriser les écrans les plus utilisés au quotidien
 direct plus longtemps - possible tant que ce sont des données *différentes*
 qui restent en écriture directe pendant la transition (pas les mêmes
 tables touchées des deux façons à la fois).
+
+**Précision ajoutée le 2026-09-10, après un malentendu réel en testant le
+build Windows portable** : "coupure coordonnée" ci-dessus concerne le
+*vrai* passage en production - de vraies données, sur toutes les
+plateformes utilisées, en même temps. Ça ne veut **pas** dire qu'il faut
+attendre ce moment-là pour construire et tester le mécanisme d'écriture
+lui-même. L'utilisateur travaille sur `client-serveur` justement pour
+pouvoir continuer à utiliser la version "locale" actuelle au quotidien
+pendant que ce chantier avance, et valider la version serveur à part,
+contre une base de test jetable (aucun risque à ce qu'elle se corrompe -
+il suffit de repartir d'une copie de la vraie base le jour venu). Rien
+n'empêche donc de construire les routes d'écriture et de les tester dès
+maintenant sur cette branche, avec des données jetables - c'est même la
+bonne façon d'arriver à la coupure coordonnée avec un mécanisme déjà
+éprouvé plutôt que de le découvrir en marche. La coupure coordonnée reste
+la règle uniquement pour le moment où `client-serveur` fusionne dans
+`main` avec de vraies données partout.
 
 ## Aspects pratiques : configuration et branche de travail
 

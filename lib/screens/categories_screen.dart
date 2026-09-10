@@ -95,8 +95,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         ),
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () async {
-            await _addCategory(context, repo, parentId: null);
-            dbProvider.touch();
+            await _addCategory(context, repo, parentId: null, apiSession: apiSession);
+            _refreshApi(apiSession);
           },
           icon: const Icon(Icons.add),
           label: const Text('Nouvelle catégorie'),
@@ -110,7 +110,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             if (snapshot.hasError) {
               return Center(child: Text('Erreur : ${snapshot.error}'));
             }
-            return _buildBody(context, dbProvider, repo, snapshot.data!);
+            return _buildBody(context, dbProvider, repo, snapshot.data!, apiSession: apiSession);
           },
         ),
       );
@@ -132,7 +132,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Widget _buildBody(
-      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _CategoriesData data) {
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _CategoriesData data,
+      {ApiSessionProvider? apiSession}) {
     final all = data.categories;
     final byParent = <int?, List<Category>>{};
     for (final c in all) {
@@ -200,7 +201,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                         repo: repo,
                         usageOf: data.usageOf,
                         initiallyExpanded: query.isNotEmpty,
-                        onChanged: () => dbProvider.touch(),
+                        apiSession: apiSession,
+                        onChanged: () {
+                          if (apiSession != null) {
+                            _refreshApi(apiSession);
+                          } else {
+                            dbProvider.touch();
+                          }
+                        },
                       );
                     },
                   ),
@@ -217,6 +225,7 @@ class _CategoryGroup extends StatelessWidget {
   final MmexRepository repo;
   final CategoryUsage Function(int categoryId) usageOf;
   final bool initiallyExpanded;
+  final ApiSessionProvider? apiSession;
   final VoidCallback onChanged;
 
   const _CategoryGroup({
@@ -226,6 +235,7 @@ class _CategoryGroup extends StatelessWidget {
     required this.repo,
     required this.usageOf,
     required this.initiallyExpanded,
+    this.apiSession,
     required this.onChanged,
   });
 
@@ -247,6 +257,7 @@ class _CategoryGroup extends StatelessWidget {
                 category: parent,
                 usage: usage,
                 repo: repo,
+                apiSession: apiSession,
                 onChanged: onChanged,
                 allowAddChild: true,
               ),
@@ -263,6 +274,7 @@ class _CategoryGroup extends StatelessWidget {
                     category: child,
                     usage: usageOf(child.id),
                     repo: repo,
+                    apiSession: apiSession,
                     onChanged: onChanged,
                     allowAddChild: false,
                   ),
@@ -274,7 +286,7 @@ class _CategoryGroup extends StatelessWidget {
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
                   onPressed: () async {
-                    await _addCategory(context, repo, parentId: parent.id);
+                    await _addCategory(context, repo, parentId: parent.id, apiSession: apiSession);
                     onChanged();
                   },
                   icon: const Icon(Icons.add, size: 18),
@@ -335,6 +347,7 @@ class _CategoryMenu extends StatelessWidget {
   final Category category;
   final CategoryUsage usage;
   final MmexRepository repo;
+  final ApiSessionProvider? apiSession;
   final VoidCallback onChanged;
   final bool allowAddChild;
 
@@ -342,6 +355,7 @@ class _CategoryMenu extends StatelessWidget {
     required this.category,
     required this.usage,
     required this.repo,
+    this.apiSession,
     required this.onChanged,
     required this.allowAddChild,
   });
@@ -383,32 +397,40 @@ class _CategoryMenu extends StatelessWidget {
     );
   }
 
+  bool get _useApi =>
+      apiSession != null && apiSession!.useApiForCategories && apiSession!.isConnected;
+
   Future<void> _handle(BuildContext context, String action) async {
     switch (action) {
       case 'rename':
-        await _renameCategory(context, repo, category);
+        await _renameCategory(context, repo, category, apiSession: apiSession);
         onChanged();
       case 'add_child':
-        await _addCategory(context, repo, parentId: category.id);
+        await _addCategory(context, repo, parentId: category.id, apiSession: apiSession);
         onChanged();
       case 'move':
-        await _moveCategory(context, repo, category);
+        await _moveCategory(context, repo, category, apiSession: apiSession);
         onChanged();
       case 'merge':
         if (!usage.isLeaf) return;
-        await _mergeCategory(context, repo, category);
+        await _mergeCategory(context, repo, category, apiSession: apiSession);
         onChanged();
       case 'toggle_active':
-        repo.setCategoryActive(category.id, !category.active);
+        if (_useApi) {
+          await apiSession!.setCategoryActive(category.id, !category.active);
+        } else {
+          repo.setCategoryActive(category.id, !category.active);
+        }
         onChanged();
       case 'delete':
-        await _deleteCategory(context, repo, category, usage);
+        await _deleteCategory(context, repo, category, usage, apiSession: apiSession);
         onChanged();
     }
   }
 }
 
-Future<void> _addCategory(BuildContext context, MmexRepository repo, {int? parentId}) async {
+Future<void> _addCategory(BuildContext context, MmexRepository repo,
+    {int? parentId, ApiSessionProvider? apiSession}) async {
   final controller = TextEditingController();
   final name = await showDialog<String>(
     context: context,
@@ -431,10 +453,15 @@ Future<void> _addCategory(BuildContext context, MmexRepository repo, {int? paren
   );
   final trimmed = name?.trim();
   if (trimmed == null || trimmed.isEmpty) return;
-  repo.insertCategory(name: trimmed, parentId: parentId);
+  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+    await apiSession.insertCategory(name: trimmed, parentId: parentId);
+  } else {
+    repo.insertCategory(name: trimmed, parentId: parentId);
+  }
 }
 
-Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category category) async {
+Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category category,
+    {ApiSessionProvider? apiSession}) async {
   final controller = TextEditingController(text: category.name);
   final name = await showDialog<String>(
     context: context,
@@ -457,7 +484,11 @@ Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category
   );
   final trimmed = name?.trim();
   if (trimmed == null || trimmed.isEmpty || trimmed == category.name) return;
-  repo.renameCategory(category.id, trimmed);
+  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+    await apiSession.renameCategory(category.id, trimmed);
+  } else {
+    repo.renameCategory(category.id, trimmed);
+  }
 }
 
 /// Sentinel returned by [_moveCategory]'s picker for "no parent" - CATEGID
@@ -466,7 +497,8 @@ Future<void> _renameCategory(BuildContext context, MmexRepository repo, Category
 /// itself already uses for "no parent".
 const _topLevelSentinel = Category(id: -1, name: 'Aucune (catégorie mère)', active: true);
 
-Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category category) async {
+Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category category,
+    {ApiSessionProvider? apiSession}) async {
   final topLevel = repo
       .getCategories(onlyActive: false)
       .where((c) => c.parentId == null && c.id != category.parentId)
@@ -511,10 +543,16 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
   );
   if (confirmed != true || target == null) return;
   final chosen = target!;
-  repo.moveCategory(category.id, chosen.id == _topLevelSentinel.id ? null : chosen.id);
+  final newParentId = chosen.id == _topLevelSentinel.id ? null : chosen.id;
+  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+    await apiSession.moveCategory(category.id, newParentId);
+  } else {
+    repo.moveCategory(category.id, newParentId);
+  }
 }
 
-Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category source) async {
+Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category source,
+    {ApiSessionProvider? apiSession}) async {
   final categories = repo.getCategories(onlyActive: false);
   final categoriesById = {for (final c in categories) c.id: c};
   final options = categories.where((c) => c.id != source.id).toList();
@@ -557,15 +595,20 @@ Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category 
     ),
   );
   if (confirmed != true || target == null) return;
-  repo.mergeCategories(fromId: source.id, toId: target!.id);
+  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+    await apiSession.mergeCategories(fromId: source.id, toId: target!.id);
+  } else {
+    repo.mergeCategories(fromId: source.id, toId: target!.id);
+  }
 }
 
 Future<void> _deleteCategory(
   BuildContext context,
   MmexRepository repo,
   Category category,
-  CategoryUsage usage,
-) async {
+  CategoryUsage usage, {
+  ApiSessionProvider? apiSession,
+}) async {
   if (!usage.canDelete) {
     final reasons = <String>[
       if (usage.childCategoryCount > 0) '${usage.childCategoryCount} sous-catégorie(s)',
@@ -594,7 +637,11 @@ Future<void> _deleteCategory(
       ),
     );
     if (archiveInstead == true) {
-      repo.setCategoryActive(category.id, false);
+      if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+        await apiSession.setCategoryActive(category.id, false);
+      } else {
+        repo.setCategoryActive(category.id, false);
+      }
     }
     return;
   }
@@ -614,6 +661,10 @@ Future<void> _deleteCategory(
     ),
   );
   if (confirmed == true) {
-    repo.deleteCategory(category.id);
+    if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+      await apiSession.deleteCategory(category.id);
+    } else {
+      repo.deleteCategory(category.id);
+    }
   }
 }

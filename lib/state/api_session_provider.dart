@@ -7,9 +7,18 @@ import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 
 import '../services/api/api_client.dart';
+
+/// Sentinelle "argument non fourni" pour [ApiSessionProvider.
+/// upsertBudgetEnvelope] - même principe que [MmexRepository.
+/// upsertBudgetEnvelope] côté serveur. Un `const Object()` est canonisé
+/// par Dart (une seule instance pour toute expression `const Object()`
+/// identique), donc cette sentinelle reste `identical()` à celle définie
+/// séparément dans api_client.dart malgré les deux déclarations.
+const _unset = Object();
 
 /// État partagé de connexion au serveur API du chantier client/serveur
 /// (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, étape 4) - une seule
@@ -230,6 +239,182 @@ class ApiSessionProvider extends ChangeNotifier {
     int? accountId,
   }) =>
       _requireClient().recurringOccurrencesInRange(start: start, end: end, accountId: accountId);
+
+  // Écritures (chantier, non branchées en production - voir
+  // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+  // 2026-09-10").
+
+  // ---- Transactions ----
+  Future<int> insertTransaction({
+    required int accountId,
+    required int payeeId,
+    required TransCode transCode,
+    required double amount,
+    required DateTime date,
+    int? categoryId,
+    int? toAccountId,
+    double? toAmount,
+    String? notes,
+    bool reconciled = false,
+  }) =>
+      _requireClient().insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: transCode,
+        amount: amount,
+        date: date,
+        categoryId: categoryId,
+        toAccountId: toAccountId,
+        toAmount: toAmount,
+        notes: notes,
+        reconciled: reconciled,
+      );
+
+  Future<void> updateTransaction(MoneyTransaction tx) => _requireClient().updateTransaction(tx);
+
+  Future<void> deleteTransaction(int transId) => _requireClient().deleteTransaction(transId);
+
+  Future<int> restoreTransaction(
+    MoneyTransaction tx, {
+    int? billId,
+    int? occurrenceIndex,
+    int? occurrenceTotal,
+    bool? wasReconciledBeforePause,
+  }) =>
+      _requireClient().restoreTransaction(
+        tx,
+        billId: billId,
+        occurrenceIndex: occurrenceIndex,
+        occurrenceTotal: occurrenceTotal,
+        wasReconciledBeforePause: wasReconciledBeforePause,
+      );
+
+  Future<void> setReconciled(int transId, bool reconciled) =>
+      _requireClient().setReconciled(transId, reconciled);
+
+  Future<int> resolveOrCreatePayee({required String name, int? categoryId}) =>
+      _requireClient().resolveOrCreatePayee(name: name, categoryId: categoryId);
+
+  Future<void> syncPausedTracking(int transId, {required bool paused, required bool reconciled}) =>
+      _requireClient().syncPausedTracking(transId, paused: paused, reconciled: reconciled);
+
+  Future<int?> billIdForTransaction(int transId) => _requireClient().billIdForTransaction(transId);
+
+  Future<bool> wasReconciledBeforePause(int transId) =>
+      _requireClient().wasReconciledBeforePause(transId);
+
+  // ---- Comptes ----
+  Future<int> insertAccount({
+    required String name,
+    required String type,
+    required double initialBalance,
+    required int currencyId,
+  }) =>
+      _requireClient().insertAccount(
+          name: name, type: type, initialBalance: initialBalance, currencyId: currencyId);
+
+  Future<void> updateAccount(Account account) => _requireClient().updateAccount(account);
+
+  Future<void> deleteAccount(int accountId) => _requireClient().deleteAccount(accountId);
+
+  // ---- Catégories ----
+  Future<int> insertCategory({required String name, int? parentId}) =>
+      _requireClient().insertCategory(name: name, parentId: parentId);
+
+  Future<void> renameCategory(int categoryId, String newName) =>
+      _requireClient().renameCategory(categoryId, newName);
+
+  Future<void> setCategoryActive(int categoryId, bool active) =>
+      _requireClient().setCategoryActive(categoryId, active);
+
+  Future<void> deleteCategory(int categoryId) => _requireClient().deleteCategory(categoryId);
+
+  Future<void> mergeCategories({required int fromId, required int toId}) =>
+      _requireClient().mergeCategories(fromId: fromId, toId: toId);
+
+  Future<void> moveCategory(int categoryId, int? newParentId) =>
+      _requireClient().moveCategory(categoryId, newParentId);
+
+  // ---- Tiers ----
+  Future<void> renamePayee(int payeeId, String newName) =>
+      _requireClient().renamePayee(payeeId, newName);
+
+  Future<void> deletePayee(int payeeId) => _requireClient().deletePayee(payeeId);
+
+  Future<void> mergePayees({required int fromId, required int toId}) =>
+      _requireClient().mergePayees(fromId: fromId, toId: toId);
+
+  // ---- Opérations récurrentes ----
+  Future<int> insertBillDeposit({
+    required int accountId,
+    required int payeeId,
+    required TransCode transCode,
+    required double amount,
+    required DateTime nextOccurrence,
+    required RecurrencePeriod period,
+    required RecurrenceAutoExecute autoExecute,
+    int? categoryId,
+    int? toAccountId,
+    double? toAmount,
+    String? notes,
+    int numOccurrences = -1,
+  }) =>
+      _requireClient().insertBillDeposit(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: transCode,
+        amount: amount,
+        nextOccurrence: nextOccurrence,
+        period: period,
+        autoExecute: autoExecute,
+        categoryId: categoryId,
+        toAccountId: toAccountId,
+        toAmount: toAmount,
+        notes: notes,
+        numOccurrences: numOccurrences,
+      );
+
+  Future<void> updateBillDeposit(BillDeposit bill) => _requireClient().updateBillDeposit(bill);
+
+  Future<void> deleteBillDeposit(int bdId) => _requireClient().deleteBillDeposit(bdId);
+
+  Future<void> setBillPaused(int billId, bool paused) =>
+      _requireClient().setBillPaused(billId, paused);
+
+  Future<void> setBillAnnualIncrease(int billId, {required double percent, required DateTime anchor}) =>
+      _requireClient().setBillAnnualIncrease(billId, percent: percent, anchor: anchor);
+
+  Future<void> clearBillAnnualIncrease(int billId) =>
+      _requireClient().clearBillAnnualIncrease(billId);
+
+  Future<void> ensureBillOccurrenceTotal(int billId, int total) =>
+      _requireClient().ensureBillOccurrenceTotal(billId, total);
+
+  // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
+  Future<void> upsertBudgetEnvelope({
+    int? id,
+    required int accountId,
+    required int categoryId,
+    required double amount,
+    Object? name = _unset,
+    Object? manualOverride = _unset,
+  }) =>
+      _requireClient().upsertBudgetEnvelope(
+        id: id,
+        accountId: accountId,
+        categoryId: categoryId,
+        amount: amount,
+        name: name,
+        manualOverride: manualOverride,
+      );
+
+  Future<void> deleteBudgetEnvelope(int id) => _requireClient().deleteBudgetEnvelope(id);
+
+  Future<void> setIncomeTargetOverride(int accountId, double amount) =>
+      _requireClient().setIncomeTargetOverride(accountId, amount);
+
+  Future<void> resetBudgetEnvelopes(int accountId) =>
+      _requireClient().resetBudgetEnvelopes(accountId);
 
   ApiClient _requireClient() {
     final client = _client;

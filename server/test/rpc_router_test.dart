@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager_server/auth/pin_auth.dart';
@@ -13,13 +15,14 @@ import 'test_helpers.dart';
 void main() {
   late Handler router;
   late TokenStore tokenStore;
+  late MmexRepository repo;
   late int accountId;
   late int payeeId;
   late int categoryId;
   late int billId;
 
   setUp(() async {
-    final repo = await openBlankTestRepo();
+    repo = await openBlankTestRepo();
     accountId = repo.insertAccount(
         name: 'Compte Courant', type: 'Checking', initialBalance: 1000, currencyId: 2);
     payeeId = repo.insertPayee(name: 'Carrefour');
@@ -517,6 +520,366 @@ void main() {
       final occurrences = jsonDecode(await response.readAsString()) as List;
       expect(occurrences, hasLength(1));
       expect(occurrences.single['signedAmount'], -15);
+    });
+  });
+
+  group('Écritures - Transactions', () {
+    test('POST /rpc/insertTransaction creates a real transaction', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/insertTransaction', token: token, body: {
+        'accountId': accountId,
+        'payeeId': payeeId,
+        'transCode': 'withdrawal',
+        'amount': 12.5,
+        'date': '2026-05-01T00:00:00.000',
+        'categoryId': categoryId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final newId = json['id'] as int;
+      final txns = repo.getTransactions(accountId: accountId);
+      expect(txns.any((t) => t.id == newId && t.amount == 12.5), isTrue);
+    });
+
+    test('POST /rpc/updateTransaction updates the real transaction', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response = await router(post('/rpc/updateTransaction',
+          token: token, body: tx.copyWith(amount: 99.99).toJson()));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId).single.amount, 99.99);
+    });
+
+    test('POST /rpc/deleteTransaction removes the real transaction', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response =
+          await router(post('/rpc/deleteTransaction', token: token, body: {'transId': tx.id}));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId), isEmpty);
+    });
+
+    test('POST /rpc/restoreTransaction recreates a deleted transaction', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      repo.deleteTransaction(tx.id);
+      final response = await router(post('/rpc/restoreTransaction',
+          token: token, body: {'transaction': tx.toJson()}));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId), hasLength(1));
+    });
+
+    test('POST /rpc/setReconciled marks the real transaction reconciled', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response = await router(post('/rpc/setReconciled',
+          token: token, body: {'transId': tx.id, 'reconciled': true}));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId).single.isReconciled, isTrue);
+    });
+  });
+
+  group('Écritures - Transactions (auxiliaires)', () {
+    test('POST /rpc/resolveOrCreatePayee creates a payee when none matches', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/resolveOrCreatePayee', token: token, body: {'name': 'Nouveau tiers'}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(repo.getPayees(onlyActive: false).any((p) => p.id == json['id']), isTrue);
+    });
+
+    test('POST /rpc/resolveOrCreatePayee reuses an existing payee', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/resolveOrCreatePayee', token: token, body: {'name': 'Carrefour'}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['id'], payeeId);
+    });
+
+    test('POST /rpc/syncPausedTracking records the paused transaction', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response = await router(post('/rpc/syncPausedTracking',
+          token: token, body: {'transId': tx.id, 'paused': true, 'reconciled': true}));
+      expect(response.statusCode, 200);
+      expect(repo.wasReconciledBeforePause(tx.id), isTrue);
+    });
+
+    test('POST /rpc/billIdForTransaction returns null when unlinked', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response = await router(
+          post('/rpc/billIdForTransaction', token: token, body: {'transId': tx.id}));
+      expect(response.statusCode, 200);
+      expect(await response.readAsString(), '{"billId":null}');
+    });
+
+    test('POST /rpc/wasReconciledBeforePause returns false when never paused', () async {
+      final token = tokenStore.issue();
+      final tx = repo.getTransactions(accountId: accountId).single;
+      final response = await router(
+          post('/rpc/wasReconciledBeforePause', token: token, body: {'transId': tx.id}));
+      expect(response.statusCode, 200);
+      expect(await response.readAsString(), '{"result":false}');
+    });
+  });
+
+  group('Écritures - Comptes', () {
+    test('POST /rpc/insertAccount creates a real account', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/insertAccount', token: token, body: {
+        'name': 'Nouveau compte',
+        'type': 'Checking',
+        'initialBalance': 500.0,
+        'currencyId': 2,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(repo.getAccounts().any((a) => a.id == json['id'] && a.name == 'Nouveau compte'), isTrue);
+    });
+
+    test('POST /rpc/updateAccount renames the real account', () async {
+      final token = tokenStore.issue();
+      final account = repo.getAccounts().single;
+      final renamed = Account(
+        id: account.id,
+        name: 'Renommé',
+        type: account.type,
+        status: account.status,
+        initialBalance: account.initialBalance,
+        currencyId: account.currencyId,
+        favorite: account.favorite,
+        notes: account.notes,
+      );
+      final response =
+          await router(post('/rpc/updateAccount', token: token, body: renamed.toJson()));
+      expect(response.statusCode, 200);
+      expect(repo.getAccounts().single.name, 'Renommé');
+    });
+
+    test('POST /rpc/deleteAccount removes the real account', () async {
+      final token = tokenStore.issue();
+      final extraId = repo.insertAccount(
+          name: 'À supprimer', type: 'Checking', initialBalance: 0, currencyId: 2);
+      final response =
+          await router(post('/rpc/deleteAccount', token: token, body: {'accountId': extraId}));
+      expect(response.statusCode, 200);
+      expect(repo.getAccounts().any((a) => a.id == extraId), isFalse);
+    });
+  });
+
+  group('Écritures - Catégories', () {
+    test('POST /rpc/insertCategory creates a real category', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/insertCategory', token: token, body: {'name': 'Nouvelle catégorie test'}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(repo.getCategories(onlyActive: false).any((c) => c.id == json['id']), isTrue);
+    });
+
+    test('POST /rpc/renameCategory renames the real category', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/renameCategory',
+          token: token, body: {'categoryId': categoryId, 'newName': 'Renommée'}));
+      expect(response.statusCode, 200);
+      expect(repo.getCategories(onlyActive: false).firstWhere((c) => c.id == categoryId).name,
+          'Renommée');
+    });
+
+    test('POST /rpc/setCategoryActive archives the real category', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/setCategoryActive',
+          token: token, body: {'categoryId': categoryId, 'active': false}));
+      expect(response.statusCode, 200);
+      expect(repo.getCategories(onlyActive: false).firstWhere((c) => c.id == categoryId).active,
+          isFalse);
+    });
+
+    test('POST /rpc/deleteCategory removes an unused real category', () async {
+      final token = tokenStore.issue();
+      final extraId = repo.insertCategory(name: 'À supprimer test');
+      final response = await router(
+          post('/rpc/deleteCategory', token: token, body: {'categoryId': extraId}));
+      expect(response.statusCode, 200);
+      expect(repo.getCategories(onlyActive: false).any((c) => c.id == extraId), isFalse);
+    });
+
+    test('POST /rpc/mergeCategories repoints the transaction to the target category', () async {
+      final token = tokenStore.issue();
+      final targetId = repo.insertCategory(name: 'Cible du merge');
+      final response = await router(post('/rpc/mergeCategories',
+          token: token, body: {'fromId': categoryId, 'toId': targetId}));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId).single.categoryId, targetId);
+    });
+
+    test('POST /rpc/moveCategory reparents the real category', () async {
+      final token = tokenStore.issue();
+      final parentId = repo.insertCategory(name: 'Nouvelle mère');
+      final response = await router(post('/rpc/moveCategory',
+          token: token, body: {'categoryId': categoryId, 'newParentId': parentId}));
+      expect(response.statusCode, 200);
+      expect(repo.getCategories(onlyActive: false).firstWhere((c) => c.id == categoryId).parentId,
+          parentId);
+    });
+  });
+
+  group('Écritures - Tiers', () {
+    test('POST /rpc/renamePayee renames the real payee', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/renamePayee', token: token, body: {'payeeId': payeeId, 'newName': 'Renommé'}));
+      expect(response.statusCode, 200);
+      expect(repo.getPayees(onlyActive: false).firstWhere((p) => p.id == payeeId).name, 'Renommé');
+    });
+
+    test('POST /rpc/deletePayee removes an unused real payee', () async {
+      final token = tokenStore.issue();
+      final extraId = repo.insertPayee(name: 'À supprimer test');
+      final response =
+          await router(post('/rpc/deletePayee', token: token, body: {'payeeId': extraId}));
+      expect(response.statusCode, 200);
+      expect(repo.getPayees(onlyActive: false).any((p) => p.id == extraId), isFalse);
+    });
+
+    test('POST /rpc/mergePayees repoints the transaction to the target payee', () async {
+      final token = tokenStore.issue();
+      final targetId = repo.insertPayee(name: 'Cible du merge');
+      final response = await router(
+          post('/rpc/mergePayees', token: token, body: {'fromId': payeeId, 'toId': targetId}));
+      expect(response.statusCode, 200);
+      expect(repo.getTransactions(accountId: accountId).single.payeeId, targetId);
+    });
+  });
+
+  group('Écritures - Opérations récurrentes', () {
+    test('POST /rpc/insertBillDeposit creates a real bill', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/insertBillDeposit', token: token, body: {
+        'accountId': accountId,
+        'payeeId': payeeId,
+        'transCode': 'withdrawal',
+        'amount': 20.0,
+        'nextOccurrence': '2026-06-01T00:00:00.000',
+        'period': 'monthly',
+        'autoExecute': 'manual',
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(repo.getBillDeposits().any((b) => b.id == json['id'] && b.amount == 20.0), isTrue);
+    });
+
+    test('POST /rpc/updateBillDeposit updates the real bill', () async {
+      final token = tokenStore.issue();
+      final bill = repo.getBillDeposits().single;
+      final response = await router(post('/rpc/updateBillDeposit',
+          token: token, body: bill.copyWith(amount: 77.0).toJson()));
+      expect(response.statusCode, 200);
+      expect(repo.getBillDeposits().single.amount, 77.0);
+    });
+
+    test('POST /rpc/deleteBillDeposit removes the real bill', () async {
+      final token = tokenStore.issue();
+      final response =
+          await router(post('/rpc/deleteBillDeposit', token: token, body: {'bdId': billId}));
+      expect(response.statusCode, 200);
+      expect(repo.getBillDeposits(), isEmpty);
+    });
+
+    test('POST /rpc/setBillPaused pauses the real bill', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/setBillPaused', token: token, body: {'billId': billId, 'paused': true}));
+      expect(response.statusCode, 200);
+      expect(repo.getBillDeposits().single.paused, isTrue);
+    });
+
+    test('POST /rpc/setBillAnnualIncrease saves a real annual increase', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/setBillAnnualIncrease', token: token, body: {
+        'billId': billId,
+        'percent': 2.5,
+        'anchor': '2026-01-01T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      expect(repo.getBillAnnualIncrease(billId)?.percent, 2.5);
+    });
+
+    test('POST /rpc/clearBillAnnualIncrease removes the real annual increase', () async {
+      final token = tokenStore.issue();
+      repo.setBillAnnualIncrease(billId, percent: 2.5, anchor: DateTime(2026, 1, 1));
+      final response = await router(
+          post('/rpc/clearBillAnnualIncrease', token: token, body: {'billId': billId}));
+      expect(response.statusCode, 200);
+      expect(repo.getBillAnnualIncrease(billId), isNull);
+    });
+
+    test('POST /rpc/ensureBillOccurrenceTotal saves the real occurrence total', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/ensureBillOccurrenceTotal',
+          token: token, body: {'billId': billId, 'total': 12}));
+      expect(response.statusCode, 200);
+      expect(repo.billOccurrenceTotals()[billId], 12);
+    });
+  });
+
+  group('Écritures - Budget (vue enveloppes)', () {
+    test('POST /rpc/upsertBudgetEnvelope creates a real envelope', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/upsertBudgetEnvelope', token: token, body: {
+        'accountId': accountId,
+        'categoryId': categoryId,
+        'amount': 150.0,
+      }));
+      expect(response.statusCode, 200);
+      expect(repo.getBudgetEnvelopes(accountId).single.amount, 150.0);
+    });
+
+    test('POST /rpc/upsertBudgetEnvelope updates amount and name together', () async {
+      final token = tokenStore.issue();
+      repo.upsertBudgetEnvelope(accountId: accountId, categoryId: categoryId, amount: 100);
+      final id = repo.getBudgetEnvelopes(accountId).single.id;
+      final response = await router(post('/rpc/upsertBudgetEnvelope', token: token, body: {
+        'id': id,
+        'accountId': accountId,
+        'categoryId': categoryId,
+        'amount': 200.0,
+        'name': 'Loisirs',
+      }));
+      expect(response.statusCode, 200);
+      final envelope = repo.getBudgetEnvelopes(accountId).single;
+      expect(envelope.amount, 200.0);
+      expect(envelope.name, 'Loisirs');
+    });
+
+    test('POST /rpc/deleteBudgetEnvelope removes the real envelope', () async {
+      final token = tokenStore.issue();
+      repo.upsertBudgetEnvelope(accountId: accountId, categoryId: categoryId, amount: 100);
+      final id = repo.getBudgetEnvelopes(accountId).single.id;
+      final response =
+          await router(post('/rpc/deleteBudgetEnvelope', token: token, body: {'id': id}));
+      expect(response.statusCode, 200);
+      expect(repo.getBudgetEnvelopes(accountId), isEmpty);
+    });
+
+    test('POST /rpc/setIncomeTargetOverride saves the real override', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/setIncomeTargetOverride',
+          token: token, body: {'accountId': accountId, 'amount': 3000.0}));
+      expect(response.statusCode, 200);
+      expect(repo.expectedIncomeForBudget(accountId), 3000.0);
+    });
+
+    test('POST /rpc/resetBudgetEnvelopes removes every envelope for the account', () async {
+      final token = tokenStore.issue();
+      repo.upsertBudgetEnvelope(accountId: accountId, categoryId: categoryId, amount: 100);
+      final response = await router(
+          post('/rpc/resetBudgetEnvelopes', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      expect(repo.getBudgetEnvelopes(accountId), isEmpty);
     });
   });
 

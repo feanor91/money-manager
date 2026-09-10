@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import '../screens/transactions_screen.dart' show TransactionEditorResult, TransactionEditorSheet;
 import '../services/voice_entry/voice_transaction_parser.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import 'bill_amount_sync.dart';
 import 'bulk_category_reassign.dart';
@@ -24,6 +25,7 @@ Future<void> openTransactionEditor(
   int? defaultAccountId,
   VoiceTransactionDraft? voicePrefill,
   MoneyTransaction? duplicateFrom,
+  ApiSessionProvider? apiSession,
 }) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
@@ -36,8 +38,15 @@ Future<void> openTransactionEditor(
       defaultAccountId: defaultAccountId,
       voicePrefill: voicePrefill,
       duplicateFrom: duplicateFrom,
+      apiSession: apiSession,
     ),
   );
+  // En mode API, l'écriture est déjà passée par le serveur (voir
+  // TransactionEditorSheet._save) - dbProvider.touch() ne concerne que le
+  // fichier local, sans effet néfaste à l'appeler quand même ici (rien n'a
+  // changé dans le fichier local dans ce cas, touch() est alors un no-op
+  // utile), mais c'est bien le fichier local qui reste écrit à chaque fois
+  // que apiSession est null ou non connecté.
   dbProvider.touch();
   if (result?.categoryChange != null && context.mounted) {
     await offerBulkCategoryReassign(

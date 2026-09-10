@@ -95,7 +95,7 @@ class _PayeesScreenState extends State<PayeesScreen> {
             if (snapshot.hasError) {
               return Center(child: Text('Erreur : ${snapshot.error}'));
             }
-            return _buildBody(context, dbProvider, repo, snapshot.data!);
+            return _buildBody(context, dbProvider, repo, snapshot.data!, apiSession: apiSession);
           },
         ),
       );
@@ -109,7 +109,8 @@ class _PayeesScreenState extends State<PayeesScreen> {
   }
 
   Widget _buildBody(
-      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _PayeesData data) {
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _PayeesData data,
+      {ApiSessionProvider? apiSession}) {
     final all = [...data.payees]
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
@@ -148,7 +149,14 @@ class _PayeesScreenState extends State<PayeesScreen> {
                         usageCount: data.usageCountOf(payee.id),
                         repo: repo,
                         allPayees: all,
-                        onChanged: () => dbProvider.touch(),
+                        apiSession: apiSession,
+                        onChanged: () {
+                          if (apiSession != null) {
+                            _refreshApi(apiSession);
+                          } else {
+                            dbProvider.touch();
+                          }
+                        },
                       );
                     },
                   ),
@@ -164,6 +172,7 @@ class _PayeeRow extends StatelessWidget {
   final int usageCount;
   final MmexRepository repo;
   final List<Payee> allPayees;
+  final ApiSessionProvider? apiSession;
   final VoidCallback onChanged;
 
   const _PayeeRow({
@@ -172,6 +181,7 @@ class _PayeeRow extends StatelessWidget {
     required this.usageCount,
     required this.repo,
     required this.allPayees,
+    this.apiSession,
     required this.onChanged,
   });
 
@@ -210,20 +220,21 @@ class _PayeeRow extends StatelessWidget {
   Future<void> _handle(BuildContext context, String action) async {
     switch (action) {
       case 'rename':
-        await _renamePayee(context, repo, payee);
+        await _renamePayee(context, repo, payee, apiSession: apiSession);
         onChanged();
       case 'merge':
-        await _mergePayee(context, repo, payee, allPayees);
+        await _mergePayee(context, repo, payee, allPayees, apiSession: apiSession);
         onChanged();
       case 'delete':
         if (usageCount != 0) return;
-        await _deletePayee(context, repo, payee);
+        await _deletePayee(context, repo, payee, apiSession: apiSession);
         onChanged();
     }
   }
 }
 
-Future<void> _renamePayee(BuildContext context, MmexRepository repo, Payee payee) async {
+Future<void> _renamePayee(BuildContext context, MmexRepository repo, Payee payee,
+    {ApiSessionProvider? apiSession}) async {
   final controller = TextEditingController(text: payee.name);
   final name = await showDialog<String>(
     context: context,
@@ -246,15 +257,20 @@ Future<void> _renamePayee(BuildContext context, MmexRepository repo, Payee payee
   );
   final trimmed = name?.trim();
   if (trimmed == null || trimmed.isEmpty || trimmed == payee.name) return;
-  repo.renamePayee(payee.id, trimmed);
+  if (apiSession != null && apiSession.useApiForPayees && apiSession.isConnected) {
+    await apiSession.renamePayee(payee.id, trimmed);
+  } else {
+    repo.renamePayee(payee.id, trimmed);
+  }
 }
 
 Future<void> _mergePayee(
   BuildContext context,
   MmexRepository repo,
   Payee source,
-  List<Payee> allPayees,
-) async {
+  List<Payee> allPayees, {
+  ApiSessionProvider? apiSession,
+}) async {
   final options = allPayees.where((p) => p.id != source.id).toList();
 
   Payee? target;
@@ -295,10 +311,15 @@ Future<void> _mergePayee(
     ),
   );
   if (confirmed != true || target == null) return;
-  repo.mergePayees(fromId: source.id, toId: target!.id);
+  if (apiSession != null && apiSession.useApiForPayees && apiSession.isConnected) {
+    await apiSession.mergePayees(fromId: source.id, toId: target!.id);
+  } else {
+    repo.mergePayees(fromId: source.id, toId: target!.id);
+  }
 }
 
-Future<void> _deletePayee(BuildContext context, MmexRepository repo, Payee payee) async {
+Future<void> _deletePayee(BuildContext context, MmexRepository repo, Payee payee,
+    {ApiSessionProvider? apiSession}) async {
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -315,6 +336,10 @@ Future<void> _deletePayee(BuildContext context, MmexRepository repo, Payee payee
     ),
   );
   if (confirmed == true) {
-    repo.deletePayee(payee.id);
+    if (apiSession != null && apiSession.useApiForPayees && apiSession.isConnected) {
+      await apiSession.deletePayee(payee.id);
+    } else {
+      repo.deletePayee(payee.id);
+    }
   }
 }

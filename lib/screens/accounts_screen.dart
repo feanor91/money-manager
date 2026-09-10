@@ -96,7 +96,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ],
         ),
         floatingActionButton: FloatingActionButton.extended(
-          onPressed: () => openAccountEditor(context, repo),
+          onPressed: () async {
+            await openAccountEditor(context, repo, apiSession: apiSession);
+            _refreshApi(apiSession);
+          },
           icon: const Icon(Icons.add),
           label: const Text('Nouveau compte'),
         ),
@@ -109,7 +112,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
             if (snapshot.hasError) {
               return Center(child: Text('Erreur : ${snapshot.error}'));
             }
-            return _buildBody(context, dbProvider, repo, snapshot.data!);
+            return _buildBody(context, dbProvider, repo, snapshot.data!, apiSession: apiSession);
           },
         ),
       );
@@ -137,7 +140,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Widget _buildBody(BuildContext context, DatabaseProvider dbProvider, MmexRepository repo,
-      _AccountsData data) {
+      _AccountsData data,
+      {ApiSessionProvider? apiSession}) {
     final accounts = data.accounts;
     final visible = accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
     final hidden = accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
@@ -160,7 +164,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   balance: data.balanceOf(account.id),
                   currency: data.currency,
                   hidden: false,
-                  onTap: () => openAccountEditor(context, repo, existing: account),
+                  onTap: () async {
+                    await openAccountEditor(context, repo,
+                        existing: account, apiSession: apiSession);
+                    if (apiSession != null) _refreshApi(apiSession);
+                  },
                   onToggleHidden: () => dbProvider.setAccountHidden(account.id, true),
                 ),
               ),
@@ -177,7 +185,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   balance: data.balanceOf(account.id),
                   currency: data.currency,
                   hidden: true,
-                  onTap: () => openAccountEditor(context, repo, existing: account),
+                  onTap: () async {
+                    await openAccountEditor(context, repo,
+                        existing: account, apiSession: apiSession);
+                    if (apiSession != null) _refreshApi(apiSession);
+                  },
                   onToggleHidden: () => dbProvider.setAccountHidden(account.id, false),
                 ),
               ),
@@ -192,8 +204,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
 /// freshly created, empty database - same fields, same repository call,
 /// rather than a second bespoke form for what's the same underlying action.
 Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
-    {Account? existing}) async {
+    {Account? existing, ApiSessionProvider? apiSession}) async {
   final dbProvider = context.read<DatabaseProvider>();
+  final useApi = apiSession != null && apiSession.useApiForAccounts && apiSession.isConnected;
   final nameController = TextEditingController(text: existing?.name ?? '');
   final balanceController = TextEditingController(
     text: existing != null ? existing.initialBalance.toStringAsFixed(2) : '0',
@@ -239,10 +252,15 @@ Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
         actions: [
           if (existing != null)
             TextButton(
-              onPressed: () {
-                repo.deleteAccount(existing.id);
+              onPressed: () async {
+                if (useApi) {
+                  await apiSession.deleteAccount(existing.id);
+                } else {
+                  repo.deleteAccount(existing.id);
+                }
+                if (!context.mounted) return;
                 Navigator.of(context).pop();
-                dbProvider.touch();
+                if (!useApi) dbProvider.touch();
               },
               child: const Text('Supprimer'),
             ),
@@ -250,18 +268,28 @@ Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Annuler')),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               final balance =
                   double.tryParse(balanceController.text.replaceAll(',', '.')) ?? 0;
               if (existing == null) {
-                repo.insertAccount(
-                  name: nameController.text,
-                  type: type,
-                  initialBalance: balance,
-                  currencyId: repo.getDefaultCurrency()?.id ?? 1,
-                );
+                if (useApi) {
+                  final currencyId = (await apiSession.getBaseCurrency())?.id ?? 1;
+                  await apiSession.insertAccount(
+                    name: nameController.text,
+                    type: type,
+                    initialBalance: balance,
+                    currencyId: currencyId,
+                  );
+                } else {
+                  repo.insertAccount(
+                    name: nameController.text,
+                    type: type,
+                    initialBalance: balance,
+                    currencyId: repo.getDefaultCurrency()?.id ?? 1,
+                  );
+                }
               } else {
-                repo.updateAccount(Account(
+                final updated = Account(
                   id: existing.id,
                   name: nameController.text,
                   type: type,
@@ -269,10 +297,16 @@ Future<void> openAccountEditor(BuildContext context, MmexRepository repo,
                   initialBalance: balance,
                   currencyId: existing.currencyId,
                   favorite: existing.favorite,
-                ));
+                );
+                if (useApi) {
+                  await apiSession.updateAccount(updated);
+                } else {
+                  repo.updateAccount(updated);
+                }
               }
+              if (!context.mounted) return;
               Navigator.of(context).pop();
-              dbProvider.touch();
+              if (!useApi) dbProvider.touch();
             },
             child: const Text('Enregistrer'),
           ),

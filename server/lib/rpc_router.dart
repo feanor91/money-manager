@@ -1,6 +1,10 @@
 import 'dart:convert';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/bill_deposit.dart';
+import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 
@@ -282,6 +286,259 @@ Handler buildRouter({
       for (final o in occurrences)
         {'date': o.date.toIso8601String(), 'label': o.label, 'signedAmount': o.signedAmount},
     ]));
+  });
+
+  // Écritures (chantier, non branchées en production - voir
+  // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+  // 2026-09-10"). Une route par méthode d'écriture, même principe que les
+  // lectures ci-dessus.
+
+  // ---- Transactions ----
+  rpcRouter.post('/insertTransaction', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.insertTransaction(
+      accountId: body['accountId'] as int,
+      payeeId: body['payeeId'] as int,
+      transCode: transCodeFromString(body['transCode'] as String),
+      amount: (body['amount'] as num).toDouble(),
+      date: DateTime.parse(body['date'] as String),
+      categoryId: body['categoryId'] as int?,
+      toAccountId: body['toAccountId'] as int?,
+      toAmount: (body['toAmount'] as num?)?.toDouble(),
+      notes: body['notes'] as String?,
+      reconciled: body['reconciled'] as bool? ?? false,
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/updateTransaction', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.updateTransaction(MoneyTransaction.fromJson(body));
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteTransaction', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteTransaction(body['transId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/restoreTransaction', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.restoreTransaction(
+      MoneyTransaction.fromJson(body['transaction'] as Map<String, dynamic>),
+      billId: body['billId'] as int?,
+      occurrenceIndex: body['occurrenceIndex'] as int?,
+      occurrenceTotal: body['occurrenceTotal'] as int?,
+      wasReconciledBeforePause: body['wasReconciledBeforePause'] as bool?,
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/setReconciled', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setReconciled(body['transId'] as int, body['reconciled'] as bool);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/resolveOrCreatePayee', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.resolveOrCreatePayee(
+        name: body['name'] as String, categoryId: body['categoryId'] as int?);
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/syncPausedTracking', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.syncPausedTracking(body['transId'] as int,
+        paused: body['paused'] as bool, reconciled: body['reconciled'] as bool);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/billIdForTransaction', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final billId = repo.billIdForTransaction(body['transId'] as int);
+    return Response.ok(jsonEncode({'billId': billId}));
+  });
+  rpcRouter.post('/wasReconciledBeforePause', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final result = repo.wasReconciledBeforePause(body['transId'] as int);
+    return Response.ok(jsonEncode({'result': result}));
+  });
+
+  // ---- Comptes ----
+  rpcRouter.post('/insertAccount', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.insertAccount(
+      name: body['name'] as String,
+      type: body['type'] as String,
+      initialBalance: (body['initialBalance'] as num).toDouble(),
+      currencyId: body['currencyId'] as int,
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/updateAccount', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.updateAccount(Account.fromJson(body));
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteAccount', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteAccount(body['accountId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+
+  // ---- Catégories ----
+  rpcRouter.post('/insertCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.insertCategory(name: body['name'] as String, parentId: body['parentId'] as int?);
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/renameCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.renameCategory(body['categoryId'] as int, body['newName'] as String);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/setCategoryActive', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setCategoryActive(body['categoryId'] as int, body['active'] as bool);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteCategory(body['categoryId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/mergeCategories', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.mergeCategories(fromId: body['fromId'] as int, toId: body['toId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/moveCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.moveCategory(body['categoryId'] as int, body['newParentId'] as int?);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+
+  // ---- Tiers ----
+  rpcRouter.post('/renamePayee', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.renamePayee(body['payeeId'] as int, body['newName'] as String);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deletePayee', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deletePayee(body['payeeId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/mergePayees', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.mergePayees(fromId: body['fromId'] as int, toId: body['toId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+
+  // ---- Opérations récurrentes ----
+  rpcRouter.post('/insertBillDeposit', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.insertBillDeposit(
+      accountId: body['accountId'] as int,
+      payeeId: body['payeeId'] as int,
+      transCode: transCodeFromString(body['transCode'] as String),
+      amount: (body['amount'] as num).toDouble(),
+      nextOccurrence: DateTime.parse(body['nextOccurrence'] as String),
+      period: RecurrencePeriod.values.byName(body['period'] as String),
+      autoExecute: RecurrenceAutoExecute.values.byName(body['autoExecute'] as String),
+      categoryId: body['categoryId'] as int?,
+      toAccountId: body['toAccountId'] as int?,
+      toAmount: (body['toAmount'] as num?)?.toDouble(),
+      notes: body['notes'] as String?,
+      numOccurrences: body['numOccurrences'] as int? ?? -1,
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/updateBillDeposit', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.updateBillDeposit(BillDeposit.fromJson(body));
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteBillDeposit', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteBillDeposit(body['bdId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/setBillPaused', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setBillPaused(body['billId'] as int, body['paused'] as bool);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/setBillAnnualIncrease', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setBillAnnualIncrease(
+      body['billId'] as int,
+      percent: (body['percent'] as num).toDouble(),
+      anchor: DateTime.parse(body['anchor'] as String),
+    );
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/clearBillAnnualIncrease', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.clearBillAnnualIncrease(body['billId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/ensureBillOccurrenceTotal', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.ensureBillOccurrenceTotal(body['billId'] as int, body['total'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+
+  // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
+  rpcRouter.post('/upsertBudgetEnvelope', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = body['id'] as int?;
+    final accountId = body['accountId'] as int;
+    final categoryId = body['categoryId'] as int;
+    final amount = (body['amount'] as num).toDouble();
+    final hasName = body.containsKey('name');
+    final hasManualOverride = body.containsKey('manualOverride');
+    final name = body['name'] as String?;
+    final manualOverride = body['manualOverride'] as bool?;
+    // upsertBudgetEnvelope distingue "argument absent" (garde la valeur
+    // existante) de "argument passé, même null" via une valeur sentinelle
+    // par défaut sur ses propres paramètres - reproduit ici en n'incluant
+    // l'argument nommé dans l'appel que lorsque la clé JSON était présente,
+    // plutôt que de tenter de passer une sentinelle depuis l'extérieur (qui
+    // ne serait de toute façon jamais identique à la sentinelle privée du
+    // dépôt).
+    if (hasName && hasManualOverride) {
+      repo.upsertBudgetEnvelope(
+          id: id,
+          accountId: accountId,
+          categoryId: categoryId,
+          amount: amount,
+          name: name,
+          manualOverride: manualOverride);
+    } else if (hasName) {
+      repo.upsertBudgetEnvelope(
+          id: id, accountId: accountId, categoryId: categoryId, amount: amount, name: name);
+    } else if (hasManualOverride) {
+      repo.upsertBudgetEnvelope(
+          id: id,
+          accountId: accountId,
+          categoryId: categoryId,
+          amount: amount,
+          manualOverride: manualOverride);
+    } else {
+      repo.upsertBudgetEnvelope(id: id, accountId: accountId, categoryId: categoryId, amount: amount);
+    }
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteBudgetEnvelope', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteBudgetEnvelope(body['id'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/setIncomeTargetOverride', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setIncomeTargetOverride(body['accountId'] as int, (body['amount'] as num).toDouble());
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/resetBudgetEnvelopes', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.resetBudgetEnvelopes(body['accountId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
   });
 
   router.mount(

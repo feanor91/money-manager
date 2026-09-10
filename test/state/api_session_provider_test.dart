@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/transaction.dart';
 
 import 'package:money_manager/state/api_session_provider.dart';
 
@@ -136,6 +139,74 @@ void main() {
           () => provider.recurringOccurrencesInRange(
               start: DateTime(2026, 4, 1), end: DateTime(2026, 4, 30)),
           throwsStateError);
+    });
+
+    test('the write accessors throw a StateError when not connected', () {
+      final provider = ApiSessionProvider();
+      final tx = MoneyTransaction(
+        id: 1,
+        accountId: 1,
+        payeeId: 1,
+        transCode: TransCode.withdrawal,
+        amount: 10,
+        toAmount: 10,
+        status: '',
+        date: DateTime(2026, 3, 15),
+      );
+      const account = Account(
+          id: 1, name: 'x', type: 'Checking', status: 'Open', initialBalance: 0, currencyId: 2, favorite: false);
+      expect(
+          () => provider.insertTransaction(
+              accountId: 1,
+              payeeId: 1,
+              transCode: TransCode.withdrawal,
+              amount: 10,
+              date: DateTime(2026, 3, 15)),
+          throwsStateError);
+      expect(() => provider.updateTransaction(tx), throwsStateError);
+      expect(() => provider.deleteTransaction(1), throwsStateError);
+      expect(() => provider.restoreTransaction(tx), throwsStateError);
+      expect(() => provider.setReconciled(1, true), throwsStateError);
+      expect(() => provider.resolveOrCreatePayee(name: 'x'), throwsStateError);
+      expect(() => provider.syncPausedTracking(1, paused: true, reconciled: false),
+          throwsStateError);
+      expect(() => provider.billIdForTransaction(1), throwsStateError);
+      expect(() => provider.wasReconciledBeforePause(1), throwsStateError);
+      expect(
+          () => provider.insertAccount(
+              name: 'x', type: 'Checking', initialBalance: 0, currencyId: 2),
+          throwsStateError);
+      expect(() => provider.updateAccount(account), throwsStateError);
+      expect(() => provider.deleteAccount(1), throwsStateError);
+      expect(() => provider.insertCategory(name: 'x'), throwsStateError);
+      expect(() => provider.renameCategory(1, 'x'), throwsStateError);
+      expect(() => provider.setCategoryActive(1, true), throwsStateError);
+      expect(() => provider.deleteCategory(1), throwsStateError);
+      expect(() => provider.mergeCategories(fromId: 1, toId: 2), throwsStateError);
+      expect(() => provider.renamePayee(1, 'x'), throwsStateError);
+      expect(() => provider.deletePayee(1), throwsStateError);
+      expect(() => provider.mergePayees(fromId: 1, toId: 2), throwsStateError);
+      expect(
+          () => provider.insertBillDeposit(
+              accountId: 1,
+              payeeId: 1,
+              transCode: TransCode.withdrawal,
+              amount: 10,
+              nextOccurrence: DateTime(2026, 4, 1),
+              period: RecurrencePeriod.monthly,
+              autoExecute: RecurrenceAutoExecute.manual),
+          throwsStateError);
+      expect(() => provider.deleteBillDeposit(1), throwsStateError);
+      expect(() => provider.setBillPaused(1, true), throwsStateError);
+      expect(
+          () => provider.setBillAnnualIncrease(1, percent: 2, anchor: DateTime(2026, 1, 1)),
+          throwsStateError);
+      expect(() => provider.clearBillAnnualIncrease(1), throwsStateError);
+      expect(
+          () => provider.upsertBudgetEnvelope(accountId: 1, categoryId: 1, amount: 10),
+          throwsStateError);
+      expect(() => provider.deleteBudgetEnvelope(1), throwsStateError);
+      expect(() => provider.setIncomeTargetOverride(1, 100), throwsStateError);
     });
   });
 

@@ -8,6 +8,7 @@ import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 
 /// Client HTTP pour le serveur API (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
@@ -23,6 +24,10 @@ class ApiClientException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Sentinelle "argument non fourni" pour [ApiClient.upsertBudgetEnvelope] -
+/// même principe que [MmexRepository.upsertBudgetEnvelope] côté serveur.
+const _unset = Object();
 
 class ApiClient {
   final String baseUrl;
@@ -332,6 +337,207 @@ class ApiClient {
         ),
     ];
   }
+
+  // Écritures (chantier, non branchées en production - voir
+  // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+  // 2026-09-10").
+
+  // ---- Transactions ----
+  Future<int> insertTransaction({
+    required int accountId,
+    required int payeeId,
+    required TransCode transCode,
+    required double amount,
+    required DateTime date,
+    int? categoryId,
+    int? toAccountId,
+    double? toAmount,
+    String? notes,
+    bool reconciled = false,
+  }) async {
+    final json = await _rpc('insertTransaction', body: {
+      'accountId': accountId,
+      'payeeId': payeeId,
+      'transCode': transCodeToString(transCode),
+      'amount': amount,
+      'date': date.toIso8601String(),
+      if (categoryId != null) 'categoryId': categoryId,
+      if (toAccountId != null) 'toAccountId': toAccountId,
+      if (toAmount != null) 'toAmount': toAmount,
+      if (notes != null) 'notes': notes,
+      'reconciled': reconciled,
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> updateTransaction(MoneyTransaction tx) => _rpc('updateTransaction', body: tx.toJson());
+
+  Future<void> deleteTransaction(int transId) => _rpc('deleteTransaction', body: {'transId': transId});
+
+  Future<int> restoreTransaction(
+    MoneyTransaction tx, {
+    int? billId,
+    int? occurrenceIndex,
+    int? occurrenceTotal,
+    bool? wasReconciledBeforePause,
+  }) async {
+    final json = await _rpc('restoreTransaction', body: {
+      'transaction': tx.toJson(),
+      if (billId != null) 'billId': billId,
+      if (occurrenceIndex != null) 'occurrenceIndex': occurrenceIndex,
+      if (occurrenceTotal != null) 'occurrenceTotal': occurrenceTotal,
+      if (wasReconciledBeforePause != null) 'wasReconciledBeforePause': wasReconciledBeforePause,
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> setReconciled(int transId, bool reconciled) =>
+      _rpc('setReconciled', body: {'transId': transId, 'reconciled': reconciled});
+
+  Future<int> resolveOrCreatePayee({required String name, int? categoryId}) async {
+    final json = await _rpc('resolveOrCreatePayee',
+        body: {'name': name, if (categoryId != null) 'categoryId': categoryId});
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> syncPausedTracking(int transId, {required bool paused, required bool reconciled}) =>
+      _rpc('syncPausedTracking', body: {'transId': transId, 'paused': paused, 'reconciled': reconciled});
+
+  Future<int?> billIdForTransaction(int transId) async {
+    final json = await _rpc('billIdForTransaction', body: {'transId': transId});
+    return (json as Map<String, dynamic>)['billId'] as int?;
+  }
+
+  Future<bool> wasReconciledBeforePause(int transId) async {
+    final json = await _rpc('wasReconciledBeforePause', body: {'transId': transId});
+    return (json as Map<String, dynamic>)['result'] as bool;
+  }
+
+  // ---- Comptes ----
+  Future<int> insertAccount({
+    required String name,
+    required String type,
+    required double initialBalance,
+    required int currencyId,
+  }) async {
+    final json = await _rpc('insertAccount', body: {
+      'name': name,
+      'type': type,
+      'initialBalance': initialBalance,
+      'currencyId': currencyId,
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> updateAccount(Account account) => _rpc('updateAccount', body: account.toJson());
+
+  Future<void> deleteAccount(int accountId) => _rpc('deleteAccount', body: {'accountId': accountId});
+
+  // ---- Catégories ----
+  Future<int> insertCategory({required String name, int? parentId}) async {
+    final json = await _rpc(
+        'insertCategory', body: {'name': name, if (parentId != null) 'parentId': parentId});
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> renameCategory(int categoryId, String newName) =>
+      _rpc('renameCategory', body: {'categoryId': categoryId, 'newName': newName});
+
+  Future<void> setCategoryActive(int categoryId, bool active) =>
+      _rpc('setCategoryActive', body: {'categoryId': categoryId, 'active': active});
+
+  Future<void> deleteCategory(int categoryId) =>
+      _rpc('deleteCategory', body: {'categoryId': categoryId});
+
+  Future<void> mergeCategories({required int fromId, required int toId}) =>
+      _rpc('mergeCategories', body: {'fromId': fromId, 'toId': toId});
+
+  Future<void> moveCategory(int categoryId, int? newParentId) =>
+      _rpc('moveCategory', body: {'categoryId': categoryId, 'newParentId': newParentId});
+
+  // ---- Tiers ----
+  Future<void> renamePayee(int payeeId, String newName) =>
+      _rpc('renamePayee', body: {'payeeId': payeeId, 'newName': newName});
+
+  Future<void> deletePayee(int payeeId) => _rpc('deletePayee', body: {'payeeId': payeeId});
+
+  Future<void> mergePayees({required int fromId, required int toId}) =>
+      _rpc('mergePayees', body: {'fromId': fromId, 'toId': toId});
+
+  // ---- Opérations récurrentes ----
+  Future<int> insertBillDeposit({
+    required int accountId,
+    required int payeeId,
+    required TransCode transCode,
+    required double amount,
+    required DateTime nextOccurrence,
+    required RecurrencePeriod period,
+    required RecurrenceAutoExecute autoExecute,
+    int? categoryId,
+    int? toAccountId,
+    double? toAmount,
+    String? notes,
+    int numOccurrences = -1,
+  }) async {
+    final json = await _rpc('insertBillDeposit', body: {
+      'accountId': accountId,
+      'payeeId': payeeId,
+      'transCode': transCodeToString(transCode),
+      'amount': amount,
+      'nextOccurrence': nextOccurrence.toIso8601String(),
+      'period': period.name,
+      'autoExecute': autoExecute.name,
+      if (categoryId != null) 'categoryId': categoryId,
+      if (toAccountId != null) 'toAccountId': toAccountId,
+      if (toAmount != null) 'toAmount': toAmount,
+      if (notes != null) 'notes': notes,
+      'numOccurrences': numOccurrences,
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> updateBillDeposit(BillDeposit bill) => _rpc('updateBillDeposit', body: bill.toJson());
+
+  Future<void> deleteBillDeposit(int bdId) => _rpc('deleteBillDeposit', body: {'bdId': bdId});
+
+  Future<void> setBillPaused(int billId, bool paused) =>
+      _rpc('setBillPaused', body: {'billId': billId, 'paused': paused});
+
+  Future<void> setBillAnnualIncrease(int billId, {required double percent, required DateTime anchor}) =>
+      _rpc('setBillAnnualIncrease',
+          body: {'billId': billId, 'percent': percent, 'anchor': anchor.toIso8601String()});
+
+  Future<void> clearBillAnnualIncrease(int billId) =>
+      _rpc('clearBillAnnualIncrease', body: {'billId': billId});
+
+  Future<void> ensureBillOccurrenceTotal(int billId, int total) =>
+      _rpc('ensureBillOccurrenceTotal', body: {'billId': billId, 'total': total});
+
+  // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
+  Future<void> upsertBudgetEnvelope({
+    int? id,
+    required int accountId,
+    required int categoryId,
+    required double amount,
+    Object? name = _unset,
+    Object? manualOverride = _unset,
+  }) =>
+      _rpc('upsertBudgetEnvelope', body: {
+        if (id != null) 'id': id,
+        'accountId': accountId,
+        'categoryId': categoryId,
+        'amount': amount,
+        if (!identical(name, _unset)) 'name': name,
+        if (!identical(manualOverride, _unset)) 'manualOverride': manualOverride,
+      });
+
+  Future<void> deleteBudgetEnvelope(int id) => _rpc('deleteBudgetEnvelope', body: {'id': id});
+
+  Future<void> setIncomeTargetOverride(int accountId, double amount) =>
+      _rpc('setIncomeTargetOverride', body: {'accountId': accountId, 'amount': amount});
+
+  Future<void> resetBudgetEnvelopes(int accountId) =>
+      _rpc('resetBudgetEnvelopes', body: {'accountId': accountId});
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {
     final token = _token;

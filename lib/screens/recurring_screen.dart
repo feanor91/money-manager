@@ -124,7 +124,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
             return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
           }
           return _buildScaffold(context, dbProvider, repo, snapshot.data!,
-              apiRefresh: () => _refreshApi(apiSession));
+              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession));
         },
       );
     }
@@ -138,7 +138,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
   /// toujours le dépôt local, quel que soit le mode - voir [_buildBody].
   Widget _buildScaffold(
       BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _RecurringData data,
-      {VoidCallback? apiRefresh}) {
+      {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) {
     final visibleAccounts = data.accounts.values
         .where((a) => !dbProvider.isAccountHidden(a.id))
         .toList();
@@ -172,20 +172,27 @@ class _RecurringScreenState extends State<RecurringScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context),
+        onPressed: () => _openEditor(context, apiSession: apiSession, apiRefresh: apiRefresh),
         icon: const Icon(Icons.add),
         label: const Text('Ajouter'),
       ),
-      body: _buildBody(context, dbProvider, repo, data),
+      body: _buildBody(context, dbProvider, repo, data,
+          apiSession: apiSession, apiRefresh: apiRefresh),
     );
   }
 
-  /// [repo] est toujours le dépôt local - même en mode API, une bascule
-  /// rapide (mettre en pause) reste une écriture directe au fichier, comme
-  /// partout ailleurs dans ce chantier (voir la nuance du plan sur la
-  /// coupure des écritures, jamais progressive comme les lectures).
+  /// [repo] est toujours le dépôt local pour l'enregistrement d'une
+  /// occurrence (voir [_recordOccurrence]) - opération plus complexe
+  /// (création d'une vraie transaction, parfois répartie en plusieurs
+  /// mensualités) laissée de côté pour cette passe, décision de périmètre
+  /// documentée dans PLAN_ARCHITECTURE_CLIENT_SERVEUR.md ("Précision
+  /// ajoutée le 2026-09-10"). Le reste (ajouter/modifier/supprimer une
+  /// opération récurrente, mettre en pause, augmentation annuelle) passe
+  /// par [apiSession] quand fourni et connecté.
   Widget _buildBody(
-      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _RecurringData data) {
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _RecurringData data,
+      {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) {
+    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
     final currency = data.currency;
     final accounts = data.accounts;
     final categories = data.categories;
@@ -274,7 +281,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                           child: Opacity(
                             opacity: bill.paused ? 0.55 : 1,
                             child: ListTile(
-                              onTap: () => _openEditor(context, existing: bill),
+                              onTap: () => _openEditor(context,
+                                  existing: bill, apiSession: apiSession, apiRefresh: apiRefresh),
                               leading: CircleAvatar(
                                 backgroundColor: (positive
                                         ? AppTheme.positive
@@ -307,9 +315,14 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                         'prévisionnel)',
                                     child: Checkbox(
                                       value: bill.paused,
-                                      onChanged: (v) {
-                                        repo.setBillPaused(bill.id, v ?? false);
-                                        dbProvider.touch();
+                                      onChanged: (v) async {
+                                        if (useApi) {
+                                          await apiSession.setBillPaused(bill.id, v ?? false);
+                                          apiRefresh?.call();
+                                        } else {
+                                          repo.setBillPaused(bill.id, v ?? false);
+                                          dbProvider.touch();
+                                        }
                                       },
                                     ),
                                   ),
@@ -337,8 +350,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                           ? Theme.of(context).colorScheme.primary
                                           : null,
                                     ),
-                                    onPressed: () =>
-                                        _editAnnualIncrease(context, bill),
+                                    onPressed: () => _editAnnualIncrease(context, bill,
+                                        apiSession: apiSession, apiRefresh: apiRefresh),
                                   ),
                                   IconButton(
                                     tooltip: 'Enregistrer cette occurrence',
@@ -359,7 +372,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
       );
   }
 
-  Future<void> _editAnnualIncrease(BuildContext context, BillDeposit bill) async {
+  Future<void> _editAnnualIncrease(BuildContext context, BillDeposit bill,
+      {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
     final result = await showDialog<_AnnualIncreaseResult>(
@@ -367,13 +381,24 @@ class _RecurringScreenState extends State<RecurringScreen> {
       builder: (_) => _AnnualIncreaseDialog(repo: repo, bill: bill),
     );
     if (result == null) return;
-    if (result.cleared) {
-      repo.clearBillAnnualIncrease(bill.id);
+    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
+    if (useApi) {
+      if (result.cleared) {
+        await apiSession.clearBillAnnualIncrease(bill.id);
+      } else {
+        await apiSession.setBillAnnualIncrease(bill.id,
+            percent: result.percent!, anchor: result.anchor!);
+      }
+      apiRefresh?.call();
     } else {
-      repo.setBillAnnualIncrease(bill.id,
-          percent: result.percent!, anchor: result.anchor!);
+      if (result.cleared) {
+        repo.clearBillAnnualIncrease(bill.id);
+      } else {
+        repo.setBillAnnualIncrease(bill.id,
+            percent: result.percent!, anchor: result.anchor!);
+      }
+      dbProvider.touch();
     }
-    dbProvider.touch();
   }
 
   Future<void> _recordOccurrence(BuildContext context, BillDeposit bill) async {
@@ -387,17 +412,30 @@ class _RecurringScreenState extends State<RecurringScreen> {
   }
 
   Future<void> _openEditor(BuildContext context,
-      {BillDeposit? existing, BillDeposit? duplicateFrom}) async {
+      {BillDeposit? existing,
+      BillDeposit? duplicateFrom,
+      ApiSessionProvider? apiSession,
+      VoidCallback? apiRefresh}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
+    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
     final result = await showModalBottomSheet<RecurringEditorResult>(
       context: context,
       isScrollControlled: true,
       builder: (_) => RecurringEditorSheet(
-          existing: existing, repo: repo, duplicateFrom: duplicateFrom),
+          existing: existing, repo: repo, duplicateFrom: duplicateFrom, apiSession: apiSession),
     );
-    dbProvider.touch();
-    if (result?.categoryChange != null && context.mounted) {
+    if (useApi) {
+      apiRefresh?.call();
+    } else {
+      dbProvider.touch();
+    }
+    // Réassignation en masse de catégorie - reste locale uniquement, même
+    // nuance que TransactionEditorSheet._save (voir
+    // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+    // 2026-09-10") : elle passerait par le dépôt local sans savoir qu'une
+    // écriture vient de partir vers le serveur.
+    if (!useApi && result?.categoryChange != null && context.mounted) {
       await offerBulkCategoryReassign(
         context: context,
         repo: repo,
@@ -410,7 +448,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
     // has fully closed (same deferred-to-after-close convention as
     // openTransactionEditor's identical duplicate handling).
     if (result?.duplicateFrom != null && context.mounted) {
-      await _openEditor(context, duplicateFrom: result!.duplicateFrom);
+      await _openEditor(context,
+          duplicateFrom: result!.duplicateFrom, apiSession: apiSession, apiRefresh: apiRefresh);
     }
   }
 }
@@ -531,6 +570,12 @@ class RecurringEditorSheet extends StatefulWidget {
   final MmexRepository repo;
   final int? defaultAccountId;
 
+  /// Non-null ET connecté : l'enregistrement/suppression passe par le
+  /// serveur au lieu du fichier local (chantier écriture, base de test
+  /// uniquement - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision
+  /// ajoutée le 2026-09-10").
+  final ApiSessionProvider? apiSession;
+
   /// Seeds every field a duplicated bill should copy, exactly like
   /// [existing] would - unlike the ledger's own duplicateFrom (which
   /// deliberately blanks amount/date since those vary transaction to
@@ -547,6 +592,7 @@ class RecurringEditorSheet extends StatefulWidget {
     required this.repo,
     this.defaultAccountId,
     this.duplicateFrom,
+    this.apiSession,
   });
 
   @override
@@ -575,6 +621,11 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
   late bool _limitedOccurrences;
   final _occurrencesController = TextEditingController();
   final _notesController = TextEditingController();
+
+  bool get _useApi =>
+      widget.apiSession != null &&
+      widget.apiSession!.useApiForRecurring &&
+      widget.apiSession!.isConnected;
 
   @override
   void initState() {
@@ -874,8 +925,13 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                               'Les opérations déjà enregistrées dans le grand livre ne sont pas concernées.',
                         );
                         if (!confirmed || !context.mounted) return;
-                        widget.repo.deleteBillDeposit(widget.existing!.id);
-                        context.read<DatabaseProvider>().touch();
+                        if (_useApi) {
+                          await widget.apiSession!.deleteBillDeposit(widget.existing!.id);
+                        } else {
+                          widget.repo.deleteBillDeposit(widget.existing!.id);
+                          context.read<DatabaseProvider>().touch();
+                        }
+                        if (!context.mounted) return;
                         Navigator.of(context).pop();
                       },
                       child: const Text('Supprimer'),
@@ -895,7 +951,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                     ),
                   const Spacer(),
                   FilledButton(
-                    onPressed: _save,
+                    onPressed: () => _save(),
                     child: const Text('Enregistrer'),
                   ),
                 ],
@@ -907,10 +963,12 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
     );
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
+    final useApi = _useApi;
+    final apiSession = widget.apiSession;
     // See TransactionEditorSheet._save's identical resolution for why -
     // reuses a matching existing payee case-insensitively, or creates one,
     // instead of silently dropping newly-typed text that was never
@@ -919,38 +977,64 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
     // -1 (never a real PAYEEID) means "no payee resolved" here just as much
     // as null does - see transactions_screen.dart's identical fix.
     final hasResolvedPayeeId = _payeeId != null && _payeeId != -1;
-    final payeeId = isTransfer
-        ? -1
-        : (hasResolvedPayeeId
-            ? _payeeId!
-            : (typedPayeeText.isEmpty
-                ? -1
-                : widget.repo.resolveOrCreatePayee(
-                    name: typedPayeeText, categoryId: _categoryId)));
+    final int payeeId;
+    if (isTransfer) {
+      payeeId = -1;
+    } else if (hasResolvedPayeeId) {
+      payeeId = _payeeId!;
+    } else if (typedPayeeText.isEmpty) {
+      payeeId = -1;
+    } else if (useApi) {
+      payeeId =
+          await apiSession!.resolveOrCreatePayee(name: typedPayeeText, categoryId: _categoryId);
+    } else {
+      payeeId = widget.repo.resolveOrCreatePayee(name: typedPayeeText, categoryId: _categoryId);
+    }
     final numOccurrences = periodUsesXParam(_period)
         ? int.parse(_occurrencesController.text)
         : (_limitedOccurrences ? int.parse(_occurrencesController.text) : -1);
     CategoryChange? categoryChange;
     if (widget.existing == null) {
-      final id = widget.repo.insertBillDeposit(
-        accountId: _accountId!,
-        toAccountId: isTransfer ? _toAccountId : null,
-        payeeId: payeeId,
-        transCode: _transCode,
-        amount: amount,
-        toAmount: isTransfer ? amount : null,
-        nextOccurrence: _nextOccurrence,
-        period: _period,
-        autoExecute: _autoExecute,
-        categoryId: _categoryId,
-        numOccurrences: numOccurrences,
-        notes: _notesController.text,
-      );
-      if (_limitedOccurrences && !periodUsesXParam(_period)) {
-        widget.repo.ensureBillOccurrenceTotal(id, numOccurrences);
+      final int id;
+      if (useApi) {
+        id = await apiSession!.insertBillDeposit(
+          accountId: _accountId!,
+          toAccountId: isTransfer ? _toAccountId : null,
+          payeeId: payeeId,
+          transCode: _transCode,
+          amount: amount,
+          toAmount: isTransfer ? amount : null,
+          nextOccurrence: _nextOccurrence,
+          period: _period,
+          autoExecute: _autoExecute,
+          categoryId: _categoryId,
+          numOccurrences: numOccurrences,
+          notes: _notesController.text,
+        );
+        if (_limitedOccurrences && !periodUsesXParam(_period)) {
+          await apiSession.ensureBillOccurrenceTotal(id, numOccurrences);
+        }
+      } else {
+        id = widget.repo.insertBillDeposit(
+          accountId: _accountId!,
+          toAccountId: isTransfer ? _toAccountId : null,
+          payeeId: payeeId,
+          transCode: _transCode,
+          amount: amount,
+          toAmount: isTransfer ? amount : null,
+          nextOccurrence: _nextOccurrence,
+          period: _period,
+          autoExecute: _autoExecute,
+          categoryId: _categoryId,
+          numOccurrences: numOccurrences,
+          notes: _notesController.text,
+        );
+        if (_limitedOccurrences && !periodUsesXParam(_period)) {
+          widget.repo.ensureBillOccurrenceTotal(id, numOccurrences);
+        }
       }
     } else {
-      widget.repo.updateBillDeposit(BillDeposit(
+      final updated = BillDeposit(
         id: widget.existing!.id,
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
@@ -964,36 +1048,52 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
         notes: _notesController.text,
         numOccurrences: numOccurrences,
         categoryId: _categoryId,
-      ));
-      if (_limitedOccurrences && !periodUsesXParam(_period)) {
-        widget.repo.ensureBillOccurrenceTotal(widget.existing!.id, numOccurrences);
+      );
+      if (useApi) {
+        await apiSession!.updateBillDeposit(updated);
+        if (_limitedOccurrences && !periodUsesXParam(_period)) {
+          await apiSession.ensureBillOccurrenceTotal(widget.existing!.id, numOccurrences);
+        }
+      } else {
+        widget.repo.updateBillDeposit(updated);
+        if (_limitedOccurrences && !periodUsesXParam(_period)) {
+          widget.repo.ensureBillOccurrenceTotal(widget.existing!.id, numOccurrences);
+        }
       }
       // The bill's category just changed - offer to also fix every real
       // ledger transaction still sitting under the old category for this
       // payee (not just future occurrences of this one bill), see
-      // offerBulkCategoryReassign in _openEditor below.
-      final oldCategoryId = widget.existing!.categoryId;
-      if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
-        if (isTransfer && _toAccountId != null) {
-          categoryChange = (
-            payeeId: null,
-            transferAccountId: _accountId,
-            transferToAccountId: _toAccountId,
-            oldCategoryId: oldCategoryId,
-            newCategoryId: _categoryId!,
-          );
-        } else if (!isTransfer && payeeId != -1) {
-          categoryChange = (
-            payeeId: payeeId,
-            transferAccountId: null,
-            transferToAccountId: null,
-            oldCategoryId: oldCategoryId,
-            newCategoryId: _categoryId!,
-          );
+      // offerBulkCategoryReassign in _openEditor below. Reste local
+      // uniquement, même nuance que TransactionEditorSheet._save (voir
+      // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+      // 2026-09-10").
+      if (!useApi) {
+        final oldCategoryId = widget.existing!.categoryId;
+        if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
+          if (isTransfer && _toAccountId != null) {
+            categoryChange = (
+              payeeId: null,
+              transferAccountId: _accountId,
+              transferToAccountId: _toAccountId,
+              oldCategoryId: oldCategoryId,
+              newCategoryId: _categoryId!,
+            );
+          } else if (!isTransfer && payeeId != -1) {
+            categoryChange = (
+              payeeId: payeeId,
+              transferAccountId: null,
+              transferToAccountId: null,
+              oldCategoryId: oldCategoryId,
+              newCategoryId: _categoryId!,
+            );
+          }
         }
       }
     }
-    context.read<DatabaseProvider>().touch();
+    if (!mounted) return;
+    if (!useApi) {
+      context.read<DatabaseProvider>().touch();
+    }
     Navigator.of(context)
         .pop((categoryChange: categoryChange, duplicateFrom: null));
   }

@@ -358,7 +358,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           }
           return _buildScaffold(
               context, dbProvider, repo, accountId, visibleAccounts, accountsById, snapshot.data!,
-              apiRefresh: () => _refreshApi(apiSession, accountId));
+              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, accountId));
         },
       );
     }
@@ -370,8 +370,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// [apiRefresh] non-null seulement en mode API - ajoute le bouton de
   /// rafraîchissement manuel dans l'AppBar (voir [_loadViaApi]). [repo] est
-  /// toujours le dépôt local, quel que soit le mode - toutes les écritures
-  /// (pointer, modifier en ligne...) continuent de passer par lui.
+  /// toujours le dépôt local, quel que soit le mode - la plupart des
+  /// écritures continuent de passer par lui ; seules celles de
+  /// [TransactionEditorSheet]/le pointage inline passent par [apiSession]
+  /// quand il est fourni ET connecté (voir "Précision ajoutée le
+  /// 2026-09-10" dans PLAN_ARCHITECTURE_CLIENT_SERVEUR.md - chantier
+  /// écriture, base de test uniquement).
   Widget _buildScaffold(
     BuildContext context,
     DatabaseProvider dbProvider,
@@ -380,6 +384,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     List<Account> visibleAccounts,
     Map<int, Account> accountsById,
     _TransactionsData data, {
+    ApiSessionProvider? apiSession,
     VoidCallback? apiRefresh,
   }) {
     final currency = data.currency;
@@ -607,11 +612,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   currency: currency,
                   recurringTxIds: recurringTxIds,
                   recurringOccurrences: recurringOccurrences,
-                  onTapRow: (tx) =>
-                      openTransactionEditor(context, existing: tx),
-                  onToggleReconciled: (tx, value) {
-                    repo.setReconciled(tx.id, value);
-                    dbProvider.touch();
+                  onTapRow: (tx) async {
+                    await openTransactionEditor(context, existing: tx, apiSession: apiSession);
+                    apiRefresh?.call();
+                  },
+                  onToggleReconciled: (tx, value) async {
+                    if (apiSession != null &&
+                        apiSession.useApiForTransactions &&
+                        apiSession.isConnected) {
+                      await apiSession.setReconciled(tx.id, value);
+                      apiRefresh?.call();
+                    } else {
+                      repo.setReconciled(tx.id, value);
+                      dbProvider.touch();
+                    }
                   },
                   onEditDate: (tx, date) {
                     repo.updateTransaction(tx.copyWith(date: date));
@@ -636,11 +650,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   sortColumn: _sortColumn,
                   sortAscending: _sortAscending,
                   onSort: _toggleSort,
-                  onTapRow: (tx) =>
-                      openTransactionEditor(context, existing: tx),
-                  onToggleReconciled: (tx, value) {
-                    repo.setReconciled(tx.id, value);
-                    dbProvider.touch();
+                  onTapRow: (tx) async {
+                    await openTransactionEditor(context, existing: tx, apiSession: apiSession);
+                    apiRefresh?.call();
+                  },
+                  onToggleReconciled: (tx, value) async {
+                    if (apiSession != null &&
+                        apiSession.useApiForTransactions &&
+                        apiSession.isConnected) {
+                      await apiSession.setReconciled(tx.id, value);
+                      apiRefresh?.call();
+                    } else {
+                      repo.setReconciled(tx.id, value);
+                      dbProvider.touch();
+                    }
                   },
                   onEditDate: (tx, date) {
                     repo.updateTransaction(tx.copyWith(date: date));
@@ -712,7 +735,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
     if (!context.mounted || choice == null) return;
     if (choice == 'transaction') {
-      await openTransactionEditor(context, defaultAccountId: accountId);
+      final apiSession = context.read<ApiSessionProvider>();
+      await openTransactionEditor(context, defaultAccountId: accountId, apiSession: apiSession);
+      if (apiSession.useApiForTransactions) _refreshApi(apiSession, accountId);
     } else if (choice == 'voice') {
       await startVoiceEntry(context, accountId);
     } else {
@@ -1723,6 +1748,14 @@ class TransactionEditorSheet extends StatefulWidget {
   final MmexRepository repo;
   final int? defaultAccountId;
 
+  /// Non-null ET connecté : l'enregistrement/suppression passe par le
+  /// serveur au lieu du fichier local (chantier écriture, base de test
+  /// uniquement - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision
+  /// ajoutée le 2026-09-10"). Les listes déroulantes (comptes/catégories/
+  /// tiers) et la valeur initiale du champ "Pointée" pour une transaction
+  /// en pause restent toujours lues en local - seule l'écriture bascule.
+  final ApiSessionProvider? apiSession;
+
   /// Seeds the same fields [existing] would, without being a real saved
   /// transaction - Enregistrer still *creates* a new one, exactly like the
   /// plain "Nouvelle transaction" flow. Ignored when [existing] is set (an
@@ -1742,6 +1775,7 @@ class TransactionEditorSheet extends StatefulWidget {
     this.defaultAccountId,
     this.voicePrefill,
     this.duplicateFrom,
+    this.apiSession,
   });
 
   @override
@@ -1775,6 +1809,11 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
 
+  bool get _useApi =>
+      widget.apiSession != null &&
+      widget.apiSession!.useApiForTransactions &&
+      widget.apiSession!.isConnected;
+
   @override
   void initState() {
     super.initState();
@@ -1801,7 +1840,10 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // A paused transaction's *live* status is 'V', not 'R' - tx.isReconciled
     // would read false even if it really was reconciled right before being
     // paused, so ask the remembered marker instead in that case (see
-    // MmexRepository.wasReconciledBeforePause).
+    // MmexRepository.wasReconciledBeforePause). Always the local repo here
+    // even in API mode - initState can't await, and this is a one-off seed
+    // value for a checkbox's initial state, not worth a FutureBuilder
+    // restructuring of the whole sheet just for it.
     _reconciled = tx == null
         ? false
         : (_paused
@@ -2036,34 +2078,62 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                         // link and paused-tracking rows it depends on (see
                         // MmexRepository.restoreTransaction's doc comment).
                         final tx = widget.existing!;
-                        final billId = widget.repo.billIdForTransaction(tx.id);
-                        final occurrence = widget.repo
-                            .recurringTransactionOccurrences()[tx.id];
-                        final wasReconciledBeforePause = tx.isVoid
-                            ? widget.repo.wasReconciledBeforePause(tx.id)
-                            : null;
-                        widget.repo.deleteTransaction(tx.id);
+                        final useApi = _useApi;
+                        final apiSession = widget.apiSession;
+                        final int? billId;
+                        Map<int, ({int index, int total})> occurrences;
+                        final bool? wasReconciledBeforePause;
+                        if (useApi) {
+                          billId = await apiSession!.billIdForTransaction(tx.id);
+                          occurrences = await apiSession.recurringTransactionOccurrences();
+                          wasReconciledBeforePause =
+                              tx.isVoid ? await apiSession.wasReconciledBeforePause(tx.id) : null;
+                        } else {
+                          billId = widget.repo.billIdForTransaction(tx.id);
+                          occurrences = widget.repo.recurringTransactionOccurrences();
+                          wasReconciledBeforePause = tx.isVoid
+                              ? widget.repo.wasReconciledBeforePause(tx.id)
+                              : null;
+                        }
+                        final occurrence = occurrences[tx.id];
+                        if (useApi) {
+                          await apiSession!.deleteTransaction(tx.id);
+                        } else {
+                          widget.repo.deleteTransaction(tx.id);
+                        }
+                        if (!context.mounted) return;
                         final dbProvider = context.read<DatabaseProvider>();
-                        dbProvider.touch();
+                        if (!useApi) dbProvider.touch();
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: const Text('Opération supprimée.'),
                             action: SnackBarAction(
                               label: 'Annuler',
-                              onPressed: () {
-                                widget.repo.restoreTransaction(
-                                  tx,
-                                  billId: billId,
-                                  occurrenceIndex: occurrence?.index,
-                                  occurrenceTotal: occurrence?.total,
-                                  wasReconciledBeforePause:
-                                      wasReconciledBeforePause,
-                                );
-                                dbProvider.touch();
+                              onPressed: () async {
+                                if (useApi) {
+                                  await apiSession!.restoreTransaction(
+                                    tx,
+                                    billId: billId,
+                                    occurrenceIndex: occurrence?.index,
+                                    occurrenceTotal: occurrence?.total,
+                                    wasReconciledBeforePause: wasReconciledBeforePause,
+                                  );
+                                } else {
+                                  widget.repo.restoreTransaction(
+                                    tx,
+                                    billId: billId,
+                                    occurrenceIndex: occurrence?.index,
+                                    occurrenceTotal: occurrence?.total,
+                                    wasReconciledBeforePause:
+                                        wasReconciledBeforePause,
+                                  );
+                                  dbProvider.touch();
+                                }
                               },
                             ),
                           ),
                         );
+                        if (!context.mounted) return;
                         Navigator.of(context).pop();
                       },
                       child: const Text('Supprimer'),
@@ -2095,12 +2165,14 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     );
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     final amount = double.parse(_amountController.text.replaceAll(',', '.'));
     final isTransfer = _transCode == TransCode.transfer;
+    final useApi = _useApi;
+    final apiSession = widget.apiSession;
     // Resolves whatever was typed into Tiers even if never explicitly
     // selected/created (see SearchableSelectField.onTextChanged above) -
     // reuses a matching existing payee case-insensitively, or creates one,
@@ -2113,36 +2185,56 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
     // "keeps the stale value, never resolves the typed text" bug the
     // onTextChanged fix above addresses for the more common case.
     final hasResolvedPayeeId = _payeeId != null && _payeeId != -1;
-    final payeeId = isTransfer
-        ? -1
-        : (hasResolvedPayeeId
-            ? _payeeId!
-            : (typedPayeeText.isEmpty
-                ? -1
-                : widget.repo.resolveOrCreatePayee(
-                    name: typedPayeeText, categoryId: _categoryId)));
+    final int payeeId;
+    if (isTransfer) {
+      payeeId = -1;
+    } else if (hasResolvedPayeeId) {
+      payeeId = _payeeId!;
+    } else if (typedPayeeText.isEmpty) {
+      payeeId = -1;
+    } else if (useApi) {
+      payeeId =
+          await apiSession!.resolveOrCreatePayee(name: typedPayeeText, categoryId: _categoryId);
+    } else {
+      payeeId = widget.repo.resolveOrCreatePayee(name: typedPayeeText, categoryId: _categoryId);
+    }
     CategoryChange? categoryChange;
     BillAmountChange? billAmountChange;
     if (widget.existing == null) {
-      widget.repo.insertTransaction(
-        accountId: _accountId!,
-        payeeId: payeeId,
-        transCode: _transCode,
-        amount: amount,
-        date: _date,
-        categoryId: _categoryId,
-        toAccountId: isTransfer ? _toAccountId : null,
-        toAmount: isTransfer ? amount : null,
-        notes: _notesController.text,
-        reconciled: _reconciled,
-      );
+      if (useApi) {
+        await apiSession!.insertTransaction(
+          accountId: _accountId!,
+          payeeId: payeeId,
+          transCode: _transCode,
+          amount: amount,
+          date: _date,
+          categoryId: _categoryId,
+          toAccountId: isTransfer ? _toAccountId : null,
+          toAmount: isTransfer ? amount : null,
+          notes: _notesController.text,
+          reconciled: _reconciled,
+        );
+      } else {
+        widget.repo.insertTransaction(
+          accountId: _accountId!,
+          payeeId: payeeId,
+          transCode: _transCode,
+          amount: amount,
+          date: _date,
+          categoryId: _categoryId,
+          toAccountId: isTransfer ? _toAccountId : null,
+          toAmount: isTransfer ? amount : null,
+          notes: _notesController.text,
+          reconciled: _reconciled,
+        );
+      }
     } else {
       // Single field shared with "Pointée" (MMEX has no separate flag for
       // this) - _paused always wins, see MmexRepository.syncPausedTracking
       // for how "Pointée" is preserved underneath without being live while
       // paused.
       final status = _paused ? 'V' : (_reconciled ? 'R' : '');
-      widget.repo.updateTransaction(MoneyTransaction(
+      final updated = MoneyTransaction(
         id: widget.existing!.id,
         accountId: _accountId!,
         toAccountId: isTransfer ? _toAccountId : null,
@@ -2154,47 +2246,67 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         date: _date,
         categoryId: _categoryId,
         notes: _notesController.text,
-      ));
-      widget.repo.syncPausedTracking(widget.existing!.id,
-          paused: _paused, reconciled: _reconciled);
-
-      // Only a real edit (not a brand new transaction) can have "other
-      // identical" occurrences to offer fixing too - see
-      // offerBulkCategoryReassign in _openEditor, which runs once this
-      // sheet has actually closed.
-      final oldCategoryId = widget.existing!.categoryId;
-      if (oldCategoryId != null &&
-          _categoryId != null &&
-          _categoryId != oldCategoryId) {
-        if (isTransfer && _toAccountId != null) {
-          categoryChange = (
-            payeeId: null,
-            transferAccountId: _accountId,
-            transferToAccountId: _toAccountId,
-            oldCategoryId: oldCategoryId,
-            newCategoryId: _categoryId!,
-          );
-        } else if (!isTransfer && payeeId != -1) {
-          categoryChange = (
-            payeeId: payeeId,
-            transferAccountId: null,
-            transferToAccountId: null,
-            oldCategoryId: oldCategoryId,
-            newCategoryId: _categoryId!,
-          );
-        }
+      );
+      if (useApi) {
+        await apiSession!.updateTransaction(updated);
+        await apiSession.syncPausedTracking(widget.existing!.id,
+            paused: _paused, reconciled: _reconciled);
+      } else {
+        widget.repo.updateTransaction(updated);
+        widget.repo.syncPausedTracking(widget.existing!.id,
+            paused: _paused, reconciled: _reconciled);
       }
 
-      // Same deferred-to-after-close convention as categoryChange above -
-      // see offerBillAmountSync in _openEditor.
-      if (widget.existing!.amount != amount) {
-        final billId = widget.repo.billIdForTransaction(widget.existing!.id);
-        if (billId != null) {
-          billAmountChange = (billId: billId, newAmount: amount);
+      // Les deux offres de suivi ci-dessous (réassigner en masse la
+      // catégorie, synchroniser le montant d'une opération récurrente
+      // liée) restent locales uniquement pour l'instant - elles passent
+      // par le dépôt local sans savoir qu'une écriture vient de partir
+      // vers le serveur, ce qui ferait diverger les deux. Ignorées en
+      // mode API plutôt que de risquer cette incohérence (voir
+      // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+      // 2026-09-10").
+      if (!useApi) {
+        // Only a real edit (not a brand new transaction) can have "other
+        // identical" occurrences to offer fixing too - see
+        // offerBulkCategoryReassign in _openEditor, which runs once this
+        // sheet has actually closed.
+        final oldCategoryId = widget.existing!.categoryId;
+        if (oldCategoryId != null &&
+            _categoryId != null &&
+            _categoryId != oldCategoryId) {
+          if (isTransfer && _toAccountId != null) {
+            categoryChange = (
+              payeeId: null,
+              transferAccountId: _accountId,
+              transferToAccountId: _toAccountId,
+              oldCategoryId: oldCategoryId,
+              newCategoryId: _categoryId!,
+            );
+          } else if (!isTransfer && payeeId != -1) {
+            categoryChange = (
+              payeeId: payeeId,
+              transferAccountId: null,
+              transferToAccountId: null,
+              oldCategoryId: oldCategoryId,
+              newCategoryId: _categoryId!,
+            );
+          }
+        }
+
+        // Same deferred-to-after-close convention as categoryChange above -
+        // see offerBillAmountSync in _openEditor.
+        if (widget.existing!.amount != amount) {
+          final billId = widget.repo.billIdForTransaction(widget.existing!.id);
+          if (billId != null) {
+            billAmountChange = (billId: billId, newAmount: amount);
+          }
         }
       }
     }
-    context.read<DatabaseProvider>().touch();
+    if (!mounted) return;
+    if (!useApi) {
+      context.read<DatabaseProvider>().touch();
+    }
     Navigator.of(context).pop((
       categoryChange: categoryChange,
       billAmountChange: billAmountChange,

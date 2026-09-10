@@ -232,7 +232,10 @@ class _BudgetScreenState extends State<BudgetScreen> {
     required Map<int, double> recurringTotals,
     required DatabaseProvider dbProvider,
     required _EnvelopeItem item,
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
   }) async {
+    final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
     setState(() => _selectedCategoryId = item.topCategory.id);
     await showModalBottomSheet(
       context: context,
@@ -252,6 +255,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
               accountId: accountId,
               currency: currency,
               startDay: dbProvider.forecastDay,
+              apiSession: apiSession,
               onAddMember: () {
                 final coveredIds = item.members.map((m) => m.category.id).toSet();
                 final candidates = [
@@ -268,11 +272,16 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   recurringTotals: recurringTotals,
                   allCategories: categories,
                   coveredCategoryIds: coveredIds,
-                  onDone: () => dbProvider.touch(),
+                  apiSession: apiSession,
+                  onDone: () => useApi ? apiRefresh?.call() : dbProvider.touch(),
                 );
               },
               onDone: () {
-                dbProvider.touch();
+                if (useApi) {
+                  apiRefresh?.call();
+                } else {
+                  dbProvider.touch();
+                }
                 Navigator.of(sheetContext).pop();
               },
             ),
@@ -298,7 +307,10 @@ class _BudgetScreenState extends State<BudgetScreen> {
     required double income,
     required double expectedIncome,
     required DatabaseProvider dbProvider,
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
   }) async {
+    final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -314,7 +326,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
               currency: currency,
               income: income,
               expectedIncome: expectedIncome,
-              onChanged: () => dbProvider.touch(),
+              apiSession: apiSession,
+              onChanged: () => useApi ? apiRefresh?.call() : dbProvider.touch(),
             ),
           ),
         ),
@@ -382,6 +395,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
             categoriesById: categoriesById,
             activeCategories: activeCategories,
             data: snapshot.data!,
+            apiSession: apiSession,
             apiRefresh: () => _refreshApi(apiSession, accountId, window),
           );
         },
@@ -436,8 +450,10 @@ class _BudgetScreenState extends State<BudgetScreen> {
     required Map<int, Category> categoriesById,
     required List<Category> activeCategories,
     required _BudgetData data,
+    ApiSessionProvider? apiSession,
     VoidCallback? apiRefresh,
   }) {
+    final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     // Only let the user browse forward through windows that have already
     // closed - there's nothing real to show yet for one still in progress
@@ -600,7 +616,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
               recurringTotals: recurringTotals,
               allCategories: categories,
               coveredCategoryIds: envelopes.map((e) => e.categoryId).toSet(),
-              onDone: () => dbProvider.touch(),
+              apiSession: apiSession,
+              onDone: () => useApi ? apiRefresh?.call() : dbProvider.touch(),
             );
 
     void Function()? openSuggestions = accountId == null
@@ -614,7 +631,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
               categoriesById: categoriesById,
               recurringTotals: recurringTotals,
               currency: currency,
-              onDone: () => dbProvider.touch(),
+              apiSession: apiSession,
+              onDone: () => useApi ? apiRefresh?.call() : dbProvider.touch(),
             );
 
     final titleSuffix = apiRefresh != null ? ' (via API)' : '';
@@ -664,9 +682,14 @@ class _BudgetScreenState extends State<BudgetScreen> {
                     repo: repo,
                     accountId: accountId,
                     accountName: accountsById[accountId]!.name,
+                    apiSession: apiSession,
                     onDone: () {
                       setState(() => _selectedCategoryId = null);
-                      dbProvider.touch();
+                      if (useApi) {
+                        apiRefresh?.call();
+                      } else {
+                        dbProvider.touch();
+                      }
                     },
                   );
                 }
@@ -739,6 +762,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
                   income: income,
                   expectedIncome: expectedIncome,
                   dbProvider: dbProvider,
+                  apiSession: apiSession,
+                  apiRefresh: apiRefresh,
                 ),
               ),
               for (final item in barItems) ...[
@@ -764,6 +789,8 @@ class _BudgetScreenState extends State<BudgetScreen> {
                     recurringTotals: recurringTotals,
                     dbProvider: dbProvider,
                     item: item,
+                    apiSession: apiSession,
+                    apiRefresh: apiRefresh,
                   ),
                 ),
               ],
@@ -1724,6 +1751,7 @@ Future<void> _resetBudget({
   required int accountId,
   required String accountName,
   required VoidCallback onDone,
+  ApiSessionProvider? apiSession,
 }) async {
   final confirmed = await showDialog<bool>(
     context: context,
@@ -1745,7 +1773,11 @@ Future<void> _resetBudget({
     ),
   );
   if (confirmed != true || !context.mounted) return;
-  repo.resetBudgetEnvelopes(accountId);
+  if (apiSession != null && apiSession.useApiForBudget && apiSession.isConnected) {
+    await apiSession.resetBudgetEnvelopes(accountId);
+  } else {
+    repo.resetBudgetEnvelopes(accountId);
+  }
   onDone();
 }
 
@@ -1759,6 +1791,7 @@ Future<void> _addEnvelope({
   required VoidCallback onDone,
   List<Category> allCategories = const [],
   Set<int> coveredCategoryIds = const {},
+  ApiSessionProvider? apiSession,
 }) async {
   Category? category;
   final amountController = TextEditingController();
@@ -1836,11 +1869,13 @@ Future<void> _addEnvelope({
   );
 
   if (confirmed != true || category == null || !context.mounted) return;
-  repo.upsertBudgetEnvelope(
-    accountId: accountId,
-    categoryId: category!.id,
-    amount: double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0,
-  );
+  final amount = double.tryParse(amountController.text.replaceAll(',', '.')) ?? 0;
+  if (apiSession != null && apiSession.useApiForBudget && apiSession.isConnected) {
+    await apiSession.upsertBudgetEnvelope(
+        accountId: accountId, categoryId: category!.id, amount: amount);
+  } else {
+    repo.upsertBudgetEnvelope(accountId: accountId, categoryId: category!.id, amount: amount);
+  }
   onDone();
 }
 
@@ -1940,6 +1975,7 @@ Future<void> _openSuggestions({
   required Map<int, double> recurringTotals,
   required CurrencyFormat? currency,
   required VoidCallback onDone,
+  ApiSessionProvider? apiSession,
 }) async {
   final existingCategoryIds = existingEnvelopes.map((e) => e.categoryId).toSet();
   final suggestions = <_Suggestion>[];
@@ -2312,6 +2348,7 @@ Future<void> _openSuggestions({
   }
 
   if (confirmed != true || !context.mounted) return;
+  final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
   for (final groupId in groupOrder) {
     final total = overriddenGroups.contains(groupId)
         ? double.tryParse(groupControllers[groupId]!.text.replaceAll(',', '.')) ?? 0
@@ -2319,7 +2356,12 @@ Future<void> _openSuggestions({
     if (total <= 0) continue;
     final topCategory = categoriesById[groupId];
     if (topCategory == null) continue;
-    repo.upsertBudgetEnvelope(accountId: accountId, categoryId: topCategory.id, amount: total);
+    if (useApi) {
+      await apiSession.upsertBudgetEnvelope(
+          accountId: accountId, categoryId: topCategory.id, amount: total);
+    } else {
+      repo.upsertBudgetEnvelope(accountId: accountId, categoryId: topCategory.id, amount: total);
+    }
   }
   onDone();
 }
@@ -2676,6 +2718,12 @@ class _EnvelopeDetail extends StatefulWidget {
   /// this card, so the caller can persist the change (dbProvider.touch()).
   final VoidCallback onDone;
 
+  /// Non-null ET connecté : l'enregistrement/suppression passe par le
+  /// serveur au lieu du fichier local (chantier écriture, base de test
+  /// uniquement - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision
+  /// ajoutée le 2026-09-10").
+  final ApiSessionProvider? apiSession;
+
   const _EnvelopeDetail({
     required this.item,
     required this.repo,
@@ -2688,6 +2736,7 @@ class _EnvelopeDetail extends StatefulWidget {
     required this.startDay,
     this.accountId,
     this.currency,
+    this.apiSession,
   });
 
   @override
@@ -2732,7 +2781,12 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     super.dispose();
   }
 
-  void _save() {
+  bool get _useApi =>
+      widget.apiSession != null &&
+      widget.apiSession!.useApiForBudget &&
+      widget.apiSession!.isConnected;
+
+  Future<void> _save() async {
     final top = _topMember;
     // An empty field, or one left equal to the category's own name, means
     // "no custom label" - store null so it keeps following the category's
@@ -2740,14 +2794,26 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     final typedName = _nameController.text.trim();
     final customName =
         (typedName.isEmpty || typedName == widget.item.topCategory.name) ? null : typedName;
-    widget.repo.upsertBudgetEnvelope(
-      id: top?.entryId,
-      accountId: widget.accountId!,
-      categoryId: widget.item.topCategory.id,
-      amount: double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0,
-      name: customName,
-      manualOverride: _manualOverride,
-    );
+    final amount = double.tryParse(_amountController.text.replaceAll(',', '.')) ?? 0;
+    if (_useApi) {
+      await widget.apiSession!.upsertBudgetEnvelope(
+        id: top?.entryId,
+        accountId: widget.accountId!,
+        categoryId: widget.item.topCategory.id,
+        amount: amount,
+        name: customName,
+        manualOverride: _manualOverride,
+      );
+    } else {
+      widget.repo.upsertBudgetEnvelope(
+        id: top?.entryId,
+        accountId: widget.accountId!,
+        categoryId: widget.item.topCategory.id,
+        amount: amount,
+        name: customName,
+        manualOverride: _manualOverride,
+      );
+    }
     widget.onDone();
   }
 
@@ -2791,10 +2857,15 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     ));
   }
 
-  void _delete() {
+  Future<void> _delete() async {
     final top = _topMember;
     if (top == null) return;
-    widget.repo.deleteBudgetEnvelope(top.entryId);
+    if (_useApi) {
+      await widget.apiSession!.deleteBudgetEnvelope(top.entryId);
+    } else {
+      widget.repo.deleteBudgetEnvelope(top.entryId);
+    }
+    if (!mounted) return;
     // The card stays open (e.g. subcategories may still be budgeted under
     // this same top category) - reset the fields to a blank "not budgeted
     // yet" state rather than leaving the just-deleted values on screen.
@@ -3077,6 +3148,12 @@ class _IncomeDetail extends StatefulWidget {
   /// caller passes `dbProvider.touch()`.
   final VoidCallback onChanged;
 
+  /// Non-null ET connecté : l'enregistrement passe par le serveur au lieu
+  /// du fichier local (chantier écriture, base de test uniquement - voir
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
+  /// 2026-09-10").
+  final ApiSessionProvider? apiSession;
+
   const _IncomeDetail({
     required this.repo,
     required this.window,
@@ -3085,6 +3162,7 @@ class _IncomeDetail extends StatefulWidget {
     required this.expectedIncome,
     required this.onChanged,
     this.currency,
+    this.apiSession,
   });
 
   @override
@@ -3114,7 +3192,7 @@ class _IncomeDetailState extends State<_IncomeDetail> {
   /// caller before this sheet opened) stays valid; only the per-category
   /// and per-transaction breakdown needs refetching.
   Future<void> _editTransaction(MoneyTransaction t) async {
-    await openTransactionEditor(context, existing: t);
+    await openTransactionEditor(context, existing: t, apiSession: widget.apiSession);
     if (mounted) setState(() {});
   }
 
@@ -3122,12 +3200,18 @@ class _IncomeDetailState extends State<_IncomeDetail> {
   /// modifier la valeur globale attendus") - saves whatever's typed as a
   /// manual override, taking priority over the automatic recurring-bill
   /// total from here on (see MmexRepository.expectedIncomeForBudget).
-  void _saveExpectedOverride() {
+  Future<void> _saveExpectedOverride() async {
     final amount = double.tryParse(_expectedController.text.replaceAll(',', '.'));
     if (amount == null) return;
-    widget.repo.setIncomeTargetOverride(widget.accountId, amount);
+    if (widget.apiSession != null &&
+        widget.apiSession!.useApiForBudget &&
+        widget.apiSession!.isConnected) {
+      await widget.apiSession!.setIncomeTargetOverride(widget.accountId, amount);
+    } else {
+      widget.repo.setIncomeTargetOverride(widget.accountId, amount);
+    }
     widget.onChanged();
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   /// Clears the manual override and refills the field with the automatic
