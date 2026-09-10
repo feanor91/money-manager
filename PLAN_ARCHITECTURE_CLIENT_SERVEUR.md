@@ -186,10 +186,36 @@ le repo pour ne pas la perdre.
   testé en direct : connexion, chargement des comptes, et les 6 nouvelles
   routes Budget répondent toutes 200 dans le vrai navigateur (build
   release), enveloppes vides affichées correctement pour un compte
-  connu localement mais absent de la base de test (pas de crash). Reste à
-  redéployer le binaire serveur sur Excelsior pour que ce correctif (et
-  les nouvelles routes Budget) y soient disponibles - pas fait
-  automatiquement, le déploiement reste une action explicite.
+  connu localement mais absent de la base de test (pas de crash).
+
+  **Mise à jour 2026-09-10 (plus tard le même jour) - déployé sur
+  Excelsior, demande explicite de l'utilisateur.** Binaire recompilé via
+  Docker (`dart:stable`, cross-compilation Linux x64 - voir "Chiffrage
+  concret" plus bas pour la méthode), revérifié dans un conteneur Debian
+  nu avant envoi (login, en-têtes CORS, routes Budget/ForecastChart -
+  toutes OK), puis copié sur le NAS via le partage réseau
+  `\\Excelsior\web\mmex-server\` (remplacement atomique du fichier -
+  accessible directement depuis ce PC, pas besoin de File Station pour
+  cette partie). Le processus déjà en cours d'exécution gardait l'ancien
+  code en mémoire malgré le nouveau fichier sur disque (même limitation
+  que lors du premier déploiement) - l'utilisateur a tué le bon PID
+  (celui du binaire, pas celui de `start.sh`) via SSH activé
+  temporairement, la boucle de supervision de `start.sh` a relancé le
+  serveur automatiquement avec le binaire à jour. Vérifié en direct
+  contre le vrai serveur déployé (`192.168.1.44:8899`, réseau local) :
+  en-têtes CORS présents sur une vraie requête et sur un préflight
+  OPTIONS d'une route Budget.
+
+  **Constat au passage, sans lien avec ce correctif** :
+  `https://bteuile.ddns.net:8443/api/...` renvoie un 404 nginx - le
+  serveur API n'est donc accessible que depuis le réseau local pour
+  l'instant, pas depuis l'extérieur (l'étape 3 du guide de déploiement,
+  "exposer via un reverse-proxy", ne semble jamais avoir été finalisée -
+  cohérent avec la limitation déjà notée : le reverse-proxy DSM ne route
+  que par nom d'hôte/port, pas par chemin). Sans conséquence pour
+  l'instant puisque ce chantier n'est pas encore branché dans l'appli
+  réellement déployée, mais à traiter avant toute utilisation depuis
+  l'extérieur du réseau local.
 
 - 🚫 **Simulation (2584 lignes) - passée en revue, migration écartée pour
   la même raison structurelle que le simulateur du Budget** : c'est un
