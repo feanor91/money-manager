@@ -206,16 +206,21 @@ le repo pour ne pas la perdre.
   en-têtes CORS présents sur une vraie requête et sur un préflight
   OPTIONS d'une route Budget.
 
-  **Constat au passage, sans lien avec ce correctif** :
-  `https://bteuile.ddns.net:8443/api/...` renvoie un 404 nginx - le
-  serveur API n'est donc accessible que depuis le réseau local pour
-  l'instant, pas depuis l'extérieur (l'étape 3 du guide de déploiement,
-  "exposer via un reverse-proxy", ne semble jamais avoir été finalisée -
-  cohérent avec la limitation déjà notée : le reverse-proxy DSM ne route
-  que par nom d'hôte/port, pas par chemin). Sans conséquence pour
-  l'instant puisque ce chantier n'est pas encore branché dans l'appli
-  réellement déployée, mais à traiter avant toute utilisation depuis
-  l'extérieur du réseau local.
+  **Constat au passage, sans lien avec ce correctif, puis résolu la même
+  journée** : `https://bteuile.ddns.net:8443/api/...` (chemin `/api/` sur
+  le port déjà utilisé par le site) renvoyait un 404 nginx - le
+  reverse-proxy DSM ne route que par nom d'hôte/port, jamais par chemin
+  (limitation déjà notée dans ce document). Il existait en fait déjà une
+  règle "Proxy inversé" pour ce serveur, sur un **port dédié** plutôt
+  qu'un chemin (`bteuile.ddns.net:8444` HTTPS → `localhost:8899` HTTP,
+  nommée "MMEX_SERVER" dans DSM) - mise en place lors du premier
+  déploiement mais jamais vérifiée en dehors du réseau local. Testé et
+  confirmé fonctionnel depuis l'extérieur : `/auth/login` répond, jeton
+  Bearer et en-têtes CORS présents, préflight OPTIONS OK. **Le serveur
+  est donc maintenant réellement accessible depuis Internet, sur
+  `https://bteuile.ddns.net:8444`**, protégé par code PIN + jeton Bearer
+  uniquement (confirmé avec l'utilisateur : un vrai code fort, pas une
+  valeur de test).
 
 - 🚫 **Simulation (2584 lignes) - passée en revue, migration écartée pour
   la même raison structurelle que le simulateur du Budget** : c'est un

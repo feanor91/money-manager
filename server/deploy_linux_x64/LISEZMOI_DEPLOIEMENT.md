@@ -86,26 +86,32 @@ prochaine heure pile.
 
 ## Étape 3 - Exposer le serveur via nginx (proxy inversé)
 
-Pas besoin d'éditer de fichier de configuration à la main - DSM a son
-propre outil graphique pour ça :
+**Important, trouvé le 2026-09-10** : l'outil "Proxy inversé" de DSM
+route uniquement par **nom d'hôte + port**, jamais par chemin - une
+règle "source : `bteuile.ddns.net:8443`, chemin `/api/`" ne marche pas
+(404 nginx), même si l'interface la propose. Utiliser un **port dédié**
+sur le même nom d'hôte à la place :
 
-Panneau de configuration -> **Portail de connexion** -> **Proxy
-inversé** -> Créer.
+Panneau de configuration -> **Portail de connexion** -> **Avancé** ->
+**Proxy inversé** -> Créer.
 
-- Source : le sous-domaine ou chemin souhaité (ex. `bteuile.ddns.net`
-  port `8443`, chemin `/api/` - à adapter selon ce qui existe déjà pour
-  le site)
-- Destination : `127.0.0.1` (ou `localhost`), port `8899` (ou la valeur
-  choisie dans `MM_PORT` à l'étape 2)
-- HTTPS déjà géré par ce que sert déjà `bteuile.ddns.net:8443` - pas de
-  nouveau certificat à créer.
+- Source : Protocole `HTTPS`, Nom d'hôte `bteuile.ddns.net`, Port au
+  choix (le déploiement actuel utilise `8444`, réutiliser le certificat
+  déjà associé à `bteuile.ddns.net` - pas de nouveau certificat à créer)
+- Destination : Protocole `HTTP`, Nom d'hôte `localhost`, Port `8899`
+  (ou la valeur choisie dans `MM_PORT` à l'étape 2)
+- **Redirection de port sur la box/routeur nécessaire en plus** : le
+  port externe choisi (ex. `8444`) doit être redirigé en TCP vers
+  Excelsior sur ce même port, sinon la règle DSM n'est jamais atteinte
+  depuis l'extérieur.
 
 ## Vérifier que ça marche
 
-Depuis n'importe quel appareil, une fois les étapes 1 à 3 faites :
+Depuis n'importe quel appareil, une fois les étapes 1 à 3 faites (adapter
+le port choisi à l'étape 3, `8444` ci-dessous) :
 
 ```bash
-curl -X POST https://bteuile.ddns.net:8443/api/auth/login \
+curl -X POST https://bteuile.ddns.net:8444/auth/login \
   -H "Content-Type: application/json" \
   -d '{"pin":"le code choisi à l'\''étape 2"}'
 ```
