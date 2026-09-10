@@ -266,6 +266,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<_TransactionsData>? _apiFuture;
+  _TransactionsData? _lastData;
   ({int? accountId, DateTime month})? _apiFutureKey;
 
   _TransactionsData _localData(MmexRepository repo, int? accountId) {
@@ -350,14 +351,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       return FutureBuilder<_TransactionsData>(
         future: _apiFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          // Garde les dernières données affichées pendant un
+          // rafraîchissement plutôt que de faire disparaître toute la page
+          // pour un simple spinner - trouvé désagréable en testant
+          // (2026-09-10). Spinner plein écran seulement au tout premier
+          // chargement.
+          if (snapshot.hasData) _lastData = snapshot.data;
+          if (_lastData == null) {
+            if (snapshot.hasError) {
+              return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+            }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          if (snapshot.hasError) {
-            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
-          }
           return _buildScaffold(
-              context, dbProvider, repo, accountId, visibleAccounts, accountsById, snapshot.data!,
+              context, dbProvider, repo, accountId, visibleAccounts, accountsById, _lastData!,
               apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, accountId));
         },
       );
@@ -739,7 +746,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       await openTransactionEditor(context, defaultAccountId: accountId, apiSession: apiSession);
       if (apiSession.useApiForTransactions) _refreshApi(apiSession, accountId);
     } else if (choice == 'voice') {
-      await startVoiceEntry(context, accountId);
+      final apiSession = context.read<ApiSessionProvider>();
+      await startVoiceEntry(context, accountId, apiSession: apiSession);
+      if (apiSession.useApiForTransactions) _refreshApi(apiSession, accountId);
     } else {
       await _openRecurringEditor(context, defaultAccountId: accountId);
     }
@@ -1814,9 +1823,35 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
       widget.apiSession!.useApiForTransactions &&
       widget.apiSession!.isConnected;
 
+  // Listes des comptes/catégories/tiers pour les menus déroulants du
+  // formulaire - en local, une simple lecture synchrone dans build()
+  // suffit ; en mode API, il faut un aller-retour réseau avant de pouvoir
+  // dessiner le formulaire du tout, d'où ces champs préchargés une seule
+  // fois dans initState plutôt qu'à chaque build() (voir _loadPickerData).
+  // Repris explicitement le 2026-09-10 (demande utilisateur : plus aucune
+  // lecture locale quand l'appli est connectée au serveur) - jusque-là,
+  // ce formulaire restait local même en mode API.
+  List<Account>? _apiAccounts;
+  List<Category>? _apiCategories;
+  List<Payee>? _apiPayees;
+
+  Future<void> _loadPickerData() async {
+    final session = widget.apiSession!;
+    final accounts = await session.getAccounts();
+    final categories = await session.getCategories();
+    final payees = await session.getPayees(onlyActive: false);
+    if (!mounted) return;
+    setState(() {
+      _apiAccounts = accounts;
+      _apiCategories = categories;
+      _apiPayees = payees;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_useApi) _loadPickerData();
     final tx = widget.existing;
     final draft = tx == null ? widget.voicePrefill : null;
     // Ignored the same way [draft] is when editing a real transaction - a
@@ -1860,18 +1895,27 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    if (_useApi && _apiAccounts == null) {
+      // Chargement des listes des menus déroulants en cours (voir
+      // _loadPickerData) - rien à dessiner du formulaire tant qu'elles ne
+      // sont pas là, plutôt que de retomber sur une lecture locale.
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
     // Hidden accounts are excluded from selection - except one already in
     // use by this transaction, so editing an old entry against a since-hidden
     // account doesn't break (a DropdownButtonFormField needs its current
     // value to be among its items).
-    final accounts = widget.repo
-        .getAccounts()
+    final rawAccounts = _useApi ? _apiAccounts! : widget.repo.getAccounts();
+    final accounts = rawAccounts
         .where((a) =>
             !dbProvider.isAccountHidden(a.id) ||
             a.id == _accountId ||
             a.id == _toAccountId)
         .toList();
-    final categories = widget.repo.getCategories();
+    final categories = _useApi ? _apiCategories! : widget.repo.getCategories();
     final categoriesById = {for (final c in categories) c.id: c};
     // "Parent:Child" full paths, sorted by that same path - groups every
     // subcategory under its parent alphabetically (matching how MMEX itself
@@ -1882,7 +1926,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
         categoryFullPath(a.id, categoriesById)
             .toLowerCase()
             .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
-    final payees = widget.repo.getPayees(onlyActive: false);
+    final payees = _useApi ? _apiPayees! : widget.repo.getPayees(onlyActive: false);
     final isTransfer = _transCode == TransCode.transfer;
 
     return Padding(

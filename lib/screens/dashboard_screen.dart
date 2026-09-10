@@ -39,6 +39,9 @@ bool get _isAndroidPlatform =>
 /// (voir la remarque sur "Solde actuel" plus bas), [forecastBalances]/
 /// [negativeDates] sont la projection au jour de prévision configuré.
 class _DashboardData {
+  final List<Account> accounts;
+  final Map<int, Account> allAccountsById;
+  final int? selectedAccountId;
   final CurrencyFormat? currency;
   final Map<int, double> balances;
   final Map<int, double> forecastBalances;
@@ -48,6 +51,9 @@ class _DashboardData {
   final Map<int, Payee> payees;
 
   const _DashboardData({
+    required this.accounts,
+    required this.allAccountsById,
+    required this.selectedAccountId,
     required this.currency,
     required this.balances,
     required this.forecastBalances,
@@ -67,11 +73,36 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   Future<_DashboardData>? _apiFuture;
-  ({int selectedAccountId, String accountIdsKey})? _apiFutureKey;
+  _DashboardData? _lastData;
+  ({int? selectedAccountId, int forecastDay})? _apiFutureKey;
 
-  _DashboardData _localData(MmexRepository repo, List<Account> accounts, int selectedAccountId,
-      DateTime today, DateTime forecastDate) {
+  /// La liste des comptes elle-même vient maintenant aussi du serveur en
+  /// mode API (2026-09-10, demande explicite de l'utilisateur après un
+  /// test avec un fichier local vide/factice : auparavant, cette liste
+  /// restait toujours locale, donc un fichier local vide faisait
+  /// systématiquement passer le tableau de bord sur l'écran "Bienvenue,
+  /// créez votre premier compte" même connecté au serveur avec de vrais
+  /// comptes - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md). L'ordre/le
+  /// masquage des comptes restent des préférences locales
+  /// ([DatabaseProvider]), appliquées ici quelle que soit la source des
+  /// comptes eux-mêmes.
+  _DashboardData _localData(MmexRepository repo, DatabaseProvider dbProvider) {
+    final allAccountsById = {for (final a in repo.getAccounts()) a.id: a};
+    final unorderedAccounts = repo
+        .getAccounts(onlyOpen: true)
+        .where((a) => !dbProvider.isAccountHidden(a.id))
+        .toList();
+    final accounts = dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
+    final selectedAccountId = accounts.any((a) => a.id == dbProvider.selectedAccountId)
+        ? dbProvider.selectedAccountId
+        : (accounts.isEmpty ? null : accounts.first.id);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
     return _DashboardData(
+      accounts: accounts,
+      allAccountsById: allAccountsById,
+      selectedAccountId: selectedAccountId,
       currency: repo.getBaseCurrency(),
       // asOf: today, not the plain all-transactions total - the latter
       // includes any transaction already recorded with a future date (e.g.
@@ -86,7 +117,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
       negativeDates: {for (final a in accounts) a.id: repo.forecastNegativeDate(a.id)},
       categories: {for (final c in repo.getCategories()) c.id: c},
-      recentTx: repo.getTransactions(accountId: selectedAccountId, limit: 6),
+      recentTx: selectedAccountId == null
+          ? const []
+          : repo.getTransactions(accountId: selectedAccountId, limit: 6),
       payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
     );
   }
@@ -95,8 +128,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// l'analyseur de dépenses et "Poser une question" continuent de passer
   /// par le dépôt local même en mode API, voir chaque `repo.xxx` dans
   /// [_buildScaffold].
-  Future<_DashboardData> _loadViaApi(ApiSessionProvider session, List<Account> accounts,
-      int selectedAccountId, DateTime today, DateTime forecastDate) async {
+  Future<_DashboardData> _loadViaApi(ApiSessionProvider session, DatabaseProvider dbProvider) async {
+    final allAccounts = await session.getAccounts();
+    final allAccountsById = {for (final a in allAccounts) a.id: a};
+    final unorderedAccounts = (await session.getAccounts(onlyOpen: true))
+        .where((a) => !dbProvider.isAccountHidden(a.id))
+        .toList();
+    final accounts = dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
+    final selectedAccountId = accounts.any((a) => a.id == dbProvider.selectedAccountId)
+        ? dbProvider.selectedAccountId
+        : (accounts.isEmpty ? null : accounts.first.id);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
+
     final currency = await session.getBaseCurrency();
     final balances = <int, double>{};
     final forecastBalances = <int, double>{};
@@ -107,9 +152,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       negativeDates[a.id] = await session.forecastNegativeDate(a.id);
     }
     final categories = await session.getCategories();
-    final recentTx = await session.getTransactions(accountId: selectedAccountId, limit: 6);
+    final recentTx = selectedAccountId == null
+        ? const <MoneyTransaction>[]
+        : await session.getTransactions(accountId: selectedAccountId, limit: 6);
     final payees = await session.getPayees(onlyActive: false);
     return _DashboardData(
+      accounts: accounts,
+      allAccountsById: allAccountsById,
+      selectedAccountId: selectedAccountId,
       currency: currency,
       balances: balances,
       forecastBalances: forecastBalances,
@@ -120,24 +170,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider) {
+    setState(() => _apiFuture = _loadViaApi(session, dbProvider));
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
     final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
 
-    final allAccountsById = {for (final a in repo.getAccounts()) a.id: a};
-    final unorderedAccounts = repo
-        .getAccounts(onlyOpen: true)
-        .where((a) => !dbProvider.isAccountHidden(a.id))
-        .toList();
-    final accounts =
-        dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    if (apiSession.useApiForDashboard && apiSession.isConnected) {
+      final key = (
+        selectedAccountId: dbProvider.selectedAccountId,
+        forecastDay: dbProvider.forecastDay,
+      );
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, dbProvider);
+      }
+      return FutureBuilder<_DashboardData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          // Garde les dernières données affichées pendant un
+          // rafraîchissement (après une écriture, par ex.) plutôt que de
+          // faire disparaître toute la page pour un simple spinner - trouvé
+          // désagréable en testant (2026-09-10). Le spinner plein écran ne
+          // s'affiche donc que pour le tout premier chargement, jamais un
+          // rafraîchissement.
+          if (snapshot.hasData) _lastData = snapshot.data;
+          if (_lastData == null) {
+            if (snapshot.hasError) {
+              return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+            }
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          return _buildContent(context, dbProvider, repo, _lastData!,
+              apiSession: apiSession,
+              apiRefresh: () => _refreshApi(apiSession, dbProvider));
+        },
+      );
+    }
 
-    if (accounts.isEmpty) {
-      final isBrandNew = allAccountsById.isEmpty;
+    _apiFuture = null;
+    return _buildContent(context, dbProvider, repo, _localData(repo, dbProvider),
+        apiSession: apiSession);
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    DatabaseProvider dbProvider,
+    MmexRepository repo,
+    _DashboardData data, {
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
+  }) {
+    if (data.accounts.isEmpty) {
+      final isBrandNew = data.allAccountsById.isEmpty;
       return Scaffold(
         appBar: AppBar(
           title: const Text('Tableau de bord'),
@@ -166,7 +255,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(height: 20),
                       FilledButton.icon(
-                        onPressed: () => openAccountEditor(context, repo),
+                        onPressed: () async {
+                          await openAccountEditor(context, repo, apiSession: apiSession);
+                          apiRefresh?.call();
+                        },
                         icon: const Icon(Icons.add),
                         label: const Text('Créer mon premier compte'),
                       ),
@@ -185,51 +277,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    // Fall back to the first visible account if the persisted selection
-    // points at a hidden, closed, or deleted one.
-    final selectedAccountId =
-        accounts.any((a) => a.id == dbProvider.selectedAccountId)
-            ? dbProvider.selectedAccountId!
-            : accounts.first.id;
-
-    final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
+    final forecastDate = nextForecastDay(DateTime.now(), dbProvider.forecastDay);
     final forecastDateLabel =
         'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
-
-    if (apiSession.useApiForDashboard && apiSession.isConnected) {
-      final key = (
-        selectedAccountId: selectedAccountId,
-        accountIdsKey: accounts.map((a) => a.id).join(','),
-      );
-      if (_apiFuture == null || _apiFutureKey != key) {
-        _apiFutureKey = key;
-        _apiFuture = _loadViaApi(apiSession, accounts, selectedAccountId, today, forecastDate);
-      }
-      return FutureBuilder<_DashboardData>(
-        future: _apiFuture,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
-          }
-          if (snapshot.hasError) {
-            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
-          }
-          return _buildScaffold(context, dbProvider, repo, accounts, allAccountsById,
-              selectedAccountId, forecastDateLabel, snapshot.data!);
-        },
-      );
-    }
-
-    _apiFuture = null;
     return _buildScaffold(
       context,
       dbProvider,
       repo,
-      accounts,
-      allAccountsById,
-      selectedAccountId,
+      data.accounts,
+      data.allAccountsById,
+      data.selectedAccountId!,
       forecastDateLabel,
-      _localData(repo, accounts, selectedAccountId, today, forecastDate),
+      data,
+      apiSession: apiSession,
+      apiRefresh: apiRefresh,
     );
   }
 
@@ -241,8 +302,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Map<int, Account> allAccountsById,
     int selectedAccountId,
     String forecastDateLabel,
-    _DashboardData data,
-  ) {
+    _DashboardData data, {
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
+  }) {
     final currency = data.currency;
     final balances = data.balances;
     final forecastBalances = data.forecastBalances;
@@ -259,10 +322,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // TransactionsScreen's own FAB) - everywhere else this stays exactly
         // the single direct tap it always was, since there'd be nothing else
         // to choose from there.
-        onPressed: () => _isAndroidPlatform
-            ? _showAddChoice(context, selectedAccountId)
-            : openTransactionEditor(context,
-                defaultAccountId: selectedAccountId),
+        onPressed: () async {
+          if (_isAndroidPlatform) {
+            await _showAddChoice(context, selectedAccountId, apiSession: apiSession);
+          } else {
+            await openTransactionEditor(context,
+                defaultAccountId: selectedAccountId, apiSession: apiSession);
+          }
+          apiRefresh?.call();
+        },
         child: const Icon(Icons.add),
       ),
       body: CustomScrollView(
@@ -519,9 +587,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     : null,
                                 viewpointAccountId: selectedAccountId,
                                 currency: currency,
-                                onToggleReconciled: (value) {
-                                  repo.setReconciled(tx.id, value);
-                                  dbProvider.touch();
+                                onToggleReconciled: (value) async {
+                                  if (apiSession != null &&
+                                      apiSession.useApiForTransactions &&
+                                      apiSession.isConnected) {
+                                    await apiSession.setReconciled(tx.id, value);
+                                    apiRefresh?.call();
+                                  } else {
+                                    repo.setReconciled(tx.id, value);
+                                    dbProvider.touch();
+                                  }
                                 },
                               );
                             },
@@ -569,7 +644,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 /// Same choice-sheet mechanic as TransactionsScreen's own FAB, minus the
 /// "opération récurrente" option that only makes sense from that screen -
 /// only shown at all when [_isAndroidPlatform], see the FAB above.
-Future<void> _showAddChoice(BuildContext context, int? accountId) async {
+Future<void> _showAddChoice(BuildContext context, int? accountId,
+    {ApiSessionProvider? apiSession}) async {
   final choice = await showModalBottomSheet<String>(
     context: context,
     builder: (context) => SafeArea(
@@ -592,9 +668,9 @@ Future<void> _showAddChoice(BuildContext context, int? accountId) async {
   );
   if (!context.mounted || choice == null) return;
   if (choice == 'voice') {
-    await startVoiceEntry(context, accountId);
+    await startVoiceEntry(context, accountId, apiSession: apiSession);
   } else {
-    await openTransactionEditor(context, defaultAccountId: accountId);
+    await openTransactionEditor(context, defaultAccountId: accountId, apiSession: apiSession);
   }
 }
 

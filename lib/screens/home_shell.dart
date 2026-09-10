@@ -8,6 +8,7 @@ import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart';
@@ -85,12 +86,39 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _runRecurringCatchUp());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoConnectApi());
     // Update check moved to app.dart's _PinGateState (2026-08-07, user
     // request) - starts as soon as the database-picker/PIN screen shows
     // instead of waiting all the way until here (post-unlock).
     PackageInfo.fromPlatform().then((info) {
       if (mounted) setState(() => _version = info.version);
     });
+  }
+
+  /// Connexion automatique au serveur API au démarrage (chantier écriture,
+  /// demande explicite de l'utilisateur le 2026-09-10 - voir
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - évite d'avoir à se reconnecter
+  /// manuellement à chaque lancement pendant que ce chantier est testé.
+  /// Adresse locale d'Excelsior par défaut (même valeur que le champ
+  /// pré-rempli de l'écran de connexion, voir api_debug_screen.dart) -
+  /// échoue silencieusement (pas de dialogue d'erreur) si le serveur n'est
+  /// pas joignable, l'appli reste utilisable en local comme avant.
+  Future<void> _autoConnectApi() async {
+    final apiSession = context.read<ApiSessionProvider>();
+    if (apiSession.isConnected) return;
+    await apiSession.login('http://192.168.1.44:8899', '3364');
+    if (!apiSession.isConnected) return;
+    // Toutes les bascules activées d'office - le but de ce test est
+    // justement de vérifier que chaque écran fonctionne intégralement via
+    // le serveur, pas de les activer une par une à la main.
+    apiSession.useApiForAccounts = true;
+    apiSession.useApiForPayees = true;
+    apiSession.useApiForCategories = true;
+    apiSession.useApiForSpendingExplorer = true;
+    apiSession.useApiForRecurring = true;
+    apiSession.useApiForTransactions = true;
+    apiSession.useApiForBudget = true;
+    apiSession.useApiForDashboard = true;
   }
 
   Future<void> _runRecurringCatchUp() async {

@@ -62,6 +62,7 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
 
   List<MoneyTransaction>? _results;
   Future<_FilterOptions>? _apiOptionsFuture;
+  _FilterOptions? _lastOptions;
   bool _applyingFilters = false;
 
   List<Category> _subCategoryOptions(List<Category> allCategories) {
@@ -315,13 +316,14 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
         body: FutureBuilder<_FilterOptions>(
           future: _apiOptionsFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
+            if (snapshot.hasData) _lastOptions = snapshot.data;
+            if (_lastOptions == null) {
+              if (snapshot.hasError) {
+                return Center(child: Text('Erreur : ${snapshot.error}'));
+              }
               return const Center(child: CircularProgressIndicator());
             }
-            if (snapshot.hasError) {
-              return Center(child: Text('Erreur : ${snapshot.error}'));
-            }
-            return _buildBody(context, repo, apiSession, snapshot.data!);
+            return _buildBody(context, repo, apiSession, _lastOptions!);
           },
         ),
       );

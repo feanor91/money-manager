@@ -69,6 +69,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
   int? _accountFilter;
   String _searchQuery = '';
   Future<_RecurringData>? _apiFuture;
+  _RecurringData? _lastData;
 
   _RecurringData _localData(MmexRepository repo) {
     return _RecurringData(
@@ -117,13 +118,14 @@ class _RecurringScreenState extends State<RecurringScreen> {
       return FutureBuilder<_RecurringData>(
         future: _apiFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          if (snapshot.hasData) _lastData = snapshot.data;
+          if (_lastData == null) {
+            if (snapshot.hasError) {
+              return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+            }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          if (snapshot.hasError) {
-            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
-          }
-          return _buildScaffold(context, dbProvider, repo, snapshot.data!,
+          return _buildScaffold(context, dbProvider, repo, _lastData!,
               apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession));
         },
       );

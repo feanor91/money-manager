@@ -34,6 +34,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   String _search = '';
   bool _showArchived = false;
   Future<_CategoriesData>? _apiFuture;
+  _CategoriesData? _lastData;
 
   @override
   void dispose() {
@@ -104,13 +105,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
         body: FutureBuilder<_CategoriesData>(
           future: _apiFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
+            if (snapshot.hasData) _lastData = snapshot.data;
+            if (_lastData == null) {
+              if (snapshot.hasError) {
+                return Center(child: Text('Erreur : ${snapshot.error}'));
+              }
               return const Center(child: CircularProgressIndicator());
             }
-            if (snapshot.hasError) {
-              return Center(child: Text('Erreur : ${snapshot.error}'));
-            }
-            return _buildBody(context, dbProvider, repo, snapshot.data!, apiSession: apiSession);
+            return _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession);
           },
         ),
       );

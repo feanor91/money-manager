@@ -164,6 +164,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
   final Set<int> _expandedScenarioCategoryIds = {};
 
   Future<_BudgetData>? _apiFuture;
+  _BudgetData? _lastData;
   ({int accountId, DateTime windowStart})? _apiFutureKey;
 
   _BudgetData _localData(MmexRepository repo, int accountId, BudgetWindow window) {
@@ -374,11 +375,17 @@ class _BudgetScreenState extends State<BudgetScreen> {
       return FutureBuilder<_BudgetData>(
         future: _apiFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
+          // Garde les dernières données affichées pendant un
+          // rafraîchissement plutôt que de faire disparaître toute la page
+          // pour un simple spinner - trouvé désagréable en testant
+          // (2026-09-10). Spinner plein écran seulement au tout premier
+          // chargement.
+          if (snapshot.hasData) _lastData = snapshot.data;
+          if (_lastData == null) {
+            if (snapshot.hasError) {
+              return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+            }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
-          }
-          if (snapshot.hasError) {
-            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
           }
           return _buildScaffold(
             context: context,
@@ -394,7 +401,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
             categories: categories,
             categoriesById: categoriesById,
             activeCategories: activeCategories,
-            data: snapshot.data!,
+            data: _lastData!,
             apiSession: apiSession,
             apiRefresh: () => _refreshApi(apiSession, accountId, window),
           );

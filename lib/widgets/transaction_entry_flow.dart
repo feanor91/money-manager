@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import '../screens/transactions_screen.dart' show TransactionEditorResult, TransactionEditorSheet;
 import '../services/voice_entry/voice_transaction_parser.dart';
@@ -73,6 +76,7 @@ Future<void> openTransactionEditor(
       context,
       defaultAccountId: defaultAccountId,
       duplicateFrom: result!.duplicateFrom,
+      apiSession: apiSession,
     );
   }
 }
@@ -81,23 +85,39 @@ Future<void> openTransactionEditor(
 /// the same "Nouvelle transaction" sheet as manual entry, pre-filled with
 /// whatever [parseVoiceTransaction] made of the transcript. Nothing is ever
 /// saved directly from speech: the user always confirms in that sheet.
-Future<void> startVoiceEntry(BuildContext context, int? accountId) async {
+Future<void> startVoiceEntry(BuildContext context, int? accountId,
+    {ApiSessionProvider? apiSession}) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
+  final useApi = apiSession != null && apiSession.isConnected;
+  final List<Payee> payees;
+  final List<Category> categories;
+  final List<Account> accounts;
+  if (useApi) {
+    payees = await apiSession.getPayees(onlyActive: false);
+    categories = await apiSession.getCategories();
+    accounts = await apiSession.getAccounts();
+  } else {
+    payees = repo.getPayees(onlyActive: false);
+    categories = repo.getCategories();
+    accounts = repo.getAccounts();
+  }
+  if (!context.mounted) return;
   final draft = await showModalBottomSheet<VoiceTransactionDraft>(
     context: context,
     isScrollControlled: true,
     builder: (_) => VoiceTransactionSheet(
-      payees: repo.getPayees(onlyActive: false),
-      categories: repo.getCategories(),
+      payees: payees,
+      categories: categories,
       // Masked accounts excluded - found 2026-08-07: a hidden account
       // sharing a word with an active one ("Boursorama Perso Livret",
       // masked, vs "Boursorama Perso") tied the word-overlap match and
       // silently gave up rather than guess, even though only the active
       // account was ever a real candidate.
-      accounts: repo.getAccounts().where((a) => !dbProvider.isAccountHidden(a.id)).toList(),
+      accounts: accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList(),
     ),
   );
   if (!context.mounted || draft == null) return;
-  await openTransactionEditor(context, defaultAccountId: accountId, voicePrefill: draft);
+  await openTransactionEditor(context,
+      defaultAccountId: accountId, voicePrefill: draft, apiSession: apiSession);
 }

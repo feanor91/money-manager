@@ -33,6 +33,7 @@ class AccountsScreen extends StatefulWidget {
 
 class _AccountsScreenState extends State<AccountsScreen> {
   Future<_AccountsData>? _apiFuture;
+  _AccountsData? _lastData;
 
   _AccountsData _localData(MmexRepository repo) {
     final now = DateTime.now();
@@ -106,13 +107,14 @@ class _AccountsScreenState extends State<AccountsScreen> {
         body: FutureBuilder<_AccountsData>(
           future: _apiFuture,
           builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
+            if (snapshot.hasData) _lastData = snapshot.data;
+            if (_lastData == null) {
+              if (snapshot.hasError) {
+                return Center(child: Text('Erreur : ${snapshot.error}'));
+              }
               return const Center(child: CircularProgressIndicator());
             }
-            if (snapshot.hasError) {
-              return Center(child: Text('Erreur : ${snapshot.error}'));
-            }
-            return _buildBody(context, dbProvider, repo, snapshot.data!, apiSession: apiSession);
+            return _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession);
           },
         ),
       );
