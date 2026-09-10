@@ -648,4 +648,81 @@ void main() {
       expect(await client.forecastNegativeDate(1), isNull);
     });
   });
+
+  group('ForecastChart', () {
+    test('dailyNetTotals parses ISO date keys back to DateTime', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          expect(request.url.path, '/rpc/dailyNetTotals');
+          return http.Response(
+              jsonEncode({DateTime(2026, 3, 15).toIso8601String(): -42.5}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals =
+          await client.dailyNetTotals(anchor: DateTime(2026, 3, 15), days: 1, accountId: 1);
+      expect(totals[DateTime(2026, 3, 15)], -42.5);
+    });
+
+    test('futureDailyNet parses ISO date keys back to DateTime', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({DateTime(2026, 4, 1).toIso8601String(): 10.0}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals = await client.futureDailyNet(
+          after: DateTime(2026, 3, 15), end: DateTime(2026, 4, 15), accountId: 1);
+      expect(totals[DateTime(2026, 4, 1)], 10.0);
+    });
+
+    test('recurringDailyNet parses ISO date keys back to DateTime', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({DateTime(2026, 5, 1).toIso8601String(): -15.0}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals =
+          await client.recurringDailyNet(anchor: DateTime(2026, 5, 1), days: 60, accountId: 1);
+      expect(totals[DateTime(2026, 5, 1)], -15.0);
+    });
+
+    test('recurringOccurrencesInRange parses the returned occurrences', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode([
+                {
+                  'date': DateTime(2026, 4, 1).toIso8601String(),
+                  'label': 'Impôts',
+                  'signedAmount': -15.0,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final occurrences = await client.recurringOccurrencesInRange(
+          start: DateTime(2026, 4, 1), end: DateTime(2026, 4, 30), accountId: 1);
+      expect(occurrences.single.label, 'Impôts');
+      expect(occurrences.single.signedAmount, -15.0);
+    });
+  });
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
+import 'package:money_manager_core/data/mmex_repository.dart' show RecurringOccurrence;
 import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/budget.dart';
@@ -201,6 +202,34 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<DateTime?> forecastNegativeDate(int accountId, {int horizonDays = 365}) =>
       _requireClient().forecastNegativeDate(accountId, horizonDays: horizonDays);
+
+  Future<Map<DateTime, double>> dailyNetTotals({
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+  }) =>
+      _requireClient().dailyNetTotals(anchor: anchor, days: days, accountId: accountId);
+
+  Future<Map<DateTime, double>> futureDailyNet({
+    required DateTime after,
+    required DateTime end,
+    int? accountId,
+  }) =>
+      _requireClient().futureDailyNet(after: after, end: end, accountId: accountId);
+
+  Future<Map<DateTime, double>> recurringDailyNet({
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+  }) =>
+      _requireClient().recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
+
+  Future<List<RecurringOccurrence>> recurringOccurrencesInRange({
+    required DateTime start,
+    required DateTime end,
+    int? accountId,
+  }) =>
+      _requireClient().recurringOccurrencesInRange(start: start, end: end, accountId: accountId);
 
   ApiClient _requireClient() {
     final client = _client;

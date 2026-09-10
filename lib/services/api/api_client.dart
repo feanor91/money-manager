@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:money_manager_core/data/mmex_repository.dart' show RecurringOccurrence;
 import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/budget.dart';
@@ -269,6 +270,67 @@ class ApiClient {
     final json = await _rpc('forecastNegativeDate',
         body: {'accountId': accountId, 'horizonDays': horizonDays});
     return json == null ? null : DateTime.parse(json as String);
+  }
+
+  // ForecastChart (dans Tableau de bord) - dernier morceau de l'étape 4.
+  Future<Map<DateTime, double>> dailyNetTotals({
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+  }) async {
+    final json = await _rpc('dailyNetTotals', body: {
+      'anchor': anchor.toIso8601String(),
+      'days': days,
+      if (accountId != null) 'accountId': accountId,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(DateTime.parse(k), (v as num).toDouble()));
+  }
+
+  Future<Map<DateTime, double>> futureDailyNet({
+    required DateTime after,
+    required DateTime end,
+    int? accountId,
+  }) async {
+    final json = await _rpc('futureDailyNet', body: {
+      'after': after.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(DateTime.parse(k), (v as num).toDouble()));
+  }
+
+  Future<Map<DateTime, double>> recurringDailyNet({
+    required DateTime anchor,
+    required int days,
+    int? accountId,
+  }) async {
+    final json = await _rpc('recurringDailyNet', body: {
+      'anchor': anchor.toIso8601String(),
+      'days': days,
+      if (accountId != null) 'accountId': accountId,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(DateTime.parse(k), (v as num).toDouble()));
+  }
+
+  Future<List<RecurringOccurrence>> recurringOccurrencesInRange({
+    required DateTime start,
+    required DateTime end,
+    int? accountId,
+  }) async {
+    final json = await _rpc('recurringOccurrencesInRange', body: {
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+    });
+    final list = json as List;
+    return [
+      for (final row in list)
+        RecurringOccurrence(
+          date: DateTime.parse((row as Map<String, dynamic>)['date'] as String),
+          label: row['label'] as String,
+          signedAmount: (row['signedAmount'] as num).toDouble(),
+        ),
+    ];
   }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {

@@ -122,6 +122,21 @@ void main() {
       expect(() => provider.forecastAccountBalance(1, DateTime(2026, 12, 31)), throwsStateError);
       expect(() => provider.forecastNegativeDate(1), throwsStateError);
     });
+
+    test('the ForecastChart accessors throw a StateError when not connected', () {
+      final provider = ApiSessionProvider();
+      expect(() => provider.dailyNetTotals(anchor: DateTime(2026, 3, 15), days: 1),
+          throwsStateError);
+      expect(
+          () => provider.futureDailyNet(after: DateTime(2026, 3, 15), end: DateTime(2026, 4, 15)),
+          throwsStateError);
+      expect(() => provider.recurringDailyNet(anchor: DateTime(2026, 5, 1), days: 60),
+          throwsStateError);
+      expect(
+          () => provider.recurringOccurrencesInRange(
+              start: DateTime(2026, 4, 1), end: DateTime(2026, 4, 30)),
+          throwsStateError);
+    });
   });
 
   group('per-screen toggles are independent', () {

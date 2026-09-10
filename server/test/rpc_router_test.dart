@@ -463,6 +463,63 @@ void main() {
     });
   });
 
+  group('POST /rpc/dailyNetTotals', () {
+    test('reflects the withdrawal from setUp on its own day', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/dailyNetTotals', token: token, body: {
+        'anchor': '2026-03-15T00:00:00.000',
+        'days': 1,
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['2026-03-15T00:00:00.000'], -42.5);
+    });
+  });
+
+  group('POST /rpc/futureDailyNet', () {
+    test('is empty when nothing is recorded after the given date', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/futureDailyNet', token: token, body: {
+        'after': '2026-03-15T00:00:00.000',
+        'end': '2026-04-15T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json.values.every((v) => v == 0), isTrue);
+    });
+  });
+
+  group('POST /rpc/recurringDailyNet', () {
+    test('reflects the monthly bill from setUp somewhere in the projection', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/recurringDailyNet', token: token, body: {
+        'anchor': '2026-05-01T00:00:00.000',
+        'days': 60,
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json.values.any((v) => v != 0), isTrue);
+    });
+  });
+
+  group('POST /rpc/recurringOccurrencesInRange', () {
+    test('returns the occurrence from the bill created in setUp', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/recurringOccurrencesInRange', token: token, body: {
+        'start': '2026-04-01T00:00:00.000',
+        'end': '2026-04-30T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final occurrences = jsonDecode(await response.readAsString()) as List;
+      expect(occurrences, hasLength(1));
+      expect(occurrences.single['signedAmount'], -15);
+    });
+  });
+
   group('POST /auth/logout', () {
     test('revokes the token used to call it', () async {
       final token = tokenStore.issue();

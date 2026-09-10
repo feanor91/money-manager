@@ -213,9 +213,7 @@ Handler buildRouter({
     final expected = repo.expectedIncomeForBudget(body['accountId'] as int);
     return Response.ok(jsonEncode({'expected': expected}));
   });
-  // Tableau de bord (étape 4) - le graphique de prévision (ForecastChart)
-  // reste local pour l'instant, voir dashboard_screen.dart et
-  // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md.
+  // Tableau de bord (étape 4).
   rpcRouter.post('/getTransactions', (Request request) async {
     final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
     final fromStr = body['from'] as String?;
@@ -243,6 +241,47 @@ Handler buildRouter({
       horizonDays: body['horizonDays'] as int? ?? 365,
     );
     return Response.ok(jsonEncode(date?.toIso8601String()));
+  });
+  // ForecastChart (dans Tableau de bord) - dernier morceau de l'étape 4,
+  // voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md.
+  rpcRouter.post('/dailyNetTotals', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.dailyNetTotals(
+      anchor: DateTime.parse(body['anchor'] as String),
+      days: body['days'] as int,
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry(k.toIso8601String(), v))));
+  });
+  rpcRouter.post('/futureDailyNet', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.futureDailyNet(
+      after: DateTime.parse(body['after'] as String),
+      end: DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry(k.toIso8601String(), v))));
+  });
+  rpcRouter.post('/recurringDailyNet', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.recurringDailyNet(
+      anchor: DateTime.parse(body['anchor'] as String),
+      days: body['days'] as int,
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry(k.toIso8601String(), v))));
+  });
+  rpcRouter.post('/recurringOccurrencesInRange', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final occurrences = repo.recurringOccurrencesInRange(
+      start: DateTime.parse(body['start'] as String),
+      end: DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode([
+      for (final o in occurrences)
+        {'date': o.date.toIso8601String(), 'label': o.label, 'signedAmount': o.signedAmount},
+    ]));
   });
 
   router.mount(

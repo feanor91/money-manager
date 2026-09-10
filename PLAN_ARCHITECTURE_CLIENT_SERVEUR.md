@@ -223,16 +223,6 @@ le repo pour ne pas la perdre.
     `CategorySpendBarChart._showBarDetail` (la feuille de détail au clic
     sur une barre) est aussi devenue asynchrone pour respecter la
     bascule.
-  - **`ForecastChart` (947 lignes) reste entièrement local** - pas encore
-    lu ni migré, décision de périmètre volontaire pour cette passe plutôt
-    que de se précipiter sur son calcul de prévision au jour le jour
-    (`dailyNetTotals`/`recurringDailyNet`/`futureDailyNet`), le genre de
-    logique déjà signalée fragile ailleurs dans ce dépôt (voir la note
-    CLAUDE.md sur "Reste à vivre"). C'est la vue par défaut du graphique
-    du tableau de bord (l'utilisateur doit taper l'icône
-    graphique-en-barres pour voir `CategorySpendBarChart` à la place),
-    donc la bascule "Tableau de bord via API" n'affecte pas ce qui
-    s'affiche par défaut tant que ce widget n'est pas repris.
   3 nouvelles routes en lecture (`getTransactions` - générale, réutilisée
   par `BudgetPreviewCard`/`CategorySpendBarChart`/l'écran lui-même -,
   `forecastAccountBalance`, `forecastNegativeDate`).
@@ -248,15 +238,44 @@ le repo pour ne pas la perdre.
   automatisé (même famille de blocage que le sélecteur de fichier
   initial). Couvert uniquement par les tests automatisés pour l'instant.
 
+- ✅ **`ForecastChart` (947 lignes) migré - étape 4 terminée, 15/15
+  écrans traités** (au sens large : 8 réellement basculés vers l'API,
+  les autres soit déjà entièrement locaux par nature, soit écartés avec
+  une raison documentée - voir Simulation ci-dessus). Lu en entier avant
+  d'y toucher (même discipline que pour Budget) : confirmé entièrement en
+  lecture (la simulation d'achat "what if" reste un état purement local à
+  l'appli, jamais écrite en base, voir `PurchaseSimulationProvider`) et
+  utilisé uniquement depuis `dashboard_screen.dart`. Rejoint la même
+  bascule partagée "Tableau de bord via API" que les deux autres widgets
+  du tableau de bord plutôt que d'en créer une séparée.
+  4 nouvelles routes en lecture (`dailyNetTotals`, `futureDailyNet`,
+  `recurringDailyNet`, `recurringOccurrencesInRange` - les deux premiers
+  encodés en JSON avec des clés de date ISO 8601, converti à l'aller
+  comme au retour côté client). `_openSimulationDialog` (le sélecteur de
+  catégorie budgétaire pour la simulation) devient asynchrone pour
+  respecter la bascule, la simulation elle-même restant purement locale.
+
+  660 tests Flutter (5 nouveaux) + 56 tests serveur (4 nouveaux), tous
+  verts. `flutter analyze` propre du premier coup malgré l'ampleur de la
+  restructuration (c'était le plus gros widget encore non traité de tout
+  le chantier). Toujours **non vérifiable en direct dans cet
+  environnement** - même blocage de reconnexion au fichier après
+  rechargement de page que pour Budget lors de cette même session.
+
 Les autres fichiers de `lib/screens/` (sélecteur de fichier, écran de
 verrouillage PIN, diagnostics, aide, `home_shell` - traitement des
 opérations récurrentes en retard au démarrage) ne sont pas des candidats
 naturels : soit ils doivent rester strictement locaux par nature (sélection
 de fichier, sécurité), soit leur logique est presque entièrement une
-écriture système plutôt qu'un affichage de données à basculer. Le
-chantier étape 4 se réduit donc essentiellement à **ForecastChart**
-(dans Tableau de bord, ci-dessus) comme dernier morceau réellement
-candidat.
+écriture système plutôt qu'un affichage de données à basculer.
+
+**Étape 4 est donc considérée close pour ce qui est des lectures
+graduelles écran par écran.** Ce qui reste hors de portée de ce principe
+(documenté, pas oublié) : le simulateur du Budget et l'écran Simulation
+dans leur ensemble (édition interactive lecture+écriture imbriquées),
+et - plus largement, voir le reste de ce document - toute bascule
+effective des écritures elles-mêmes, qui reste une coupure coordonnée
+distincte, jamais graduelle comme les lectures.
 
 ## Où on en est aujourd'hui
 

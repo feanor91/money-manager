@@ -4,9 +4,12 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
@@ -107,6 +110,37 @@ class ForecastChart extends StatefulWidget {
   State<ForecastChart> createState() => _ForecastChartState();
 }
 
+/// Données brutes de la fenêtre affichée (étape 4, lecture seule) - voir
+/// budget_screen.dart pour le même principe appliqué à l'écran complet.
+/// [dailyNet]/[recurringNet]/[futureNet] sont vides quand la fenêtre
+/// n'a pas la portion (passée/future) correspondante - voir
+/// [_ForecastChartState._buildPoints].
+class _ForecastRawData {
+  final List<Category> categories;
+  final Map<int, Payee> payees;
+  final Map<int, Account> accounts;
+  final double realBalanceBeforeWindow;
+  final double todayBalance;
+  final Map<DateTime, double> dailyNet;
+  final Map<DateTime, double> recurringNet;
+  final Map<DateTime, double> futureNet;
+  final List<RecurringOccurrence> occurrences;
+  final List<TransactionWithBalance> realRows;
+
+  const _ForecastRawData({
+    required this.categories,
+    required this.payees,
+    required this.accounts,
+    required this.realBalanceBeforeWindow,
+    required this.todayBalance,
+    required this.dailyNet,
+    required this.recurringNet,
+    required this.futureNet,
+    required this.occurrences,
+    required this.realRows,
+  });
+}
+
 class _ForecastChartState extends State<ForecastChart> {
   ForecastDuration _duration = ForecastDuration.oneMonth;
 
@@ -122,21 +156,160 @@ class _ForecastChartState extends State<ForecastChart> {
   /// onChanged below, which resets this back to 0 whenever that happens.
   int _offsetSteps = 0;
 
+  Future<_ForecastRawData>? _apiFuture;
+  ({int? accountId, DateTime windowStart, DateTime windowEnd})? _apiFutureKey;
+
+  double _localRealBalanceAsOf(MmexRepository repo, DateTime day) {
+    final id = widget.accountId;
+    if (id != null) return repo.accountBalance(id, asOf: day);
+    return repo.getAccounts().fold(0.0, (sum, a) => sum + repo.accountBalance(a.id, asOf: day));
+  }
+
+  _ForecastRawData _localData(
+      MmexRepository repo, DateTime today, DateTime windowStart, DateTime windowEnd) {
+    final realBalanceBeforeWindow = _localRealBalanceAsOf(repo, _addDays(windowStart, -1));
+    final todayBalance = _localRealBalanceAsOf(repo, today);
+
+    var dailyNet = const <DateTime, double>{};
+    if (windowStart.isBefore(today)) {
+      final realEnd = windowEnd.isBefore(today) ? windowEnd : _addDays(today, -1);
+      final realDays = _daysBetween(windowStart, realEnd) + 1;
+      dailyNet = repo.dailyNetTotals(anchor: realEnd, days: realDays, accountId: widget.accountId);
+    }
+
+    var recurringNet = const <DateTime, double>{};
+    var futureNet = const <DateTime, double>{};
+    if (windowEnd.isAfter(today)) {
+      final projStart = _addDays(today, 1);
+      final projDays = _daysBetween(projStart, windowEnd) + 1;
+      recurringNet =
+          repo.recurringDailyNet(anchor: windowEnd, days: projDays, accountId: widget.accountId);
+      futureNet = repo.futureDailyNet(after: today, end: windowEnd, accountId: widget.accountId);
+    }
+
+    final id = widget.accountId;
+    return _ForecastRawData(
+      categories: repo.getCategories(onlyActive: false),
+      payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
+      accounts: {for (final a in repo.getAccounts()) a.id: a},
+      realBalanceBeforeWindow: realBalanceBeforeWindow,
+      todayBalance: todayBalance,
+      dailyNet: dailyNet,
+      recurringNet: recurringNet,
+      futureNet: futureNet,
+      occurrences: repo.recurringOccurrencesInRange(
+          start: windowStart, end: windowEnd, accountId: widget.accountId),
+      realRows: id == null
+          ? const []
+          : repo.getTransactionsWithRunningBalance(id, from: windowStart, to: windowEnd),
+    );
+  }
+
+  /// Lecture seule - la simulation d'achat reste purement locale à l'appli
+  /// (jamais écrite en base, voir [PurchaseSimulationProvider]) même en
+  /// mode API.
+  Future<_ForecastRawData> _loadViaApi(
+      ApiSessionProvider session, DateTime today, DateTime windowStart, DateTime windowEnd) async {
+    final id = widget.accountId;
+    Future<double> realBalanceAsOf(DateTime day) async {
+      if (id != null) return session.accountBalance(id, asOf: day);
+      final accounts = await session.getAccounts();
+      var sum = 0.0;
+      for (final a in accounts) {
+        sum += await session.accountBalance(a.id, asOf: day);
+      }
+      return sum;
+    }
+
+    final realBalanceBeforeWindow = await realBalanceAsOf(_addDays(windowStart, -1));
+    final todayBalance = await realBalanceAsOf(today);
+
+    var dailyNet = const <DateTime, double>{};
+    if (windowStart.isBefore(today)) {
+      final realEnd = windowEnd.isBefore(today) ? windowEnd : _addDays(today, -1);
+      final realDays = _daysBetween(windowStart, realEnd) + 1;
+      dailyNet =
+          await session.dailyNetTotals(anchor: realEnd, days: realDays, accountId: widget.accountId);
+    }
+
+    var recurringNet = const <DateTime, double>{};
+    var futureNet = const <DateTime, double>{};
+    if (windowEnd.isAfter(today)) {
+      final projStart = _addDays(today, 1);
+      final projDays = _daysBetween(projStart, windowEnd) + 1;
+      recurringNet = await session.recurringDailyNet(
+          anchor: windowEnd, days: projDays, accountId: widget.accountId);
+      futureNet =
+          await session.futureDailyNet(after: today, end: windowEnd, accountId: widget.accountId);
+    }
+
+    final categories = await session.getCategories(onlyActive: false);
+    final payees = await session.getPayees(onlyActive: false);
+    final accounts = await session.getAccounts();
+    final occurrences = await session.recurringOccurrencesInRange(
+        start: windowStart, end: windowEnd, accountId: widget.accountId);
+    final realRows = id == null
+        ? const <TransactionWithBalance>[]
+        : await session.getTransactionsWithRunningBalance(id, from: windowStart, to: windowEnd);
+
+    return _ForecastRawData(
+      categories: categories,
+      payees: {for (final p in payees) p.id: p},
+      accounts: {for (final a in accounts) a.id: a},
+      realBalanceBeforeWindow: realBalanceBeforeWindow,
+      todayBalance: todayBalance,
+      dailyNet: dailyNet,
+      recurringNet: recurringNet,
+      futureNet: futureNet,
+      occurrences: occurrences,
+      realRows: realRows,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final sim = context.watch<PurchaseSimulationProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final windowStart = _addMonths(today, _offsetSteps * _duration.months);
-    final points = _buildPoints(today, windowStart);
+    final windowEnd = _addMonths(windowStart, _duration.months);
+
+    if (apiSession.useApiForDashboard && apiSession.isConnected) {
+      final key = (accountId: widget.accountId, windowStart: windowStart, windowEnd: windowEnd);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, today, windowStart, windowEnd);
+      }
+      return FutureBuilder<_ForecastRawData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const BentoCard(
+                title: 'Prévision de solde', child: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return BentoCard(
+                title: 'Prévision de solde', child: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildCard(context, today, windowStart, snapshot.data!);
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildCard(
+        context, today, windowStart, _localData(widget.repository, today, windowStart, windowEnd));
+  }
+
+  Widget _buildCard(BuildContext context, DateTime today, DateTime windowStart, _ForecastRawData data) {
+    final sim = context.watch<PurchaseSimulationProvider>();
+    final points = _buildPoints(data, today, windowStart);
     final simulatedPoints = _buildSimulatedPoints(points, today, sim.amount, sim.installments);
     final currency = widget.currency;
 
     String? simCategoryLabel;
     if (sim.categoryId != null) {
-      final categoriesById = {
-        for (final c in widget.repository.getCategories(onlyActive: false)) c.id: c
-      };
+      final categoriesById = {for (final c in data.categories) c.id: c};
       final path = categoryFullPath(sim.categoryId, categoriesById);
       if (path.isNotEmpty) simCategoryLabel = path;
     }
@@ -245,8 +418,8 @@ class _ForecastChartState extends State<ForecastChart> {
           const SizedBox(height: 8),
           Expanded(
             child: _showAsTable
-                ? _buildOperationsList(points, today, currency, sim.amount, sim.installments)
-                : _buildChart(points, simulatedPoints, currency),
+                ? _buildOperationsList(data, points, today, currency, sim.amount, sim.installments)
+                : _buildChart(data, points, simulatedPoints, currency),
           ),
         ],
       ),
@@ -254,16 +427,17 @@ class _ForecastChartState extends State<ForecastChart> {
   }
 
   /// Every recurring-transaction occurrence within the currently displayed
-  /// window, grouped by day (several bills can fall on the same date).
-  Map<DateTime, List<RecurringOccurrence>> _groupedOccurrences(List<_Point> points) {
+  /// window, grouped by day (several bills can fall on the same date) -
+  /// [data.occurrences] already covers the whole fetched window (a superset
+  /// of [points]), filtered down here to exactly [points]' own range.
+  Map<DateTime, List<RecurringOccurrence>> _groupedOccurrences(
+      _ForecastRawData data, List<_Point> points) {
     if (points.isEmpty) return {};
-    final occurrences = widget.repository.recurringOccurrencesInRange(
-      start: points.first.day,
-      end: points.last.day,
-      accountId: widget.accountId,
-    );
+    final start = points.first.day;
+    final end = points.last.day;
     final grouped = <DateTime, List<RecurringOccurrence>>{};
-    for (final occurrence in occurrences) {
+    for (final occurrence in data.occurrences) {
+      if (occurrence.date.isBefore(start) || occurrence.date.isAfter(end)) continue;
       grouped.putIfAbsent(occurrence.date, () => []).add(occurrence);
     }
     return grouped;
@@ -276,7 +450,7 @@ class _ForecastChartState extends State<ForecastChart> {
   /// [build]) showed nothing there even though the chart itself already
   /// plots real balance for those same days (see [_buildPoints]).
   /// Labelled exactly like [TransactionTile].
-  List<_ForecastRow> _realOperationRows(DateTime start, DateTime end) {
+  List<_ForecastRow> _realOperationRows(_ForecastRawData data, DateTime start, DateTime end) {
     final id = widget.accountId;
     // The "all accounts" case never actually happens at this widget's one
     // real call site (dashboard_screen.dart always passes a concrete
@@ -284,13 +458,13 @@ class _ForecastChartState extends State<ForecastChart> {
     // multi-account transfer-dedup logic for a path nothing exercises.
     if (id == null) return const [];
 
-    final payeesById = {for (final p in widget.repository.getPayees(onlyActive: false)) p.id: p};
-    final accountsById = {for (final a in widget.repository.getAccounts()) a.id: a};
+    final payeesById = data.payees;
+    final accountsById = data.accounts;
 
     return [
-      for (final t
-          in widget.repository.getTransactionsWithRunningBalance(id, from: start, to: end))
-        _ForecastRow(
+      for (final t in data.realRows)
+        if (!t.transaction.date.isBefore(start) && !t.transaction.date.isAfter(end))
+          _ForecastRow(
           date: DateTime(
               t.transaction.date.year, t.transaction.date.month, t.transaction.date.day),
           label: t.transaction.transCode == TransCode.transfer
@@ -311,6 +485,7 @@ class _ForecastChartState extends State<ForecastChart> {
   /// (shared across every operation on the same day, since the underlying
   /// data is bucketed by day, not by individual transaction).
   Widget _buildOperationsList(
+    _ForecastRawData data,
     List<_Point> points,
     DateTime today,
     CurrencyFormat? currency,
@@ -319,12 +494,13 @@ class _ForecastChartState extends State<ForecastChart> {
   ) {
     if (points.isEmpty) return const SizedBox.shrink();
 
-    final grouped = _groupedOccurrences(points);
+    final grouped = _groupedOccurrences(data, points);
     final dayIndex = {for (var i = 0; i < points.length; i++) points[i].day: i};
 
     final rows = <_ForecastRow>[
       if (!points.first.day.isAfter(today))
         ..._realOperationRows(
+          data,
           points.first.day,
           points.last.day.isBefore(today) ? points.last.day : today,
         ),
@@ -417,7 +593,11 @@ class _ForecastChartState extends State<ForecastChart> {
     var multiple = sim.installments > 1;
     var categoryId = sim.categoryId;
 
-    final categories = widget.repository.getCategories();
+    final apiSession = context.read<ApiSessionProvider>();
+    final categories = apiSession.useApiForDashboard && apiSession.isConnected
+        ? await apiSession.getCategories()
+        : widget.repository.getCategories();
+    if (!context.mounted) return;
     final categoriesById = {for (final c in categories) c.id: c};
     final sortedCategories = [...categories]..sort((a, b) =>
         categoryFullPath(a.id, categoriesById)
@@ -506,8 +686,9 @@ class _ForecastChartState extends State<ForecastChart> {
   /// projection for every day after it.
   ///
   /// Today itself always starts from the real balance *as of today*
-  /// ([_realBalanceAsOf], excluding anything dated after today) rather than
-  /// the day-bucketed queries used for its neighbours - but only actually
+  /// ([_ForecastRawData.todayBalance], excluding anything dated after
+  /// today) rather than the day-bucketed queries used for its neighbours -
+  /// but only actually
   /// appears as a point when it's inside [windowStart]..windowEnd; it's
   /// always still used to seed the projection math below even when
   /// scrolled out of view, so a window entirely in the future doesn't
@@ -531,13 +712,11 @@ class _ForecastChartState extends State<ForecastChart> {
   /// advances that bill's own next-occurrence date past it, so the
   /// template can never also re-project something already recorded as a
   /// real transaction.
-  List<_Point> _buildPoints(DateTime today, DateTime windowStart) {
+  List<_Point> _buildPoints(_ForecastRawData data, DateTime today, DateTime windowStart) {
     final windowEnd = _addMonths(windowStart, _duration.months);
     final points = <_Point>[];
 
     if (windowStart.isBefore(today)) {
-      final realEnd = windowEnd.isBefore(today) ? windowEnd : _addDays(today, -1);
-      final realDays = _daysBetween(windowStart, realEnd) + 1;
       // anchor=realEnd (not realEnd+1 or today): MmexRepository.dailyNetTotals
       // buckets exactly [anchor-(days-1), anchor], so anchor must be the
       // *last* day actually consumed below, not one past it - getting this
@@ -545,12 +724,10 @@ class _ForecastChartState extends State<ForecastChart> {
       // total instead of erroring (found + fixed 2026-08-06 rewriting this
       // for scrolling; the previous today-anchored version had exactly
       // this off-by-one).
-      final netTotals = widget.repository.dailyNetTotals(
-        anchor: realEnd,
-        days: realDays,
-        accountId: widget.accountId,
-      );
-      var cumulative = _realBalanceAsOf(_addDays(windowStart, -1));
+      final realEnd = windowEnd.isBefore(today) ? windowEnd : _addDays(today, -1);
+      final realDays = _daysBetween(windowStart, realEnd) + 1;
+      final netTotals = data.dailyNet;
+      var cumulative = data.realBalanceBeforeWindow;
       var cursor = windowStart;
       for (var i = 0; i < realDays; i++) {
         final net = netTotals[cursor] ?? 0.0;
@@ -560,7 +737,7 @@ class _ForecastChartState extends State<ForecastChart> {
       }
     }
 
-    final todayBalance = _realBalanceAsOf(today);
+    final todayBalance = data.todayBalance;
 
     if (!today.isBefore(windowStart) && !today.isAfter(windowEnd)) {
       points.add(_Point(today, 0, todayBalance, false));
@@ -569,20 +746,12 @@ class _ForecastChartState extends State<ForecastChart> {
     if (windowEnd.isAfter(today)) {
       final projStart = _addDays(today, 1);
       final projDays = _daysBetween(projStart, windowEnd) + 1;
-      final recurring = widget.repository.recurringDailyNet(
-        anchor: windowEnd,
-        days: projDays,
-        accountId: widget.accountId,
-      );
+      final recurring = data.recurringNet;
       // Real transactions already recorded with a future date (e.g. a bill
       // paid ahead of its due date) - merged in alongside the recurring-bill
       // projection above so they land on their own actual date instead of
       // being pulled into "today" (see the doc comment above).
-      final futureReal = widget.repository.futureDailyNet(
-        after: today,
-        end: windowEnd,
-        accountId: widget.accountId,
-      );
+      final futureReal = data.futureNet;
       var cumulative = todayBalance;
       var cursor = projStart;
       for (var i = 0; i < projDays; i++) {
@@ -599,18 +768,6 @@ class _ForecastChartState extends State<ForecastChart> {
     }
 
     return points;
-  }
-
-  /// [MmexRepository.accountBalance]'s `asOf` only takes one concrete
-  /// account - sums across every account when [ForecastChart.accountId] is
-  /// null (the "all accounts" case [recurringDailyNet]/[dailyNetTotals]
-  /// already handle internally via their own nullable `accountId`).
-  double _realBalanceAsOf(DateTime day) {
-    final id = widget.accountId;
-    if (id != null) return widget.repository.accountBalance(id, asOf: day);
-    return widget.repository
-        .getAccounts()
-        .fold(0.0, (sum, a) => sum + widget.repository.accountBalance(a.id, asOf: day));
   }
 
   /// Overlays a simulated purchase on top of [basePoints]: a one-off hits
@@ -646,7 +803,8 @@ class _ForecastChartState extends State<ForecastChart> {
     ];
   }
 
-  Widget _buildChart(List<_Point> points, List<_Point>? simulatedPoints, CurrencyFormat? currency) {
+  Widget _buildChart(
+      _ForecastRawData data, List<_Point> points, List<_Point>? simulatedPoints, CurrencyFormat? currency) {
     if (points.isEmpty) return const SizedBox.shrink();
 
     final segments = _buildSegments(points);
@@ -670,7 +828,7 @@ class _ForecastChartState extends State<ForecastChart> {
     final axisFormat = DateFormat(points.length > 120 ? 'MMM yyyy' : 'd MMM', 'fr_FR');
     final tooltipFormat = DateFormat('EEEE d MMMM yyyy', 'fr_FR');
     final labelInterval = (points.length / 6).clamp(1, 60).roundToDouble();
-    final grouped = _groupedOccurrences(points);
+    final grouped = _groupedOccurrences(data, points);
     final occurrenceLines = _buildOccurrenceLines(points, grouped);
     // Always the last series in lineBarsData - see its definition below.
     final markerBarIndex = segments.length + (simulatedPoints != null ? 1 : 0);

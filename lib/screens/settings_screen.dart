@@ -395,7 +395,7 @@ class SettingsScreen extends StatelessWidget {
                   SwitchListTile(
                     title: const Text('Tableau de bord via API (lecture, chantier)'),
                     subtitle: const Text(
-                        "Le tableau de bord, l'aperçu du budget et le graphique dépenses/catégorie lisent leurs données depuis le serveur ; le graphique de prévision de solde reste toujours local"),
+                        "Le tableau de bord, l'aperçu du budget et les deux graphiques (dépenses/catégorie et prévision de solde) lisent leurs données depuis le serveur"),
                     value: apiSession.useApiForDashboard,
                     onChanged: apiSession.isConnected
                         ? (v) => apiSession.useApiForDashboard = v
