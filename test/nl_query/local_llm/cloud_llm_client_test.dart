@@ -36,6 +36,56 @@ void main() {
     client.close();
   });
 
+  group('maxTokens (2026-09-10 user request: one plain token count, not a '
+      'multiplier on invisible base values - "c\'est y fois de quoi?" - to '
+      'raise when a reasoning model needs more room before responding)', () {
+    test('defaults to 2048, sent identically on every call shape', () async {
+      Map<String, dynamic>? capturedBody;
+      final baseUrl = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'choices': [
+            {
+              'message': {'content': '{}'}
+            }
+          ]
+        }));
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      await client.ask('question');
+      expect(capturedBody!['max_tokens'], 2048);
+      client.close();
+    });
+
+    test('a custom value is sent identically on every call shape', () async {
+      final captured = <int>[];
+      final baseUrl = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        captured.add((jsonDecode(body) as Map<String, dynamic>)['max_tokens'] as int);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'choices': [
+            {
+              'message': {'content': '{}'}
+            }
+          ]
+        }));
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm')
+        ..maxTokens = 8000;
+      await client.ask('q');
+      await client.askFreeform('q');
+      await client.askWithSystemPrompt('sys', 'q');
+      await client.askFreeformWithSystemPrompt('sys', 'q');
+      expect(captured, [8000, 8000, 8000, 8000]);
+      client.close();
+    });
+  });
+
   group('ask', () {
     test('sends a JSON-mode chat request with the auth header and returns '
         'the message content', () async {
@@ -466,6 +516,143 @@ void main() {
       });
       final client = CloudLlmClient(baseUrl: baseUrl, apiKey: 'wrong', model: '');
       await expectLater(client.fetchAvailableModels(), throwsStateError);
+      client.close();
+    });
+  });
+
+  group('streaming (onChunk) - 2026-09-10 user request: "afficher en temps '
+      'réel... ce que fait le modèle"', () {
+    Future<String> startFakeSseServer(List<String> sseLines) {
+      return startFakeServer((request) async {
+        // Drain the request body (never read otherwise) before responding -
+        // some HTTP client/server pairs stall the connection if a POST
+        // body isn't consumed.
+        await utf8.decoder.bind(request).join();
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream', charset: 'utf-8');
+        // .add(utf8.encode(...)) rather than .write() - HttpResponse.write
+        // defaults to Latin1 for a text/* content type unless told
+        // otherwise, which throws outright on a non-Latin1 character like
+        // "€" in a test fixture below.
+        for (final line in sseLines) {
+          request.response.add(utf8.encode('data: $line\n\n'));
+        }
+        await request.response.close();
+      });
+    }
+
+    test('a plain content-only stream delivers each delta as a non-'
+        'reasoning chunk and returns the full joined text', () async {
+      final baseUrl = await startFakeSseServer([
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': 'Bon'}
+            }
+          ]
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': 'jour'}
+            }
+          ]
+        }),
+        jsonEncode({
+          'choices': [],
+          'usage': {'completion_tokens': 5}
+        }),
+        '[DONE]',
+      ]);
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      final chunks = <(String, bool)>[];
+      final result =
+          await client.ask('q', onChunk: (text, isReasoning) => chunks.add((text, isReasoning)));
+      expect(chunks, [('Bon', false), ('jour', false)]);
+      expect(result.text, 'Bonjour');
+      client.close();
+    });
+
+    test('a structured "reasoning" delta field is forwarded as a reasoning '
+        'chunk and excluded from the final returned text', () async {
+      final baseUrl = await startFakeSseServer([
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'reasoning': 'je réfléchis...'}
+            }
+          ]
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': '42€'}
+            }
+          ]
+        }),
+        '[DONE]',
+      ]);
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      final chunks = <(String, bool)>[];
+      final result =
+          await client.ask('q', onChunk: (text, isReasoning) => chunks.add((text, isReasoning)));
+      expect(chunks, [('je réfléchis...', true), ('42€', false)]);
+      expect(result.text, '42€');
+    });
+
+    test('a provider that inlines <think> tags in content instead of using '
+        'the structured field is split the same way, via ThinkTagSplitter',
+        () async {
+      final baseUrl = await startFakeSseServer([
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': '<think>hmm'}
+            }
+          ]
+        }),
+        jsonEncode({
+          'choices': [
+            {
+              'delta': {'content': '</think>réponse'}
+            }
+          ]
+        }),
+        '[DONE]',
+      ]);
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      final chunks = <(String, bool)>[];
+      final result =
+          await client.ask('q', onChunk: (text, isReasoning) => chunks.add((text, isReasoning)));
+      expect(chunks, [('hmm', true), ('réponse', false)]);
+      expect(result.text, 'réponse');
+    });
+
+    test('sends stream:true and reasoning exclude:false only when '
+        'streaming, unlike the plain non-streaming request', () async {
+      Map<String, dynamic>? capturedBody;
+      final baseUrl = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream');
+        request.response.write('data: [DONE]\n\n');
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      await client.ask('q', onChunk: (_, __) {});
+      expect(capturedBody!['stream'], true);
+      expect(capturedBody!['reasoning'], {'exclude': false});
+      client.close();
+    });
+
+    test('throws on a non-200 response, same as the non-streaming path', () async {
+      final baseUrl = await startFakeServer((request) async {
+        request.response.statusCode = 500;
+        await request.response.close();
+      });
+      final client = CloudLlmClient(baseUrl: baseUrl, apiKey: '', model: 'm');
+      await expectLater(client.ask('q', onChunk: (_, __) {}), throwsStateError);
       client.close();
     });
   });

@@ -6,7 +6,12 @@ import '../query_intent.dart';
 import 'llm_engine.dart';
 import 'model_catalog.dart';
 import 'sql_query_engine.dart'
-    show ChatTurn, SqlAccessOutcome, SqlAccessUnavailable, defaultSqlSystemPrompt;
+    show
+        ChatTurn,
+        SqlAccessOutcome,
+        SqlAccessProgressCallback,
+        SqlAccessUnavailable,
+        defaultSqlSystemPrompt;
 
 Future<bool> isLocalLlmEnabled() async => false;
 Future<void> setLocalLlmEnabled(bool value) async {}
@@ -47,6 +52,9 @@ Future<void> setCloudLlmModel(String value) async {}
 Future<String> cloudLlmApiKey() async => '';
 Future<void> setCloudLlmApiKey(String value) async {}
 
+Future<int> llmMaxTokens() async => 2048;
+Future<void> setLlmMaxTokens(int value) async {}
+
 Future<void> shutdownLocalLlmEngine() async {}
 
 void registerLocalLlmSignalShutdownHook() {}
@@ -58,12 +66,14 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
+  LlmChunkCallback? onChunk,
 }) async =>
         (intent: null, periodWasExplicit: false);
 
 Future<LlmFreeformOutcome> askLocalLlmFreeform(
   String question, {
   List<ChatTurn> history = const [],
+  LlmChunkCallback? onChunk,
 }) async =>
     const LlmFreeformUnavailable();
 
@@ -78,5 +88,6 @@ Future<SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String? dbPath,
   MmexRepository? repo,
   List<ChatTurn> history = const [],
+  SqlAccessProgressCallback? onProgress,
 }) async =>
     const SqlAccessUnavailable();

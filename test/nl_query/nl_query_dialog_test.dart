@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
@@ -11,9 +12,53 @@ import 'package:money_manager/data/mmex_database.dart';
 import 'package:money_manager/data/mmex_repository.dart';
 import 'package:money_manager/models/transaction.dart';
 import 'package:money_manager/state/app_preferences.dart';
+import 'package:money_manager/state/pin_lock_provider.dart';
 import 'package:money_manager/widgets/nl_query_dialog.dart';
 
 import '../test_helpers.dart';
+
+/// Minimal in-memory AppPreferences stand-in, copied from
+/// pin_lock_provider_test.dart's own _FakeCompanionPrefs - needed here too
+/// so the lock/unlock regression test below can drive a real PinLockProvider
+/// through PinGateStatus.locked (attachDatabase()/setPin() both require a
+/// non-null companionPrefs to have anything to lock).
+class _FakeCompanionPrefs implements AppPreferences {
+  final Map<String, Object?> _data = {};
+
+  @override
+  String? getString(String key) => _data[key] as String?;
+  @override
+  Future<bool> setString(String key, String value) async {
+    _data[key] = value;
+    return true;
+  }
+
+  @override
+  int? getInt(String key) => _data[key] as int?;
+  @override
+  Future<bool> setInt(String key, int value) async {
+    _data[key] = value;
+    return true;
+  }
+
+  @override
+  List<String>? getStringList(String key) {
+    final v = _data[key];
+    return v is List ? v.cast<String>() : null;
+  }
+
+  @override
+  Future<bool> setStringList(String key, List<String> value) async {
+    _data[key] = value;
+    return true;
+  }
+
+  @override
+  Future<bool> remove(String key) async {
+    _data.remove(key);
+    return true;
+  }
+}
 
 /// Widget-level tests for [NlQueryDialog] itself - unlike the pure-logic
 /// tests in period_parser_test.dart/rule_based_query_parser_test.dart/
@@ -77,11 +122,22 @@ void main() {
 
   tearDown(() => db.dispose());
 
-  Future<void> pumpDialog(WidgetTester tester) async {
+  Future<void> pumpDialog(WidgetTester tester, {PinLockProvider? pinLock}) async {
     await tester.pumpWidget(
-      MaterialApp(
-        locale: const Locale('fr'),
-        home: Scaffold(body: NlQueryDialog(repo: repo, forecastDay: 24)),
+      // ChangeNotifierProvider<PinLockProvider> (2026-09-10) - NlQueryDialog
+      // now watches this directly (see its own doc comment on why a
+      // showDialog-pushed dialog needs to check the PIN lock itself rather
+      // than inheriting it structurally) - a freshly constructed
+      // PinLockProvider defaults to PinGateStatus.none (never attached to
+      // a database here), same "nothing to gate" behavior these tests
+      // already expected before that change existed. Tests that need to
+      // actually drive a lock/unlock cycle pass their own [pinLock] in.
+      ChangeNotifierProvider(
+        create: (_) => pinLock ?? PinLockProvider(),
+        child: MaterialApp(
+          locale: const Locale('fr'),
+          home: Scaffold(body: NlQueryDialog(repo: repo, forecastDay: 24)),
+        ),
       ),
     );
   }
@@ -149,6 +205,57 @@ void main() {
     expect(find.text('Exemples :'), findsOneWidget);
     expect(find.textContaining('Solde de Compte Courant'), findsNothing);
     expect(find.textContaining('Dépenses totales'), findsNothing);
+  });
+
+  testWidgets(
+      'locking the app while the dialog is open hides the conversation and shows the lock '
+      'placeholder instead, then restores it exactly as it was on unlock - regression test '
+      'for the 2026-09-10 report that this dialog stayed usable behind the PIN lock',
+      (tester) async {
+    final pinLock = PinLockProvider();
+    final prefs = _FakeCompanionPrefs();
+    pinLock.attachDatabase(databaseReady: true, companionPrefs: prefs);
+    await pinLock.setPin('1234');
+    expect(pinLock.status, PinGateStatus.unlocked);
+
+    await pumpDialog(tester, pinLock: pinLock);
+
+    await tester.tap(find.text('Quel est le solde de mon compte ?'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Solde de Compte Courant'), findsOneWidget);
+
+    // The app locks in the background (e.g. auto-lock/inactivity) while
+    // this dialog is still open - simulated directly via lockNow(), same
+    // call InactivityLockWatcher itself makes.
+    pinLock.lockNow();
+    await tester.pump();
+
+    expect(pinLock.status, PinGateStatus.locked);
+    expect(find.text('Money Manager verrouillé'), findsOneWidget);
+    // The real chat content must not still be readable behind the lock
+    // placeholder - this is the actual security property. The only
+    // TextField visible must be the embedded PIN form's own field, not the
+    // chat's question field (still findsOneWidget, not findsNothing - see
+    // the 2026-09-10 "il faut que je clique hors de cette fenêtre" report:
+    // the fix is to unlock *from inside* this dialog, not to remove input
+    // entirely).
+    expect(find.textContaining('Solde de Compte Courant'), findsNothing);
+    expect(find.byType(TextField), findsOneWidget);
+
+    // Unlocking through the embedded form itself - not by calling
+    // pinLock.verify() directly - is exactly the path the user's report
+    // says was broken (previously the only way to reach a working PIN
+    // field was to tap outside the dialog's own barrier, which dismissed
+    // and destroyed it). Restores the dialog's underlying State object, so
+    // the prior conversation is still there exactly as left - not reset to
+    // the example chips.
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.text('Déverrouiller'));
+    await tester.pumpAndSettle();
+
+    expect(pinLock.status, PinGateStatus.unlocked);
+    expect(find.text('Money Manager verrouillé'), findsNothing);
+    expect(find.textContaining('Solde de Compte Courant'), findsOneWidget);
   });
 
   testWidgets('an unrecognized question shows the "not understood" message', (tester) async {

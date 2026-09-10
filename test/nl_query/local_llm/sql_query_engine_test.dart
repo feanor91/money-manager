@@ -498,6 +498,32 @@ void main() {
       expect(formattingPrompt, contains('rapport'));
     });
 
+    test('onProgress (2026-09-10 user request: "afficher en temps réel... '
+        'ce que fait le modèle") is called with the right phase label for '
+        'the SQL-writing call, then the answer-formatting call', () async {
+      final repo = _FakeRepo(perStepResults: [
+        [{'total': 100}],
+      ]);
+      final engine = _FakeEngine(responses: [
+        '{"steps":[{"objectif":"total","sql":"SELECT 1"}]}',
+        'Réponse finale.',
+      ]);
+      final progress = <(String, String, bool)>[];
+      final outcome = await answerViaFullSqlAccess(
+        question: 'combien ?',
+        readOnlyRepo: repo,
+        systemPrompt: 'Prompt.',
+        engine: engine,
+        onProgress: (phase, text, isReasoning) =>
+            progress.add((phase, text, isReasoning)),
+      );
+      expect(outcome, isA<SqlAccessSuccess>());
+      expect(progress, [
+        (sqlPhaseWritingQuery, '{"steps":[{"objectif":"total","sql":"SELECT 1"}]}', false),
+        (sqlPhaseAnswering, 'Réponse finale.', false),
+      ]);
+    });
+
     test(
         'the CSV alongside the answer has one labeled section per step, '
         'with a header row, and stays a separate table per step rather '
@@ -775,21 +801,27 @@ class _FakeEngine extends LlamaServerClient {
   _FakeEngine({required this.responses, this.failNextCall = false}) : super(1);
 
   @override
-  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) async {
+  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question,
+      {LlmChunkCallback? onChunk}) async {
     if (failNextCall) {
       throw StateError('Le service IA a répondu 429.');
     }
     systemPrompts.add(systemPrompt);
     final sep = String.fromCharCode(0);
     prompts.add('$systemPrompt$sep$question');
-    return LlmResponse(responses[_call++]);
+    final text = responses[_call++];
+    onChunk?.call(text, false);
+    return LlmResponse(text);
   }
 
   @override
-  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
+  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question,
+      {LlmChunkCallback? onChunk}) async {
     final sep = String.fromCharCode(0);
     prompts.add('$systemPrompt$sep$question');
-    return LlmResponse(responses[_call++]);
+    final text = responses[_call++];
+    onChunk?.call(text, false);
+    return LlmResponse(text);
   }
 }
 

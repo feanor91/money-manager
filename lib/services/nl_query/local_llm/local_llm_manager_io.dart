@@ -115,6 +115,29 @@ Future<void> setCloudLlmApiKey(String value) async {
   await _disposeEngine();
 }
 
+/// See [LlmEngine.maxTokens] - one plain number, settable both from
+/// Settings (the persistent default) and from "Poser une question"'s own
+/// slider (a quick per-session nudge, 2026-09-10 user request). Applies to
+/// both backends (cloud and local) - deliberately *not* gated behind
+/// `_disposeEngine()`/a cached-client rebuild the way host/port/model are:
+/// [_ensureEngine]/[_ensureCloudEngine] re-read this and stamp it onto
+/// whatever [LlmEngine] they hand back, cached or not, so a change is
+/// picked up by the very next question without restarting anything.
+const _prefsKeyMaxTokens = 'mmex_llm_max_tokens';
+const _defaultMaxTokens = 2048;
+
+Future<int> llmMaxTokens() async {
+  if (!_supported) return _defaultMaxTokens;
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getInt(_prefsKeyMaxTokens) ?? _defaultMaxTokens;
+}
+
+Future<void> setLlmMaxTokens(int value) async {
+  if (!_supported) return;
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setInt(_prefsKeyMaxTokens, value);
+}
+
 /// Loopback-only by default (nothing outside this PC can reach it unless
 /// the user deliberately opens it up via Settings) - distinct from this
 /// project's own web dev-server port (8791) purely so the two are never
@@ -398,9 +421,13 @@ Future<CloudLlmClient?> _ensureCloudEngine() async {
   final apiKey = await cloudLlmApiKey();
   final config = (endpoint, model, apiKey);
 
-  if (_cloudClient != null && _cloudConfig == config) return _cloudClient;
+  if (_cloudClient != null && _cloudConfig == config) {
+    _cloudClient!.maxTokens = await llmMaxTokens();
+    return _cloudClient;
+  }
   _cloudClient?.close();
-  final client = CloudLlmClient(baseUrl: endpoint, apiKey: apiKey, model: model);
+  final client = CloudLlmClient(baseUrl: endpoint, apiKey: apiKey, model: model)
+    ..maxTokens = await llmMaxTokens();
   _cloudClient = client;
   _cloudConfig = config;
   return client;
@@ -455,6 +482,7 @@ Future<LlmEngine?> _ensureEngine() async {
   if (_serverClient != null &&
       _engineModelPath == modelPath &&
       _engineConfig == config) {
+    _serverClient!.maxTokens = await llmMaxTokens();
     return _serverClient;
   }
   await _disposeEngine();
@@ -478,7 +506,8 @@ Future<LlmEngine?> _ensureEngine() async {
     var processExited = false;
     unawaited(process.exitCode.then((_) => processExited = true));
 
-    final client = LlamaServerClient(port, host: host);
+    final client = LlamaServerClient(port, host: host)
+      ..maxTokens = await llmMaxTokens();
     await client.waitUntilHealthy(
         timeout: _startupTimeout, hasExited: () => processExited);
 
@@ -500,6 +529,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
+  LlmChunkCallback? onChunk,
 }) async {
   if (!_supported) return (intent: null, periodWasExplicit: false);
   if (!await isLocalLlmEnabled()) {
@@ -508,7 +538,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   final engine = await _ensureEngine();
   if (engine == null) return (intent: null, periodWasExplicit: false);
   try {
-    final raw = await engine.ask(question);
+    final raw = await engine.ask(question, onChunk: onChunk);
     return decodeIntentJson(
       raw.text,
       question: question,
@@ -539,18 +569,23 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 Future<LlmFreeformOutcome> askLocalLlmFreeform(
   String question, {
   List<sql_engine.ChatTurn> history = const [],
+  LlmChunkCallback? onChunk,
 }) async {
   if (!_supported) return const LlmFreeformUnavailable();
   if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
   final engine = await _ensureEngine();
   if (engine == null) return const LlmFreeformUnavailable();
   try {
-    final raw = await engine
-        .askFreeform('${sql_engine.formatChatHistory(history)}$question');
+    final raw = await engine.askFreeform(
+        '${sql_engine.formatChatHistory(history)}$question',
+        onChunk: onChunk);
     final trimmed = raw.text.trim();
     return trimmed.isEmpty
         ? const LlmFreeformUnavailable()
-        : LlmFreeformSuccess(trimmed, tokensPerSecond: raw.tokensPerSecond);
+        : LlmFreeformSuccess(trimmed,
+            tokensPerSecond: raw.tokensPerSecond,
+            completionTokens: raw.completionTokens,
+            reasoningTokens: raw.reasoningTokens);
   } catch (e) {
     // StateError (both backends' own "le service a répondu <code>."/
     // "connexion impossible" text) unwrapped to its bare .message - avoids
@@ -662,6 +697,7 @@ Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String? dbPath,
   MmexRepository? repo,
   List<sql_engine.ChatTurn> history = const [],
+  sql_engine.SqlAccessProgressCallback? onProgress,
 }) async {
   if (!_supported) return const sql_engine.SqlAccessUnavailable();
   if (!await isLocalLlmEnabled()) return const sql_engine.SqlAccessUnavailable();
@@ -683,6 +719,7 @@ Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
       systemPrompt: systemPrompt,
       engine: engine,
       history: history,
+      onProgress: onProgress,
     );
   }
 
@@ -706,6 +743,7 @@ Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
       systemPrompt: systemPrompt,
       engine: engine,
       history: history,
+      onProgress: onProgress,
     );
   } finally {
     readOnlyRepo.db.dispose();

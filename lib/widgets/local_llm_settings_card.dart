@@ -82,6 +82,14 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
 
   final _sqlPromptController = TextEditingController();
 
+  /// See [LlmEngine.maxTokens] - the persistent default (2026-09-10 user
+  /// request: "un champ pour mettre ce max_token par défaut 2048"), the
+  /// exact same stored value "Poser une question"'s own slider reads/
+  /// writes - shown here as the identical Slider widget (see
+  /// [_buildMaxTokensField]), saved immediately on release, no separate
+  /// "Enregistrer" button needed for a single number like this.
+  int _maxTokens = 2048;
+
   bool _testingConnection = false;
   bool? _connectionOk;
 
@@ -144,6 +152,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     final cloudEndpoint = await cloudLlmEndpoint();
     final cloudModel = await cloudLlmModel();
     final cloudApiKey = await cloudLlmApiKey();
+    final maxTokens = await llmMaxTokens();
 
     if (_isAndroid) {
       if (!mounted) return;
@@ -152,6 +161,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
         _cloudEndpointController.text = cloudEndpoint;
         _cloudModelController.text = cloudModel;
         _cloudApiKeyController.text = cloudApiKey;
+        _maxTokens = maxTokens;
         _sqlPromptController.text = sqlPrompt;
         _loading = false;
       });
@@ -169,6 +179,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
         _cloudEndpointController.text = cloudEndpoint;
         _cloudModelController.text = cloudModel;
         _cloudApiKeyController.text = cloudApiKey;
+        _maxTokens = maxTokens;
         _hostController.text = host;
         _portController.text = '$port';
         _sqlPromptController.text = sqlPrompt;
@@ -190,6 +201,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
       _cloudEndpointController.text = cloudEndpoint;
       _cloudModelController.text = cloudModel;
       _cloudApiKeyController.text = cloudApiKey;
+      _maxTokens = maxTokens;
       _selectedModelId = modelId;
       _modelDownloaded = downloaded;
       _runtimeAvailable = runtimeAvailable;
@@ -478,6 +490,59 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
     );
   }
 
+  /// See [LlmEngine.maxTokens]/[_maxTokens]'s own doc comment - shared by
+  /// all three card variants (Windows/Android/Web), placed right after the
+  /// enable switch, before the local/cloud choice, since it applies to
+  /// either backend equally. Same Slider shape as nl_query_dialog.dart's
+  /// own copy, deliberately: one number, one widget, two places to nudge
+  /// it from.
+  Widget _buildMaxTokensField(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Tokens maximum par réponse',
+              style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 4),
+          const Text(
+            'Limite le nombre de tokens que le modèle peut utiliser pour '
+            'chaque étape (comprendre la question, écrire une requête, '
+            'formuler la réponse...). Augmente cette valeur si les réponses '
+            's\'arrêtent net sans rien avoir dit - signe d\'un modèle '
+            '"thinking" qui épuise ce budget en réfléchissant avant de '
+            'répondre. Évite de dépasser 16 000 : au-delà, l\'attente '
+            'devient longue et certains fournisseurs gratuits imposent de '
+            'toute façon leur propre plafond, souvent bien plus bas.',
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _maxTokens.toDouble(),
+                  min: 512,
+                  max: 16384,
+                  divisions: 31,
+                  label: '$_maxTokens',
+                  onChanged: (value) =>
+                      setState(() => _maxTokens = value.round()),
+                  onChangeEnd: (value) => setLlmMaxTokens(value.round()),
+                ),
+              ),
+              SizedBox(
+                width: 48,
+                child: Text('$_maxTokens',
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _saveSqlSystemPrompt() async {
     await setLocalLlmSqlSystemPrompt(_sqlPromptController.text);
     if (!mounted) return;
@@ -542,6 +607,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               onSelectionChanged: (s) => _setUseCloud(s.first),
             ),
             const SizedBox(height: 8),
+            _buildMaxTokensField(context),
             if (_useCloud)
               _buildCloudFields(context)
             else ...[
@@ -909,6 +975,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               onChanged: _toggleEnabled,
             ),
             const SizedBox(height: 8),
+            _buildMaxTokensField(context),
             _buildCloudFields(context),
             const Divider(height: 32),
             Text('Prompt IA (accès complet aux données)',
@@ -993,6 +1060,7 @@ class _LocalLlmSettingsCardState extends State<LocalLlmSettingsCard> {
               onSelectionChanged: (s) => _setUseCloud(s.first),
             ),
             const SizedBox(height: 8),
+            _buildMaxTokensField(context),
             if (_useCloud)
               _buildCloudFields(context)
             else ...[

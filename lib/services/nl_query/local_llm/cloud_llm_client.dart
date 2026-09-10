@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'llama_server_client.dart' show intentSystemPrompt, freeformSystemPrompt;
 import 'llm_engine.dart';
+import 'think_tag_splitter.dart';
 
 /// Pre-filled into Settings' "Nom du modèle" field the first time a user
 /// opens the cloud AI section (before they've ever set their own value) -
@@ -102,6 +103,9 @@ class CloudLlmClient implements LlmEngine {
   final String model;
   final http.Client _client;
 
+  @override
+  int maxTokens = 2048;
+
   CloudLlmClient({
     required this.baseUrl,
     required this.apiKey,
@@ -198,18 +202,48 @@ class CloudLlmClient implements LlmEngine {
   /// request - there's no server-side timing in this API shape the way
   /// llama.cpp's own `/completion` response includes. Null (never
   /// estimated) whenever `usage`/`completion_tokens` is missing.
+  ///
+  /// [onChunk] switches this to a real streaming request (`'stream': true`)
+  /// - see [LlmEngine.ask]'s own doc comment. Also flips `'reasoning':
+  /// {'exclude'}` to `false`: with nobody watching live, hidden reasoning
+  /// is pure waste to ask for (the non-streaming path below still excludes
+  /// it), but once [onChunk] exists there's finally somewhere to show it.
   Future<LlmResponse> _chat({
     required String systemPrompt,
     required String question,
     required double temperature,
     required int maxTokens,
     bool jsonMode = false,
-  }) async {
-    final stopwatch = Stopwatch()..start();
-    final response = await _client.post(
-      _endpoint,
-      headers: _headers,
-      body: jsonEncode({
+    LlmChunkCallback? onChunk,
+  }) {
+    return onChunk == null
+        ? _chatOnce(
+            systemPrompt: systemPrompt,
+            question: question,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            jsonMode: jsonMode,
+          )
+        : _chatStreamed(
+            systemPrompt: systemPrompt,
+            question: question,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            jsonMode: jsonMode,
+            onChunk: onChunk,
+          );
+  }
+
+  Map<String, Object?> _requestBody({
+    required String systemPrompt,
+    required String question,
+    required double temperature,
+    required int maxTokens,
+    required bool jsonMode,
+    required bool excludeReasoning,
+    required bool stream,
+  }) =>
+      {
         'model': model,
         'messages': [
           {'role': 'system', 'content': systemPrompt},
@@ -227,13 +261,48 @@ class CloudLlmClient implements LlmEngine {
         // OpenRouter's extension for reasoning-capable models (many of its
         // free models, including the one behind the 2026-09-01 user report
         // below, "think out loud" by default) - asks the provider to leave
-        // that internal narration out of `content` entirely, since this
-        // app has nowhere sensible to show it. Ignored (harmlessly, as an
-        // unrecognized field) by every other provider/a non-reasoning
-        // model - never errors, confirmed against OpenAI/llama-server's own
-        // OpenAI-compatible mode.
-        'reasoning': {'exclude': true},
-      }),
+        // that internal narration out of `content` entirely when nothing's
+        // watching live ([excludeReasoning] true, the non-streaming path).
+        // Ignored (harmlessly, as an unrecognized field) by every other
+        // provider/a non-reasoning model - never errors, confirmed against
+        // OpenAI/llama-server's own OpenAI-compatible mode.
+        'reasoning': {'exclude': excludeReasoning},
+        if (stream) 'stream': true,
+        // Without this, OpenAI-compatible streaming responses omit `usage`
+        // entirely (it's opt-in), so [_chatStreamed] would never learn a
+        // real token count/split at all - see [LlmResponse]'s own doc
+        // comment on never inventing one instead.
+        if (stream) 'stream_options': {'include_usage': true},
+      };
+
+  /// See [LlmResponse.reasoningTokens]'s own doc comment - the standard
+  /// OpenAI-compatible `usage.completion_tokens_details.reasoning_tokens`
+  /// field, present only when the provider actually reports this split.
+  static int? _reasoningTokens(Map<String, dynamic>? usage) {
+    final details = usage?['completion_tokens_details'] as Map<String, dynamic>?;
+    return details?['reasoning_tokens'] as int?;
+  }
+
+  Future<LlmResponse> _chatOnce({
+    required String systemPrompt,
+    required String question,
+    required double temperature,
+    required int maxTokens,
+    required bool jsonMode,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final response = await _client.post(
+      _endpoint,
+      headers: _headers,
+      body: jsonEncode(_requestBody(
+        systemPrompt: systemPrompt,
+        question: question,
+        temperature: temperature,
+        maxTokens: maxTokens,
+        jsonMode: jsonMode,
+        excludeReasoning: true,
+        stream: false,
+      )),
     );
     stopwatch.stop();
     if (response.statusCode != 200) {
@@ -252,51 +321,153 @@ class CloudLlmClient implements LlmEngine {
     final tps = (completionTokens != null && completionTokens > 0 && elapsedMs > 0)
         ? completionTokens / (elapsedMs / 1000)
         : null;
-    return LlmResponse(_stripReasoning(text), tokensPerSecond: tps);
+    return LlmResponse(_stripReasoning(text),
+        tokensPerSecond: tps,
+        completionTokens: completionTokens,
+        reasoningTokens: _reasoningTokens(usage));
+  }
+
+  /// Server-Sent Events, OpenAI's standard streaming shape (and OpenRouter's
+  /// own, which every free model this app targets goes through): repeated
+  /// `data: {...}\n\n` lines, each a partial `choices[0].delta` (either
+  /// `content` or, for a reasoning-capable model, a separate `reasoning`
+  /// field - both handled, since which one a given provider actually uses
+  /// varies), terminated by a literal `data: [DONE]` line. `content` still
+  /// goes through [ThinkTagSplitter] too, on top of the separate `reasoning`
+  /// field - a provider that inlines `<think>` tags in `content` instead of
+  /// (or alongside) using the structured field is exactly the same
+  /// non-compliant case [_stripReasoning] already defends against
+  /// non-streamed, so both paths need the same defense.
+  Future<LlmResponse> _chatStreamed({
+    required String systemPrompt,
+    required String question,
+    required double temperature,
+    required int maxTokens,
+    required bool jsonMode,
+    required LlmChunkCallback onChunk,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final request = http.Request('POST', _endpoint)
+      ..headers.addAll(_headers)
+      ..body = jsonEncode(_requestBody(
+        systemPrompt: systemPrompt,
+        question: question,
+        temperature: temperature,
+        maxTokens: maxTokens,
+        jsonMode: jsonMode,
+        excludeReasoning: false,
+        stream: true,
+      ));
+    final streamed = await _client.send(request);
+    if (streamed.statusCode != 200) {
+      throw StateError('Le service IA a répondu ${streamed.statusCode}.');
+    }
+    final answerBuffer = StringBuffer();
+    final splitter = ThinkTagSplitter();
+    int? completionTokens;
+    int? reasoningTokens;
+    void emitContent(String delta) {
+      for (final (text, isReasoning) in splitter.feed(delta)) {
+        if (!isReasoning) answerBuffer.write(text);
+        onChunk(text, isReasoning);
+      }
+    }
+
+    await for (final line in streamed.stream
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())) {
+      if (!line.startsWith('data:')) continue;
+      final payload = line.substring(5).trim();
+      if (payload.isEmpty) continue;
+      if (payload == '[DONE]') break;
+      final Map<String, dynamic> chunk;
+      try {
+        chunk = jsonDecode(payload) as Map<String, dynamic>;
+      } catch (_) {
+        continue; // a malformed/partial SSE line - skip rather than crash
+      }
+      final choices = chunk['choices'] as List?;
+      if (choices != null && choices.isNotEmpty) {
+        final delta = (choices.first as Map<String, dynamic>)['delta']
+            as Map<String, dynamic>?;
+        final reasoningDelta = delta?['reasoning'] as String?;
+        if (reasoningDelta != null && reasoningDelta.isNotEmpty) {
+          onChunk(reasoningDelta, true);
+        }
+        final contentDelta = delta?['content'] as String?;
+        if (contentDelta != null && contentDelta.isNotEmpty) {
+          emitContent(contentDelta);
+        }
+      }
+      final usage = chunk['usage'] as Map<String, dynamic>?;
+      if (usage != null) {
+        completionTokens = usage['completion_tokens'] as int?;
+        reasoningTokens = _reasoningTokens(usage);
+      }
+    }
+    for (final (text, isReasoning) in splitter.finish()) {
+      if (!isReasoning) answerBuffer.write(text);
+      onChunk(text, isReasoning);
+    }
+    stopwatch.stop();
+    final elapsedMs = stopwatch.elapsedMilliseconds;
+    final tokens = completionTokens;
+    final tps = (tokens != null && tokens > 0 && elapsedMs > 0)
+        ? tokens / (elapsedMs / 1000)
+        : null;
+    return LlmResponse(answerBuffer.toString(),
+        tokensPerSecond: tps,
+        completionTokens: completionTokens,
+        reasoningTokens: reasoningTokens);
   }
 
   @override
-  Future<LlmResponse> ask(String question) => _chat(
+  Future<LlmResponse> ask(String question, {LlmChunkCallback? onChunk}) => _chat(
         systemPrompt: intentSystemPrompt,
         question: question,
         temperature: 0.1,
-        maxTokens: 256,
+        maxTokens: maxTokens,
         jsonMode: true,
+        onChunk: onChunk,
       );
 
   @override
-  Future<LlmResponse> askFreeform(String question) => _chat(
+  Future<LlmResponse> askFreeform(String question, {LlmChunkCallback? onChunk}) =>
+      _chat(
         systemPrompt: freeformSystemPrompt,
         question: question,
         temperature: 0.7,
-        // Raised from 512 (2026-09-01 user report: a reasoning model's
-        // internal narration ate the entire budget before ever reaching a
-        // real answer, even with 'reasoning': {'exclude': true} above -
-        // some providers still count hidden reasoning tokens against the
-        // same max_tokens ceiling as the visible answer) - this is on top
-        // of the exclude flag, not instead of it: belt and suspenders
-        // against a provider that only partially honors it.
-        maxTokens: 2048,
+        // [maxTokens] (see LlmEngine's own doc comment) is the belt and
+        // suspenders against a reasoning model's hidden narration eating
+        // the whole budget before a real answer ever appears, on top of
+        // the 'reasoning': {'exclude': true} flag below (2026-09-01 user
+        // report: some providers only partially honor that flag).
+        maxTokens: maxTokens,
+        onChunk: onChunk,
       );
 
   @override
-  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) =>
+  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question,
+          {LlmChunkCallback? onChunk}) =>
       _chat(
         systemPrompt: systemPrompt,
         question: question,
         temperature: 0.1,
-        maxTokens: 2048,
+        maxTokens: maxTokens,
         jsonMode: true,
+        onChunk: onChunk,
       );
 
   @override
   Future<LlmResponse> askFreeformWithSystemPrompt(
-          String systemPrompt, String question) =>
+          String systemPrompt, String question,
+          {LlmChunkCallback? onChunk}) =>
       _chat(
         systemPrompt: systemPrompt,
         question: question,
         temperature: 0.2,
-        maxTokens: 4096,
+        maxTokens: maxTokens,
+        onChunk: onChunk,
       );
 
   @override

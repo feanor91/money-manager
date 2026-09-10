@@ -3,20 +3,29 @@ import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import '../query_intent.dart';
-import 'llm_engine.dart' show LlmFreeformOutcome;
+import 'llm_engine.dart' show LlmChunkCallback, LlmFreeformOutcome;
 import 'model_catalog.dart';
-import 'sql_query_engine.dart' show ChatTurn, SqlAccessOutcome;
+import 'sql_query_engine.dart' show ChatTurn, SqlAccessOutcome, SqlAccessProgressCallback;
 
 export 'llm_engine.dart'
-    show LlmFreeformOutcome, LlmFreeformSuccess, LlmFreeformUnavailable, LlmFreeformError;
+    show
+        LlmChunkCallback,
+        LlmFreeformOutcome,
+        LlmFreeformSuccess,
+        LlmFreeformUnavailable,
+        LlmFreeformError;
 export 'sql_query_engine.dart'
     show
         ChatTurn,
+        SqlAccessProgressCallback,
         SqlGroundedAnswer,
         SqlAccessOutcome,
         SqlAccessSuccess,
         SqlAccessUnavailable,
-        SqlAccessError;
+        SqlAccessError,
+        sqlPhaseWritingQuery,
+        sqlPhaseFixingQuery,
+        sqlPhaseAnswering;
 
 import 'local_llm_manager_stub.dart'
     if (dart.library.js_interop) 'local_llm_manager_web.dart'
@@ -106,6 +115,17 @@ Future<String> cloudLlmApiKey() => impl.cloudLlmApiKey();
 Future<void> setCloudLlmApiKey(String value) =>
     impl.setCloudLlmApiKey(value);
 
+/// See [LlmEngine.maxTokens] - one plain number (default 2048), settable
+/// both from Settings (local_llm_settings_card.dart, the persistent
+/// default) and from "Poser une question"'s own slider
+/// (nl_query_dialog.dart, a quick per-session nudge when a reasoning model
+/// looks stuck) - both read/write this exact same value, deliberately, per
+/// a 2026-09-10 user report that a separate multiplier on top of several
+/// invisible base values ("c'est y fois de quoi?") was confusing. Applies
+/// to both the cloud and the local backend.
+Future<int> llmMaxTokens() => impl.llmMaxTokens();
+Future<void> setLlmMaxTokens(int value) => impl.setLlmMaxTokens(value);
+
 /// Call once at app startup (see main.dart) so a still-running
 /// `llama-server.exe` never outlives the app itself - a no-op on any
 /// platform where local AI was never reachable in the first place.
@@ -128,6 +148,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
+  LlmChunkCallback? onChunk,
 }) =>
         impl.extractIntentWithLocalLlm(
           question,
@@ -135,6 +156,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
           accounts: accounts,
           payees: payees,
           now: now,
+          onChunk: onChunk,
         );
 
 /// Free-form fallback once neither the local AI's intent extractor nor the
@@ -147,8 +169,9 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 Future<LlmFreeformOutcome> askLocalLlmFreeform(
   String question, {
   List<ChatTurn> history = const [],
+  LlmChunkCallback? onChunk,
 }) =>
-    impl.askLocalLlmFreeform(question, history: history);
+    impl.askLocalLlmFreeform(question, history: history, onChunk: onChunk);
 
 /// Opens a throwaway, OS/SQLite-enforced read-only connection to the .mmb
 /// file at [dbPath] for running a [QueryKind.adHoc] question - null on any
@@ -190,6 +213,7 @@ Future<SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String? dbPath,
   MmexRepository? repo,
   List<ChatTurn> history = const [],
+  SqlAccessProgressCallback? onProgress,
 }) {
   if (dbPath == null && repo == null) {
     throw ArgumentError.value(null, 'dbPath',
@@ -200,5 +224,6 @@ Future<SqlAccessOutcome> askLocalLlmWithFullDataAccess(
     dbPath: dbPath,
     repo: repo,
     history: history,
+    onProgress: onProgress,
   );
 }

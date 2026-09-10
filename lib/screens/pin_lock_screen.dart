@@ -139,15 +139,49 @@ class _PinCompanionAccessScreenState extends State<PinCompanionAccessScreen> {
 
 /// Full-screen PIN prompt shown whenever the app is locked - see
 /// [PinLockProvider]. Not a route the user can navigate away from short of
-/// entering the right code.
-class PinUnlockScreen extends StatefulWidget {
+/// entering the right code. Just a thin [Scaffold]/[Center] wrapper around
+/// [PinUnlockForm] - see that widget's own doc comment for why the actual
+/// PIN-entry UI lives there instead of directly in this class.
+class PinUnlockScreen extends StatelessWidget {
   const PinUnlockScreen({super.key});
 
   @override
-  State<PinUnlockScreen> createState() => _PinUnlockScreenState();
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: const Padding(
+            padding: EdgeInsets.all(24),
+            child: PinUnlockForm(),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-class _PinUnlockScreenState extends State<PinUnlockScreen> {
+/// The actual PIN-entry column (icon, title, field, button) - split out of
+/// [PinUnlockScreen] (2026-09-10) so [NlQueryDialog]'s own lock placeholder
+/// can embed a real, working "Déverrouiller" form directly, rather than a
+/// static "verrouillé" message. Before this split, unlocking while the
+/// dialog was open needed a two-step dance the user correctly flagged as
+/// broken: tap outside the dialog's modal barrier to dismiss it (the only
+/// way to reach the real [PinUnlockScreen] sitting on the route underneath),
+/// which - since `showDialog` pushes the dialog as a separate route -
+/// destroyed the dialog's own State object and its whole conversation the
+/// instant it was dismissed, i.e. exactly the state loss the lock fix was
+/// supposed to prevent. Embedding this form means the dialog can unlock the
+/// one shared [PinLockProvider] instance itself, in place, with no barrier
+/// tap and no route change involved at all.
+class PinUnlockForm extends StatefulWidget {
+  const PinUnlockForm({super.key});
+
+  @override
+  State<PinUnlockForm> createState() => _PinUnlockFormState();
+}
+
+class _PinUnlockFormState extends State<PinUnlockForm> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   String _pin = '';
@@ -159,6 +193,13 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
     super.initState();
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _focusNode.requestFocus());
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _submit() async {
@@ -193,64 +234,53 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 320),
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.lock_outline,
-                    size: 48, color: AppTheme.accent),
-                const SizedBox(height: 16),
-                Text('Money Manager verrouillé',
-                    style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 24),
-                TextField(
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  autofocus: true,
-                  obscureText: !kIsWeb,
-                  inputFormatters: kIsWeb
-                      ? [
-                          pinMaskFormatter(
-                            getValue: () => _pin,
-                            setValue: (v) => _pin = v,
-                          ),
-                        ]
-                      : null,
-                  autofillHints: const [],
-                  enableSuggestions: false,
-                  keyboardType: TextInputType.number,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 24, letterSpacing: 8),
-                  decoration: InputDecoration(
-                    labelText: 'Code PIN',
-                    errorText: _error,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.lock_outline, size: 48, color: AppTheme.accent),
+        const SizedBox(height: 16),
+        Text('Money Manager verrouillé',
+            style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 24),
+        TextField(
+          controller: _controller,
+          focusNode: _focusNode,
+          autofocus: true,
+          obscureText: !kIsWeb,
+          inputFormatters: kIsWeb
+              ? [
+                  pinMaskFormatter(
+                    getValue: () => _pin,
+                    setValue: (v) => _pin = v,
                   ),
-                  onChanged: (v) => setState(() {
-                    if (!kIsWeb) _pin = v;
-                    _error = null;
-                  }),
-                  onSubmitted: (_) => _submit(),
-                ),
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _checking ? null : _submit,
-                  child: _checking
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Déverrouiller'),
-                ),
-              ],
-            ),
+                ]
+              : null,
+          autofillHints: const [],
+          enableSuggestions: false,
+          keyboardType: TextInputType.number,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 24, letterSpacing: 8),
+          decoration: InputDecoration(
+            labelText: 'Code PIN',
+            errorText: _error,
           ),
+          onChanged: (v) => setState(() {
+            if (!kIsWeb) _pin = v;
+            _error = null;
+          }),
+          onSubmitted: (_) => _submit(),
         ),
-      ),
+        const SizedBox(height: 20),
+        FilledButton(
+          onPressed: _checking ? null : _submit,
+          child: _checking
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Déverrouiller'),
+        ),
+      ],
     );
   }
 }

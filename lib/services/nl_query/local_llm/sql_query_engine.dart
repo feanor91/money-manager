@@ -6,6 +6,19 @@ import '../../../models/category.dart';
 import '../../../models/payee.dart';
 import 'llm_engine.dart';
 
+/// `(phase, text, isReasoning)` - see [answerViaFullSqlAccess]'s own
+/// `onProgress` parameter (2026-09-10 user request: "afficher en temps
+/// réel... ce que fait le modèle" for every step, not just the final
+/// answer). [phase] is one of the `sqlPhase*` constants below, already a
+/// plain French label ready to show as-is - nl_query_dialog.dart never
+/// needs to translate or map it.
+typedef SqlAccessProgressCallback = void Function(
+    String phase, String text, bool isReasoning);
+
+const sqlPhaseWritingQuery = 'Écriture de la requête';
+const sqlPhaseFixingQuery = 'Correction de la requête';
+const sqlPhaseAnswering = 'Formulation de la réponse';
+
 /// Default value for Settings' editable "Prompt IA (accès complet aux
 /// données)" - a from-scratch schema + strict-rules prompt for the
 /// full-database-access query mode (see [answerViaFullSqlAccess]),
@@ -303,8 +316,18 @@ class SqlGroundedAnswer {
   /// as [LlmResponse.tokensPerSecond] itself (never estimated).
   final double? tokensPerSecond;
 
-  const SqlGroundedAnswer(
-      {required this.text, required this.csv, this.tokensPerSecond});
+  /// See [LlmResponse]'s own doc comment on both - carried through
+  /// unchanged from the final answer-formatting call's [LlmResponse].
+  final int? completionTokens;
+  final int? reasoningTokens;
+
+  const SqlGroundedAnswer({
+    required this.text,
+    required this.csv,
+    this.tokensPerSecond,
+    this.completionTokens,
+    this.reasoningTokens,
+  });
 }
 
 /// The result of [answerViaFullSqlAccess] - three distinct outcomes, same
@@ -841,11 +864,17 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
   required String systemPrompt,
   required LlmEngine engine,
   List<ChatTurn> history = const [],
+  SqlAccessProgressCallback? onProgress,
 }) async {
+  LlmChunkCallback? forPhase(String phase) => onProgress == null
+      ? null
+      : (text, isReasoning) => onProgress(phase, text, isReasoning);
+
   final composedQuestion = '${formatChatHistory(history)}$question';
   LlmResponse rawPlan;
   try {
-    rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion);
+    rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion,
+        onChunk: forPhase(sqlPhaseWritingQuery));
   } catch (e) {
     return SqlAccessError(_describeError(e));
   }
@@ -860,7 +889,8 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
     // burning their token budget on hidden narration) but a second, fresh
     // attempt at the identical prompt often succeeds outright.
     try {
-      rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion);
+      rawPlan = await engine.askWithSystemPrompt(systemPrompt, composedQuestion,
+          onChunk: forPhase(sqlPhaseWritingQuery));
     } catch (e) {
       return SqlAccessError(_describeError(e));
     }
@@ -889,7 +919,8 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
         final LlmResponse fixResponse;
         try {
           fixResponse = await engine.askWithSystemPrompt(
-              systemPrompt, _buildSqlFixPrompt(step.sql, _describeError(e)));
+              systemPrompt, _buildSqlFixPrompt(step.sql, _describeError(e)),
+              onChunk: forPhase(sqlPhaseFixingQuery));
         } catch (_) {
           break; // engine call itself failed mid-retry - stop, report below
         }
@@ -923,6 +954,7 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
     answer = await engine.askFreeformWithSystemPrompt(
       _answerFormattingSystemPrompt,
       formattingPrompt,
+      onChunk: forPhase(sqlPhaseAnswering),
     );
   } catch (e) {
     return SqlAccessError(_describeError(e));
@@ -933,6 +965,8 @@ Future<SqlAccessOutcome> answerViaFullSqlAccess({
     text: trimmed,
     csv: _resultsToCsv(results),
     tokensPerSecond: answer.tokensPerSecond,
+    completionTokens: answer.completionTokens,
+    reasoningTokens: answer.reasoningTokens,
   ));
 }
 

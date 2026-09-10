@@ -220,7 +220,7 @@ void main() {
       expect(capturedBody!['grammar'], isNotEmpty);
       expect(capturedBody!['prompt'], contains('Un prompt sur mesure.'));
       expect(capturedBody!['prompt'], contains('combien ?'));
-      expect(capturedBody!['n_predict'], 1024);
+      expect(capturedBody!['n_predict'], 2048); // default maxTokens
       client.close();
     });
 
@@ -251,7 +251,7 @@ void main() {
       expect(capturedBody!.containsKey('grammar'), isFalse);
       expect(capturedBody!['prompt'], contains('Formule la réponse.'));
       expect(capturedBody!['prompt'], contains('résultat: 42'));
-      expect(capturedBody!['n_predict'], 4096);
+      expect(capturedBody!['n_predict'], 2048); // default maxTokens
       client.close();
     });
   });
@@ -293,5 +293,100 @@ void main() {
     expect(prompt, endsWith('<|im_start|>assistant\n'));
     // Distinct from the intent-extraction prompt: no JSON-shape instructions.
     expect(prompt, isNot(contains('"kind"')));
+  });
+
+  group('maxTokens (2026-09-10 user request: one plain token count, not a '
+      'multiplier on invisible base values - "c\'est y fois de quoi?" - to '
+      'raise when a reasoning model needs more room before responding)', () {
+    test('a custom value is sent identically on every call shape', () async {
+      final captured = <int>[];
+      final port = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        captured.add((jsonDecode(body) as Map<String, dynamic>)['n_predict'] as int);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'content': '{}'}));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port)..maxTokens = 6000;
+      await client.ask('q');
+      await client.askFreeform('q');
+      await client.askWithSystemPrompt('sys', 'q');
+      await client.askFreeformWithSystemPrompt('sys', 'q');
+      expect(captured, [6000, 6000, 6000, 6000]);
+      client.close();
+    });
+  });
+
+  group('streaming (onChunk) - 2026-09-10 user request: "afficher en temps '
+      'réel... ce que fait le modèle"', () {
+    Future<int> startFakeSseServer(List<Map<String, Object?>> sseChunks) {
+      return startFakeServer((request) async {
+        await utf8.decoder.bind(request).join();
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream', charset: 'utf-8');
+        for (final chunk in sseChunks) {
+          request.response.add(utf8.encode('data: ${jsonEncode(chunk)}\n\n'));
+        }
+        await request.response.close();
+      });
+    }
+
+    test('llama.cpp\'s own per-chunk content deltas (not cumulative) are '
+        'forwarded live and joined into the final returned text', () async {
+      final port = await startFakeSseServer([
+        {'content': 'Bon'},
+        {'content': 'jour'},
+        {'content': '', 'stop': true, 'tokens_predicted': 5},
+      ]);
+      final client = LlamaServerClient(port);
+      final chunks = <(String, bool)>[];
+      final result =
+          await client.ask('q', onChunk: (text, isReasoning) => chunks.add((text, isReasoning)));
+      expect(chunks, [('Bon', false), ('jour', false)]);
+      expect(result.text, 'Bonjour');
+      client.close();
+    });
+
+    test('inline <think> tags in the content stream (no structured '
+        'reasoning field on this backend) are split via ThinkTagSplitter',
+        () async {
+      final port = await startFakeSseServer([
+        {'content': '<think>je réfléchis'},
+        {'content': '</think>voici 42€'},
+        {'content': '', 'stop': true},
+      ]);
+      final client = LlamaServerClient(port);
+      final chunks = <(String, bool)>[];
+      final result =
+          await client.ask('q', onChunk: (text, isReasoning) => chunks.add((text, isReasoning)));
+      expect(chunks, [('je réfléchis', true), ('voici 42€', false)]);
+      expect(result.text, 'voici 42€');
+    });
+
+    test('sends stream:true only when streaming', () async {
+      Map<String, dynamic>? capturedBody;
+      final port = await startFakeServer((request) async {
+        final body = await utf8.decoder.bind(request).join();
+        capturedBody = jsonDecode(body) as Map<String, dynamic>;
+        request.response.headers.contentType =
+            ContentType('text', 'event-stream', charset: 'utf-8');
+        request.response.add(utf8.encode('data: {"content":"","stop":true}\n\n'));
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      await client.ask('q', onChunk: (_, __) {});
+      expect(capturedBody!['stream'], true);
+      client.close();
+    });
+
+    test('throws on a non-200 response, same as the non-streaming path', () async {
+      final port = await startFakeServer((request) async {
+        request.response.statusCode = 500;
+        await request.response.close();
+      });
+      final client = LlamaServerClient(port);
+      await expectLater(client.ask('q', onChunk: (_, __) {}), throwsStateError);
+      client.close();
+    });
   });
 }

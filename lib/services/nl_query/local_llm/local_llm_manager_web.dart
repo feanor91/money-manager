@@ -38,6 +38,7 @@ const _prefsKeySqlSystemPrompt = 'mmex_local_llm_sql_system_prompt';
 const _prefsKeyCloudEndpoint = 'mmex_cloud_llm_endpoint';
 const _prefsKeyCloudModel = 'mmex_cloud_llm_model';
 const _prefsKeyCloudApiKey = 'mmex_cloud_llm_api_key';
+const _prefsKeyMaxTokens = 'mmex_llm_max_tokens';
 
 const _defaultServerHost = '127.0.0.1';
 const _defaultServerPort = 8792;
@@ -94,9 +95,25 @@ Future<CloudLlmClient?> _ensureCloudClient() async {
 
 /// Picks whichever backend [useCloudLlm] currently selects - the single
 /// entry point every question-answering function below goes through.
+/// Stamps [llmMaxTokens]'s current value onto whatever it returns (cached
+/// or freshly built) so the "Poser une question" slider's value always
+/// reflects on the very next question - see [LlmEngine.maxTokens].
 Future<LlmEngine?> _ensureEngine() async {
-  if (await useCloudLlm()) return _ensureCloudClient();
-  return _ensureLocalClient();
+  final engine =
+      await useCloudLlm() ? await _ensureCloudClient() : await _ensureLocalClient();
+  if (engine != null) engine.maxTokens = await llmMaxTokens();
+  return engine;
+}
+
+/// See [LlmEngine.maxTokens].
+Future<int> llmMaxTokens() async {
+  final prefs = await AppPreferences.getInstance();
+  return prefs.getInt(_prefsKeyMaxTokens) ?? 2048;
+}
+
+Future<void> setLlmMaxTokens(int value) async {
+  final prefs = await AppPreferences.getInstance();
+  await prefs.setInt(_prefsKeyMaxTokens, value);
 }
 
 Future<void> _disposeClient() async {
@@ -265,6 +282,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   required List<Account> accounts,
   required List<Payee> payees,
   DateTime? now,
+  LlmChunkCallback? onChunk,
 }) async {
   if (!await isLocalLlmEnabled()) {
     return (intent: null, periodWasExplicit: false);
@@ -272,7 +290,7 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
   final engine = await _ensureEngine();
   if (engine == null) return (intent: null, periodWasExplicit: false);
   try {
-    final raw = await engine.ask(question);
+    final raw = await engine.ask(question, onChunk: onChunk);
     return decodeIntentJson(
       raw.text,
       question: question,
@@ -291,17 +309,22 @@ Future<({QueryIntent? intent, bool periodWasExplicit})>
 Future<LlmFreeformOutcome> askLocalLlmFreeform(
   String question, {
   List<sql_engine.ChatTurn> history = const [],
+  LlmChunkCallback? onChunk,
 }) async {
   if (!await isLocalLlmEnabled()) return const LlmFreeformUnavailable();
   final engine = await _ensureEngine();
   if (engine == null) return const LlmFreeformUnavailable();
   try {
-    final raw = await engine
-        .askFreeform('${sql_engine.formatChatHistory(history)}$question');
+    final raw = await engine.askFreeform(
+        '${sql_engine.formatChatHistory(history)}$question',
+        onChunk: onChunk);
     final trimmed = raw.text.trim();
     return trimmed.isEmpty
         ? const LlmFreeformUnavailable()
-        : LlmFreeformSuccess(trimmed, tokensPerSecond: raw.tokensPerSecond);
+        : LlmFreeformSuccess(trimmed,
+            tokensPerSecond: raw.tokensPerSecond,
+            completionTokens: raw.completionTokens,
+            reasoningTokens: raw.reasoningTokens);
   } catch (e) {
     return LlmFreeformError(e is StateError ? e.message : '$e');
   }
@@ -341,6 +364,7 @@ Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
   String? dbPath,
   MmexRepository? repo,
   List<sql_engine.ChatTurn> history = const [],
+  sql_engine.SqlAccessProgressCallback? onProgress,
 }) async {
   if (!await isLocalLlmEnabled()) return const sql_engine.SqlAccessUnavailable();
   if (repo == null) return const sql_engine.SqlAccessUnavailable();
@@ -359,5 +383,6 @@ Future<sql_engine.SqlAccessOutcome> askLocalLlmWithFullDataAccess(
     systemPrompt: systemPrompt,
     engine: engine,
     history: history,
+    onProgress: onProgress,
   );
 }

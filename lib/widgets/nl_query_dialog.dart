@@ -7,9 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:intl/intl.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:pdf/pdf.dart' show PdfColors;
-import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../data/mmex_repository.dart';
@@ -21,6 +20,9 @@ import '../services/nl_query/local_llm/local_llm_support.dart';
 import '../services/nl_query/query_executor.dart';
 import '../services/nl_query/query_intent.dart';
 import '../services/nl_query/rule_based_query_parser.dart';
+import '../screens/pin_lock_screen.dart' show PinUnlockForm;
+import '../state/pin_lock_provider.dart';
+import 'answer_pdf.dart';
 
 /// Same one-line platform-check convention as dashboard_screen.dart/
 /// transactions_screen.dart - see below for why this matters here too.
@@ -82,14 +84,32 @@ enum _AnswerKind {
 
   /// A genuine failure (network/database error) or "not understood".
   error,
+
+  /// A live, in-progress step of the model actually working (2026-09-10
+  /// user request: "afficher en temps réel... ce que fait le modèle", like
+  /// a standard AI chat's own "thinking" panel) - [_ChatEntry.phaseLabel]
+  /// names which step ("Écriture de la requête", "Formulation de la
+  /// réponse"...), [_ChatEntry.text] grows live as chunks arrive (see
+  /// [LlmChunkCallback]/[SqlAccessProgressCallback]), and
+  /// [_ChatEntry.isDone] flips true once that step finishes. Left in the
+  /// transcript afterwards (collapsed by the user if they choose to, not
+  /// removed) as a record of what actually happened - the real, final
+  /// answer still gets its own normal bubble appended after every step's
+  /// thinking entry.
+  thinking,
 }
 
 /// One line of the chat transcript - either the user's own question, or
-/// this app's answer to it (computed, freeform, SQL-grounded, or an
-/// error/"not understood" message - see [_AnswerKind]).
+/// this app's answer to it (computed, freeform, SQL-grounded, an
+/// error/"not understood" message, or a live in-progress thinking step -
+/// see [_AnswerKind]). Mutable (not the immutable value type this looked
+/// like before [_AnswerKind.thinking] existed) so a thinking entry already
+/// in [_NlQueryDialogState._messages] can grow in place as chunks stream
+/// in, rather than needing a fresh list entry (and losing scroll position)
+/// on every single token.
 class _ChatEntry {
   final bool isUser;
-  final String text;
+  String text;
   final _AnswerKind kind;
 
   /// The raw rows behind a [_AnswerKind.sqlGrounded] answer, as CSV -
@@ -106,15 +126,50 @@ class _ChatEntry {
   /// estimated from elapsed time alone.
   final double? tokensPerSecond;
 
-  const _ChatEntry.user(this.text)
+  /// See [LlmResponse]'s own doc comment on both (2026-09-10 user request:
+  /// "ajouter le nombre de token généré en différentiant thinking et
+  /// réponse") - [completionTokens] is the total, [reasoningTokens] the
+  /// portion of it spent on hidden reasoning before the real answer, only
+  /// ever non-null when the backend actually reports that split. Neither
+  /// is ever estimated - same "jamais de chiffre inventé" rule as
+  /// [tokensPerSecond].
+  final int? completionTokens;
+  final int? reasoningTokens;
+
+  /// Only set for [_AnswerKind.thinking] - which step this is ("Écriture
+  /// de la requête"...), shown as the entry's own title.
+  final String? phaseLabel;
+
+  /// Only meaningful for [_AnswerKind.thinking] - true once this step's
+  /// call has actually finished (success or failure alike), false while
+  /// still streaming. Drives the small spinner next to [phaseLabel].
+  bool isDone;
+
+  _ChatEntry.user(this.text)
       : isUser = true,
         kind = _AnswerKind.computed,
         csv = null,
-        tokensPerSecond = null;
+        tokensPerSecond = null,
+        completionTokens = null,
+        reasoningTokens = null,
+        phaseLabel = null,
+        isDone = true;
 
-  const _ChatEntry.assistant(this.text, this.kind,
-      {this.csv, this.tokensPerSecond})
-      : isUser = false;
+  _ChatEntry.assistant(this.text, this.kind,
+      {this.csv, this.tokensPerSecond, this.completionTokens, this.reasoningTokens})
+      : isUser = false,
+        phaseLabel = null,
+        isDone = true;
+
+  _ChatEntry.thinking(this.phaseLabel)
+      : isUser = false,
+        text = '',
+        kind = _AnswerKind.thinking,
+        csv = null,
+        tokensPerSecond = null,
+        completionTokens = null,
+        reasoningTokens = null,
+        isDone = false;
 }
 
 /// Opens the natural-language query tool as a dialog - same shape as
@@ -159,7 +214,8 @@ Future<void> openNlQueryDialog({
       child: Builder(
         builder: (context) {
           final screen = MediaQuery.sizeOf(context);
-          final width = screen.width < 760 ? screen.width * 0.97 : screen.width * 0.9;
+          final width =
+              screen.width < 760 ? screen.width * 0.97 : screen.width * 0.9;
           final height = screen.height * 0.92;
           return SizedBox(
             width: width,
@@ -241,6 +297,20 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   /// growing instead of losing everything said before the restart.
   String _confirmedText = '';
 
+  /// Slider at the top of the dialog (2026-09-10 user request: "un curseur
+  /// de max_token... pour le régler de manière dynamique si nécessaire") -
+  /// see [LlmEngine.maxTokens]. A plain token count, not a multiplier on
+  /// some invisible base value - an earlier version showed "x2.5" etc.,
+  /// which a follow-up user report called out as meaningless without
+  /// knowing what it multiplied ("c'est y fois de quoi?"). Loaded once
+  /// here, saved on every drag via [setLlmMaxTokens] - the exact same
+  /// stored value Settings' own field (local_llm_settings_card.dart) reads/
+  /// writes, so there's only ever one number to keep straight, just two
+  /// places to adjust it from (the persistent default, and a quick
+  /// per-session nudge here). Each backend re-reads it fresh per question,
+  /// so a change here takes effect on the very next one, no restart needed.
+  int _maxTokens = 2048;
+
   @override
   void initState() {
     super.initState();
@@ -248,6 +318,10 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       currentLlmModelLabel().then((label) {
         if (!mounted) return;
         setState(() => _modelLabel = label);
+      });
+      llmMaxTokens().then((value) {
+        if (!mounted) return;
+        setState(() => _maxTokens = value);
       });
     }
   }
@@ -372,11 +446,14 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
             }
             setState(() {
               _userWantsListening = false;
-              _speechError = 'Erreur de reconnaissance vocale (${error.errorMsg}).';
+              _speechError =
+                  'Erreur de reconnaissance vocale (${error.errorMsg}).';
             });
           },
           onStatus: (status) {
-            if (status == 'notListening' || status == 'done' || status == 'doneNoResult') {
+            if (status == 'notListening' ||
+                status == 'done' ||
+                status == 'doneNoResult') {
               _onSegmentEnded(status);
             }
           },
@@ -448,12 +525,39 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     }));
   }
 
+  /// How close to the bottom (in logical pixels) still counts as "was
+  /// following along" for [_scrollToBottom]'s own auto-scroll gating below.
+  static const _autoScrollThreshold = 80.0;
+
+  /// Auto-scrolls to the newest message - but only if the user was already
+  /// at (or very near) the bottom right before this call, i.e. actually
+  /// following along. 2026-09-10 user report: while a "thinking" entry is
+  /// streaming and growing, this used to fire on *every single chunk*,
+  /// fighting any attempt to scroll back up to collapse it - "le
+  /// défilement m'en empêche". Capturing the scroll position now, before
+  /// the post-frame callback (which only runs once the new content has
+  /// already extended the scrollable range), is what lets this tell "the
+  /// user had deliberately scrolled away" apart from "nothing's scrolled
+  /// yet, of course pixels < the old maxScrollExtent" - checking *after*
+  /// the frame would always see a bigger maxScrollExtent than whatever the
+  /// user was actually looking at.
   void _scrollToBottom() {
+    double? pixelsBefore;
+    double? maxScrollExtentBefore;
+    if (_scrollController.hasClients) {
+      pixelsBefore = _scrollController.position.pixels;
+      maxScrollExtentBefore = _scrollController.position.maxScrollExtent;
+    }
     // A frame needs to actually pass (the new message just got added to
     // the list) before there's anything new to scroll to - jumping inside
     // the same setState call would still see the old scroll extent.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
+      if (pixelsBefore != null &&
+          maxScrollExtentBefore != null &&
+          maxScrollExtentBefore - pixelsBefore > _autoScrollThreshold) {
+        return; // the user had scrolled away from the bottom - leave them be
+      }
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 200),
@@ -538,32 +642,21 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
 
   /// Prints a whole answer (2026-09 user request: "envoyer la réponse vers
   /// une imprimante", both a phone's and a PC's own network printer) - a
-  /// one-page PDF handed to [Printing.layoutPdf], which opens the
-  /// platform's own print dialog (Android/Windows/web all supported by the
-  /// `printing` package) rather than talking to any printer directly: that
-  /// dialog already lists whatever printers - network ones included - are
-  /// already set up on the device, so this app never needs to know a
-  /// printer's address itself. Renders [text] as plain wrapped paragraphs,
-  /// not full Markdown - a deliberate simplification (this app's answers
-  /// are shown as Markdown via [flutter_markdown] on screen, but rendering
-  /// that same Markdown to a PDF layout is a meaningfully bigger job for a
-  /// feature that's really about getting the words on paper, not matching
-  /// the screen pixel for pixel).
+  /// PDF handed to [Printing.layoutPdf], which opens the platform's own
+  /// print dialog (Android/Windows/web all supported by the `printing`
+  /// package) rather than talking to any printer directly: that dialog
+  /// already lists whatever printers - network ones included - are already
+  /// set up on the device, so this app never needs to know a printer's
+  /// address itself. Real Markdown rendering (headings, bold, lists,
+  /// tables...) and a Unicode-capable font - see answer_pdf.dart's own doc
+  /// comment for the 2026-09-10 user report ("c'est dégueulasse") this
+  /// replaced a much cruder plain-text version for.
   Future<void> _printAnswer(BuildContext context, String text) async {
     try {
-      final doc = pw.Document();
-      doc.addPage(
-        pw.MultiPage(
-          build: (pdfContext) => [
-            pw.Text('Money Manager',
-                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600)),
-            pw.SizedBox(height: 4),
-            pw.Text(DateFormat('d MMMM yyyy à HH:mm', 'fr_FR').format(DateTime.now()),
-                style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
-            pw.SizedBox(height: 16),
-            pw.Text(text, style: const pw.TextStyle(fontSize: 12)),
-          ],
-        ),
+      final doc = await buildAnswerPdfDocument(
+        title: 'Money Manager',
+        subtitle: DateFormat('d MMMM yyyy à HH:mm', 'fr_FR').format(DateTime.now()),
+        markdownText: text,
       );
       await Printing.layoutPdf(
         onLayout: (_) async => doc.save(),
@@ -583,17 +676,17 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
   /// popping into the transcript after the user has moved on, and resets
   /// the UI to ready-for-input immediately.
   ///
-  /// This can only ever be a *client-side* cancel: every backend here
-  /// (LlamaServerClient/CloudLlmClient) sends `stream: false`, so the
-  /// server has already generated the *entire* answer before any of it
-  /// reaches this app - there is no partial response to truncate, and
-  /// closing the connection can't make already-spent server-side
-  /// compute/cost un-happen. The one case where this genuinely stops real
-  /// work is the desktop build's own spawned local `llama-server.exe`:
-  /// [shutdownLocalLlmEngine] kills that process outright, which does
-  /// immediately free the CPU/GPU it was using - worth doing regardless of
-  /// backend, since it's a no-op everywhere else and the next question
-  /// simply pays a fresh engine's startup cost instead.
+  /// Mostly a *client-side* cancel: the in-flight HTTP request itself
+  /// isn't aborted (the backend already has the request; the server keeps
+  /// generating regardless), `reply`/the streaming `onChunk` callbacks
+  /// below just stop touching state once `myGeneration` no longer matches
+  /// - already-spent server-side compute/cost can't be un-happened either
+  /// way. The one case where this genuinely stops real work is the desktop
+  /// build's own spawned local `llama-server.exe`: [shutdownLocalLlmEngine]
+  /// kills that process outright, which does immediately free the CPU/GPU
+  /// it was using - worth doing regardless of backend, since it's a no-op
+  /// everywhere else and the next question simply pays a fresh engine's
+  /// startup cost instead.
   void _cancelAsk() {
     _requestGeneration++;
     setState(() => _loading = false);
@@ -616,13 +709,40 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     });
     _scrollToBottom();
 
-    void reply(String text, _AnswerKind kind,
-        {String? csv, double? tokensPerSecond}) {
+    // The live "thinking" entry currently being filled in, if any - see
+    // _AnswerKind.thinking's own doc comment. A new phase (a different
+    // [phaseLabel] than the one currently open) finalizes the previous
+    // entry and starts a fresh one; the same phase repeating (e.g. several
+    // back-to-back SQL-fix attempts) keeps appending to the same one
+    // rather than fragmenting into a separate bubble per retry.
+    _ChatEntry? currentThinking;
+    void onProgress(String phaseLabel, String text, bool isReasoning) {
       if (myGeneration != _requestGeneration) return;
+      var entry = currentThinking;
+      if (entry == null || entry.phaseLabel != phaseLabel) {
+        entry?.isDone = true;
+        entry = _ChatEntry.thinking(phaseLabel);
+        currentThinking = entry;
+        setState(() => _messages.add(entry!));
+      }
+      setState(() => entry!.text += text);
+      _scrollToBottom();
+    }
+
+    void reply(String text, _AnswerKind kind,
+        {String? csv,
+        double? tokensPerSecond,
+        int? completionTokens,
+        int? reasoningTokens}) {
+      if (myGeneration != _requestGeneration) return;
+      currentThinking?.isDone = true;
       setState(() {
         _loading = false;
         _messages.add(_ChatEntry.assistant(text, kind,
-            csv: csv, tokensPerSecond: tokensPerSecond));
+            csv: csv,
+            tokensPerSecond: tokensPerSecond,
+            completionTokens: completionTokens,
+            reasoningTokens: reasoningTokens));
       });
       _scrollToBottom();
     }
@@ -664,13 +784,16 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
       // branch).
       final sqlOutcome = kIsWeb || _isAndroidPlatform
           ? await askLocalLlmWithFullDataAccess(trimmed,
-              repo: repo, history: history)
+              repo: repo, history: history, onProgress: onProgress)
           : await askLocalLlmWithFullDataAccess(trimmed,
-              dbPath: repo.db.label, history: history);
+              dbPath: repo.db.label, history: history, onProgress: onProgress);
       switch (sqlOutcome) {
         case SqlAccessSuccess(:final answer):
           reply(answer.text, _AnswerKind.sqlGrounded,
-              csv: answer.csv, tokensPerSecond: answer.tokensPerSecond);
+              csv: answer.csv,
+              tokensPerSecond: answer.tokensPerSecond,
+              completionTokens: answer.completionTokens,
+              reasoningTokens: answer.reasoningTokens);
           return;
         case SqlAccessError(:final message):
           // Told apart from "not understood" on purpose (same 2026-08-31
@@ -687,10 +810,21 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
         // its response wasn't usable) - falls to plain AI conversation
         // just below, never to the closed deterministic engine.
       }
-      final freeform = await askLocalLlmFreeform(trimmed, history: history);
+      final freeform = await askLocalLlmFreeform(trimmed,
+          history: history,
+          onChunk: (text, isReasoning) =>
+              onProgress('Réponse', text, isReasoning));
       switch (freeform) {
-        case LlmFreeformSuccess(:final text, :final tokensPerSecond):
-          reply(text, _AnswerKind.freeform, tokensPerSecond: tokensPerSecond);
+        case LlmFreeformSuccess(
+            :final text,
+            :final tokensPerSecond,
+            :final completionTokens,
+            :final reasoningTokens
+          ):
+          reply(text, _AnswerKind.freeform,
+              tokensPerSecond: tokensPerSecond,
+              completionTokens: completionTokens,
+              reasoningTokens: reasoningTokens);
         case LlmFreeformError(:final message):
           reply(
               "Le service IA a renvoyé une erreur ($message). Réessaie dans "
@@ -818,8 +952,37 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     );
   }
 
+  /// Caption shown under an answer bubble (2026-08-31: tokens/s alone;
+  /// 2026-09-10 user request: "ajouter le nombre de token généré en
+  /// différentiant thinking et réponse") - built from whichever of
+  /// [_ChatEntry.completionTokens]/[reasoningTokens]/[tokensPerSecond] the
+  /// backend actually reported, never inventing a number for one that's
+  /// null (see [LlmResponse]'s own doc comment). Null (nothing shown) only
+  /// when none of the three are available at all.
+  String? _tokenCaption(_ChatEntry entry) {
+    final parts = <String>[];
+    final total = entry.completionTokens;
+    final reasoning = entry.reasoningTokens;
+    if (total != null) {
+      if (reasoning != null) {
+        final answerTokens = total - reasoning;
+        parts.add('$total tokens (dont $reasoning en réflexion, '
+            '$answerTokens en réponse)');
+      } else {
+        parts.add('$total tokens');
+      }
+    }
+    if (entry.tokensPerSecond != null) {
+      parts.add('${entry.tokensPerSecond!.toStringAsFixed(1)} tokens/s');
+    }
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
   Widget _buildBubble(BuildContext context, _ChatEntry entry) {
     final theme = Theme.of(context);
+    if (entry.kind == _AnswerKind.thinking) {
+      return _ThinkingBubble(entry: entry);
+    }
     if (entry.isUser) {
       return Align(
         alignment: Alignment.centerRight,
@@ -930,11 +1093,11 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
                   ),
                 ],
               ),
-              if (entry.tokensPerSecond != null)
+              if (_tokenCaption(entry) != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
                   child: Text(
-                    '${entry.tokensPerSecond!.toStringAsFixed(1)} tokens/s',
+                    _tokenCaption(entry)!,
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: theme.colorScheme.outline),
                   ),
@@ -948,6 +1111,26 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Locks along with the rest of the app (2026-09-10 user report: the app
+    // locked itself in the background while this dialog was open, but the
+    // dialog stayed fully usable, showing real financial data straight
+    // through the lock screen) - for the exact same structural reason
+    // SelectionArea needed its own copy just below: `showDialog` pushes
+    // this dialog as a *separate* route on the app's outermost Navigator
+    // (app.dart's `_PinGate`), a sibling of - not a descendant of -
+    // `_GateContent`'s conditional PIN-screen/real-app switch, so locking
+    // never reaches a route already pushed on top of it. Checked here
+    // instead, on every rebuild PinLockProvider's own status change
+    // triggers. Deliberately returns a *replacement* build (never pops
+    // this dialog) - the whole point is that every field/message already
+    // typed/received is still here, untouched, the moment the real PIN
+    // screen unlocks and this rebuilds again with `pinLock.status` back to
+    // unlocked/none.
+    final pinLock = context.watch<PinLockProvider>();
+    if (pinLock.status != PinGateStatus.unlocked &&
+        pinLock.status != PinGateStatus.none) {
+      return const _LockedDialogBody();
+    }
     // A bare Dialog doesn't reliably pick up the app's dark surface color on
     // its own - paint it explicitly, same fix as category_spend_analyzer.dart.
     //
@@ -959,180 +1142,355 @@ class _NlQueryDialogState extends State<NlQueryDialog> {
     // so SelectionArea (which propagates via the widget tree, not shared
     // Overlay/Navigator membership) needs its own instance in every such
     // route to make its own text selectable.
+    // Its own ScaffoldMessenger (2026-09-10 user report: "fait en sorte
+    // que la fenêtre ne se superpose pas aux messages en bas" - a SnackBar
+    // shown via ScaffoldMessenger.of(context) was bubbling all the way up
+    // to the app's own root Scaffold (home_shell.dart), which sits behind
+    // this dialog and spans the *whole window* - so the SnackBar rendered
+    // at the bottom of the entire screen instead of the bottom of this
+    // dialog's own (smaller, inset) bounds, overlapping the question field
+    // in a way that looked broken rather than like a normal SnackBar. A
+    // fresh ScaffoldMessenger here means every `ScaffoldMessenger.of(context)`
+    // call from *this* dialog's own descendants (copy/print/export
+    // confirmations) finds this local one first and gets positioned
+    // relative to the dialog's own [Scaffold] instead.
     return SelectionArea(
-      child: Material(
-        color: Theme.of(context).colorScheme.surface,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text.rich(
-                      TextSpan(
-                        text: 'Discuter avec mes finances',
-                        style: Theme.of(context).textTheme.titleLarge,
-                        children: _modelLabel == null
-                            ? null
-                            : [
-                                TextSpan(
-                                  text: ' ($_modelLabel)',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleSmall
-                                      ?.copyWith(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .outline),
-                                ),
-                              ],
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (_messages.isNotEmpty)
-                    IconButton(
-                      tooltip: 'Nouvelle conversation',
-                      icon: const Icon(Icons.refresh),
-                      onPressed: _loading ? null : _clearConversation,
-                    ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-            ),
-            const Divider(height: 1),
-            Expanded(
-              child: _messages.isEmpty
-                  ? SingleChildScrollView(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Exemples :',
-                              style: Theme.of(context).textTheme.labelLarge),
-                          const SizedBox(height: 8),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              for (final example in _examples)
-                                ActionChip(
-                                  label: Text(example),
-                                  onPressed:
-                                      _loading ? null : () => _ask(example),
-                                ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(20),
-                      itemCount: _messages.length,
-                      itemBuilder: (context, index) =>
-                          _buildBubble(context, _messages[index]),
-                    ),
-            ),
-            if (_loading)
+      child: ScaffoldMessenger(
+        child: Scaffold(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          body: Column(
+            children: [
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                padding: const EdgeInsets.fromLTRB(20, 16, 8, 0),
                 child: Row(
                   children: [
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    const SizedBox(width: 12),
                     Expanded(
-                      child: Text('Réflexion en cours...',
-                          style: Theme.of(context).textTheme.bodySmall),
-                    ),
-                    TextButton.icon(
-                      onPressed: _cancelAsk,
-                      icon: const Icon(Icons.stop_circle_outlined, size: 16),
-                      label: const Text('Interrompre'),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      child: Text.rich(
+                        TextSpan(
+                          text: 'Discuter avec mes finances',
+                          style: Theme.of(context).textTheme.titleLarge,
+                          children: _modelLabel == null
+                              ? null
+                              : [
+                                  TextSpan(
+                                    text: ' ($_modelLabel)',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall
+                                        ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .outline),
+                                  ),
+                                ],
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
+                    ),
+                    if (_messages.isNotEmpty)
+                      IconButton(
+                        tooltip: 'Nouvelle conversation',
+                        icon: const Icon(Icons.refresh),
+                        onPressed: _loading ? null : _clearConversation,
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
                     ),
                   ],
                 ),
               ),
-            if (_speechError != null)
+              if (isLocalLlmSupported)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  child: Row(
+                    children: [
+                      Tooltip(
+                        message: 'Nombre maximum de tokens que le modèle peut '
+                            'utiliser pour chaque étape - à augmenter si les '
+                            'réponses s\'arrêtent net sans avoir rien dit (un '
+                            'modèle "thinking" qui épuise ce budget en '
+                            'réfléchissant avant de répondre). Même réglage '
+                            'que dans Paramètres.',
+                        child: Icon(Icons.psychology_outlined,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.outline),
+                      ),
+                      Expanded(
+                        child: Slider(
+                          value: _maxTokens.toDouble(),
+                          min: 512,
+                          max: 16384,
+                          divisions: 31,
+                          label: '$_maxTokens tokens',
+                          onChanged: (value) =>
+                              setState(() => _maxTokens = value.round()),
+                          onChangeEnd: (value) =>
+                              setLlmMaxTokens(value.round()),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 48,
+                        child: Text('$_maxTokens',
+                            textAlign: TextAlign.end,
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 1),
+              Expanded(
+                child: _messages.isEmpty
+                    ? SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Exemples :',
+                                style: Theme.of(context).textTheme.labelLarge),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final example in _examples)
+                                  ActionChip(
+                                    label: Text(example),
+                                    onPressed:
+                                        _loading ? null : () => _ask(example),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.all(20),
+                        itemCount: _messages.length,
+                        itemBuilder: (context, index) =>
+                            _buildBubble(context, _messages[index]),
+                      ),
+              ),
+              if (_loading)
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  child: Row(
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text('Réflexion en cours...',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ),
+                      TextButton.icon(
+                        onPressed: _cancelAsk,
+                        icon: const Icon(Icons.stop_circle_outlined, size: 16),
+                        label: const Text('Interrompre'),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (_speechError != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+                  child: Text(
+                    _speechError!,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.error),
+                  ),
+                ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
-                child: Text(
-                  _speechError!,
-                  style: TextStyle(
-                      fontSize: 12, color: Theme.of(context).colorScheme.error),
+                padding: EdgeInsets.fromLTRB(
+                    20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        focusNode: _questionFocusNode,
+                        decoration: const InputDecoration(
+                          labelText: 'Ta question',
+                          hintText:
+                              'ex : quelles ont été mes dépenses en juillet ?',
+                          border: OutlineInputBorder(),
+                        ),
+                        minLines: 1,
+                        maxLines: 5,
+                        textInputAction: TextInputAction.send,
+                        enabled: !_loading,
+                        onSubmitted: _ask,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      key: const Key('nlQueryMicButton'),
+                      tooltip: _userWantsListening
+                          ? 'Arrêter la dictée'
+                          : 'Dicter la question',
+                      onPressed: _loading ? null : _toggleListening,
+                      // Driven by _userWantsListening, not _listening - the
+                      // brief gap between an auto-restarted segment ending
+                      // and the next one starting (see _toggleListening's own
+                      // doc comment) must never blink the mic off, since
+                      // dictation is still conceptually ongoing.
+                      icon: Icon(
+                          _userWantsListening ? Icons.mic : Icons.mic_none),
+                      style: _userWantsListening
+                          ? IconButton.styleFrom(
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.error,
+                              foregroundColor:
+                                  Theme.of(context).colorScheme.onError,
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      key: const Key('nlQuerySendButton'),
+                      onPressed: _loading ? null : () => _ask(_controller.text),
+                      icon: _loading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.send),
+                    ),
+                  ],
                 ),
               ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                  20, 8, 20, 12 + MediaQuery.of(context).padding.bottom),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: _questionFocusNode,
-                      decoration: const InputDecoration(
-                        labelText: 'Ta question',
-                        hintText:
-                            'ex : quelles ont été mes dépenses en juillet ?',
-                        border: OutlineInputBorder(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One live "thinking" step (2026-09-10 user request) - collapsible,
+/// expanded by default (explicit user choice: "pliable/dépliable, déplié
+/// par défaut"), title is [_ChatEntry.phaseLabel] plus a small spinner
+/// while [_ChatEntry.isDone] is still false, body is the growing
+/// [_ChatEntry.text] itself. [ObjectKey] on the outer [ExpansionTile] -
+/// not the list index - so Flutter keeps tracking *this* entry's own
+/// expanded/collapsed state (if the user toggled it) across every rebuild
+/// a new chunk triggers, rather than resetting it each time.
+/// Replaces [NlQueryDialog]'s whole visible content while the app is
+/// locked (2026-09-10 user request) - see [_NlQueryDialogState.build]'s own
+/// doc comment for why this dialog needs to check that itself rather than
+/// automatically inheriting the app-wide PIN gate. Same dark [Material]
+/// background as the real dialog content (so this doesn't flash a
+/// different color while swapped in).
+///
+/// Embeds the real [PinUnlockForm] directly (2026-09-10, same day - first
+/// version showed a static "Application verrouillée" message with no way to
+/// act on it from here, so the only way to actually unlock was to tap
+/// outside the dialog's own modal barrier to dismiss it and reach the app's
+/// separate [PinUnlockScreen] underneath - which, being a *dismiss*, popped
+/// this dialog's route and destroyed its whole conversation right as the
+/// user unlocked, the exact state loss this whole fix exists to prevent;
+/// confirmed live by the user: "une fois dévérouiller la fenêtre de
+/// question a été fermée du fait que j'ai du cliquer hors de la fenêtre").
+/// [PinUnlockForm.verify] acts directly on the one shared [PinLockProvider]
+/// instance, so entering the code here unlocks the whole app too - no
+/// barrier tap, no route change, nothing to dismiss.
+class _LockedDialogBody extends StatelessWidget {
+  const _LockedDialogBody();
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: const Padding(
+            padding: EdgeInsets.all(24),
+            child: PinUnlockForm(),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ThinkingBubble extends StatelessWidget {
+  final _ChatEntry entry;
+
+  const _ThinkingBubble({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.85),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: ObjectKey(entry),
+              initiallyExpanded: true,
+              dense: true,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              leading: entry.isDone
+                  ? Icon(Icons.psychology_outlined,
+                      size: 18, color: theme.colorScheme.outline)
+                  : SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.outline,
                       ),
-                      minLines: 1,
-                      maxLines: 5,
-                      textInputAction: TextInputAction.send,
-                      enabled: !_loading,
-                      onSubmitted: _ask,
+                    ),
+              title: Text(
+                entry.phaseLabel ?? '',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    entry.text.isEmpty ? '...' : entry.text,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    key: const Key('nlQueryMicButton'),
-                    tooltip: _userWantsListening ? 'Arrêter la dictée' : 'Dicter la question',
-                    onPressed: _loading ? null : _toggleListening,
-                    // Driven by _userWantsListening, not _listening - the
-                    // brief gap between an auto-restarted segment ending
-                    // and the next one starting (see _toggleListening's own
-                    // doc comment) must never blink the mic off, since
-                    // dictation is still conceptually ongoing.
-                    icon: Icon(_userWantsListening ? Icons.mic : Icons.mic_none),
-                    style: _userWantsListening
-                        ? IconButton.styleFrom(
-                            backgroundColor: Theme.of(context).colorScheme.error,
-                            foregroundColor: Theme.of(context).colorScheme.onError,
-                          )
-                        : null,
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton.filled(
-                    key: const Key('nlQuerySendButton'),
-                    onPressed: _loading ? null : () => _ask(_controller.text),
-                    icon: _loading
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.send),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

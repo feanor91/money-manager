@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'llm_engine.dart';
+import 'think_tag_splitter.dart';
 
 /// Only ever imported from local_llm_manager_io.dart, itself only reached
 /// after that file's own `Platform.isWindows` gate - see CLAUDE.md's
@@ -149,6 +150,9 @@ class LlamaServerClient implements LlmEngine {
 
   final http.Client _client;
 
+  @override
+  int maxTokens = 2048;
+
   LlamaServerClient(this.port, {this.host = '127.0.0.1', this.apiKey})
       : _client = http.Client();
 
@@ -219,7 +223,130 @@ class LlamaServerClient implements LlmEngine {
     final tps = (tokens != null && tokens > 0 && elapsedMs > 0)
         ? tokens / (elapsedMs / 1000)
         : null;
-    return LlmResponse(text, tokensPerSecond: tps);
+    // completionTokens only - llama.cpp's own /completion API has no
+    // concept of a separate reasoning-token count the way some OpenAI-
+    // compatible cloud providers do (see LlmResponse.reasoningTokens).
+    return LlmResponse(text, tokensPerSecond: tps, completionTokens: tokens);
+  }
+
+  /// Shared by all four `ask*` methods below - builds the right `/completion`
+  /// request body and either awaits it whole ([onChunk] null) or streams it
+  /// ([onChunk] given - see [LlmEngine.ask]'s own doc comment).
+  Future<LlmResponse> _complete({
+    required String prompt,
+    required double temperature,
+    String? grammar,
+    LlmChunkCallback? onChunk,
+  }) {
+    return onChunk == null
+        ? _completeOnce(prompt: prompt, temperature: temperature, grammar: grammar)
+        : _completeStreamed(
+            prompt: prompt, temperature: temperature, grammar: grammar, onChunk: onChunk);
+  }
+
+  Map<String, Object?> _requestBody({
+    required String prompt,
+    required double temperature,
+    required String? grammar,
+    required bool stream,
+  }) =>
+      {
+        'prompt': prompt,
+        if (grammar != null) 'grammar': grammar,
+        'temperature': temperature,
+        'n_predict': maxTokens,
+        'stop': ['<|im_end|>'],
+        'stream': stream,
+      };
+
+  Future<LlmResponse> _completeOnce({
+    required String prompt,
+    required double temperature,
+    required String? grammar,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final response = await _client.post(
+      Uri.parse('http://$host:$port/completion'),
+      headers: _headers,
+      body: jsonEncode(_requestBody(
+        prompt: prompt,
+        temperature: temperature,
+        grammar: grammar,
+        stream: false,
+      )),
+    );
+    stopwatch.stop();
+    if (response.statusCode != 200) {
+      throw StateError('llama-server a répondu ${response.statusCode}.');
+    }
+    return _parseResponse(response, stopwatch.elapsedMilliseconds);
+  }
+
+  /// llama.cpp's own `/completion` SSE shape: repeated `data: {...}\n\n`
+  /// lines, each carrying just the newly-generated `content` fragment (not
+  /// cumulative, unlike some providers), the last one flagged `"stop":
+  /// true` and (only there) including the real `tokens_predicted` count.
+  /// No structured reasoning field the way OpenRouter can have - a local
+  /// model's own chain-of-thought, if any, only ever shows up inline as
+  /// `<think>` tags in the plain `content` stream itself, so every chunk
+  /// goes through [ThinkTagSplitter] unconditionally.
+  Future<LlmResponse> _completeStreamed({
+    required String prompt,
+    required double temperature,
+    required String? grammar,
+    required LlmChunkCallback onChunk,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final request = http.Request('POST', Uri.parse('http://$host:$port/completion'))
+      ..headers.addAll(_headers)
+      ..body = jsonEncode(_requestBody(
+        prompt: prompt,
+        temperature: temperature,
+        grammar: grammar,
+        stream: true,
+      ));
+    final streamed = await _client.send(request);
+    if (streamed.statusCode != 200) {
+      throw StateError('llama-server a répondu ${streamed.statusCode}.');
+    }
+    final answerBuffer = StringBuffer();
+    final splitter = ThinkTagSplitter();
+    int? tokensPredicted;
+    await for (final line
+        in streamed.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+      if (!line.startsWith('data:')) continue;
+      final payload = line.substring(5).trim();
+      if (payload.isEmpty) continue;
+      final Map<String, dynamic> chunk;
+      try {
+        chunk = jsonDecode(payload) as Map<String, dynamic>;
+      } catch (_) {
+        continue; // a malformed/partial SSE line - skip rather than crash
+      }
+      final contentDelta = chunk['content'] as String?;
+      if (contentDelta != null && contentDelta.isNotEmpty) {
+        for (final (text, isReasoning) in splitter.feed(contentDelta)) {
+          if (!isReasoning) answerBuffer.write(text);
+          onChunk(text, isReasoning);
+        }
+      }
+      if (chunk['stop'] == true) {
+        tokensPredicted = chunk['tokens_predicted'] as int?;
+        break;
+      }
+    }
+    for (final (text, isReasoning) in splitter.finish()) {
+      if (!isReasoning) answerBuffer.write(text);
+      onChunk(text, isReasoning);
+    }
+    stopwatch.stop();
+    final elapsedMs = stopwatch.elapsedMilliseconds;
+    final tokens = tokensPredicted;
+    final tps = (tokens != null && tokens > 0 && elapsedMs > 0)
+        ? tokens / (elapsedMs / 1000)
+        : null;
+    return LlmResponse(answerBuffer.toString(),
+        tokensPerSecond: tps, completionTokens: tokens);
   }
 
   /// Runs a single, stateless question through the model (this app never
@@ -229,56 +356,27 @@ class LlamaServerClient implements LlmEngine {
   /// (local_llm_manager_io.dart) is responsible for that and falling back
   /// to the rule-based parser.
   @override
-  Future<LlmResponse> ask(String question) async {
-    final stopwatch = Stopwatch()..start();
-    final response = await _client.post(
-      Uri.parse('http://$host:$port/completion'),
-      headers: _headers,
-      body: jsonEncode({
-        'prompt': chatMlPrompt(question),
-        'grammar': jsonGrammar,
-        'temperature': 0.1,
-        'n_predict': 256,
-        'stop': ['<|im_end|>'],
-        'stream': false,
-      }),
-    );
-    stopwatch.stop();
-    if (response.statusCode != 200) {
-      throw StateError('llama-server a répondu ${response.statusCode}.');
-    }
-    return _parseResponse(response, stopwatch.elapsedMilliseconds);
-  }
+  Future<LlmResponse> ask(String question, {LlmChunkCallback? onChunk}) => _complete(
+        prompt: chatMlPrompt(question),
+        grammar: jsonGrammar,
+        temperature: 0.1,
+        onChunk: onChunk,
+      );
 
   /// Same shape as [ask], but no JSON grammar and a plain conversational
   /// system prompt instead of the intent-extraction one - used only once
   /// nl_query_dialog.dart has already established the question matches no
   /// recognized financial-question shape (see [chatMlPrompt]/[jsonGrammar]),
   /// so there is nothing left to lose by letting the model just answer in
-  /// prose instead of returning "je n'ai pas compris". A higher
-  /// [n_predict]/temperature than [ask] on purpose: that one wants a short,
-  /// deterministic JSON object, this one wants a normal, natural-sounding
-  /// reply.
+  /// prose instead of returning "je n'ai pas compris". A higher temperature
+  /// than [ask] on purpose: that one wants a short, deterministic JSON
+  /// object, this one wants a normal, natural-sounding reply.
   @override
-  Future<LlmResponse> askFreeform(String question) async {
-    final stopwatch = Stopwatch()..start();
-    final response = await _client.post(
-      Uri.parse('http://$host:$port/completion'),
-      headers: _headers,
-      body: jsonEncode({
-        'prompt': freeformChatMlPrompt(question),
-        'temperature': 0.7,
-        'n_predict': 512,
-        'stop': ['<|im_end|>'],
-        'stream': false,
-      }),
-    );
-    stopwatch.stop();
-    if (response.statusCode != 200) {
-      throw StateError('llama-server a répondu ${response.statusCode}.');
-    }
-    return _parseResponse(response, stopwatch.elapsedMilliseconds);
-  }
+  Future<LlmResponse> askFreeform(String question, {LlmChunkCallback? onChunk}) => _complete(
+        prompt: freeformChatMlPrompt(question),
+        temperature: 0.7,
+        onChunk: onChunk,
+      );
 
   /// Same shape as [ask] (JSON-grammar-constrained, low temperature - a
   /// structured, deterministic response is the goal), but with a
@@ -286,31 +384,16 @@ class LlamaServerClient implements LlmEngine {
   /// one - backs the full-database-access SQL query mode
   /// (sql_query_engine.dart's `answerViaFullSqlAccess`), whose system
   /// prompt is a user-editable Settings value, not a constant this class
-  /// can hardcode. Higher [n_predict] than [ask]: a SQL query with several
-  /// JOINs/CASE expressions - or a whole multi-step plan object with
-  /// several such queries - genuinely needs more tokens than a short
-  /// intent JSON object does.
+  /// can hardcode.
   @override
-  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question) async {
-    final stopwatch = Stopwatch()..start();
-    final response = await _client.post(
-      Uri.parse('http://$host:$port/completion'),
-      headers: _headers,
-      body: jsonEncode({
-        'prompt': chatMlPromptWithSystem(systemPrompt, question),
-        'grammar': jsonGrammar,
-        'temperature': 0.1,
-        'n_predict': 1024,
-        'stop': ['<|im_end|>'],
-        'stream': false,
-      }),
-    );
-    stopwatch.stop();
-    if (response.statusCode != 200) {
-      throw StateError('llama-server a répondu ${response.statusCode}.');
-    }
-    return _parseResponse(response, stopwatch.elapsedMilliseconds);
-  }
+  Future<LlmResponse> askWithSystemPrompt(String systemPrompt, String question,
+          {LlmChunkCallback? onChunk}) =>
+      _complete(
+        prompt: chatMlPromptWithSystem(systemPrompt, question),
+        grammar: jsonGrammar,
+        temperature: 0.1,
+        onChunk: onChunk,
+      );
 
   /// Same shape as [askFreeform] (no grammar, prose out), but with a
   /// caller-supplied [systemPrompt] - the second step of the
@@ -318,35 +401,15 @@ class LlamaServerClient implements LlmEngine {
   /// answer in the query's real result rows (see
   /// sql_query_engine.dart's `answerViaFullSqlAccess`). Lower temperature
   /// than [askFreeform] on purpose: this is meant to faithfully paraphrase
-  /// real data, not converse freely. Higher [n_predict] than the old
-  /// fixed "one or two sentences" answer: in report mode (see
-  /// sql_query_engine.dart's `buildAnswerFormattingPrompt`) the answer is
-  /// a structured, multi-section breakdown that a few hundred tokens
-  /// would cut off mid-sentence. Raised again 2026-08-23 (user request: no
-  /// artificial length limit on an exhaustive multi-year analysis) - 4096
-  /// is not literally unlimited, but comfortably past what any real answer
-  /// this app asks for needs, and still leaves headroom in the model's
-  /// context window alongside the prompt/vocabulary/query results.
+  /// real data, not converse freely.
   @override
-  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question) async {
-    final stopwatch = Stopwatch()..start();
-    final response = await _client.post(
-      Uri.parse('http://$host:$port/completion'),
-      headers: _headers,
-      body: jsonEncode({
-        'prompt': chatMlPromptWithSystem(systemPrompt, question),
-        'temperature': 0.2,
-        'n_predict': 4096,
-        'stop': ['<|im_end|>'],
-        'stream': false,
-      }),
-    );
-    stopwatch.stop();
-    if (response.statusCode != 200) {
-      throw StateError('llama-server a répondu ${response.statusCode}.');
-    }
-    return _parseResponse(response, stopwatch.elapsedMilliseconds);
-  }
+  Future<LlmResponse> askFreeformWithSystemPrompt(String systemPrompt, String question,
+          {LlmChunkCallback? onChunk}) =>
+      _complete(
+        prompt: chatMlPromptWithSystem(systemPrompt, question),
+        temperature: 0.2,
+        onChunk: onChunk,
+      );
 
   @override
   void close() => _client.close();
