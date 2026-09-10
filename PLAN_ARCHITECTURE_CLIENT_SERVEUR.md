@@ -1,13 +1,62 @@
 # Plan : passage à une architecture client/serveur avec API
 
-Document de planification, pas un engagement - voir ROADMAP.md. Version à
-jour du 10/09/2026 ; toutes les décisions structurantes ont été tranchées
-avec l'utilisateur, reste le chiffrage (ci-dessous) avant de commencer quoi
-que ce soit.
+Document de planification - voir ROADMAP.md. Version à jour du 10/09/2026 ;
+toutes les décisions structurantes ont été tranchées, le chiffrage fait, et
+les étapes 1 à 3 sont **en cours d'implémentation réelle** sur la branche
+`client-serveur` (voir "Statut d'avancement" ci-dessous).
 
 Une version illustrée de ce document (diagrammes, mise en page) a été
 publiée en artifact Claude - celui-ci en est la version texte, gardée dans
 le repo pour ne pas la perdre.
+
+## Statut d'avancement (mis à jour au fil du chantier)
+
+- ✅ **Étape 1 - Interface Repository** : `MmexRepository` et les modèles
+  extraits dans `packages/money_manager_core/`, paquet Dart pur. `flutter
+  analyze`/`flutter test` (609 tests) et `flutter build web --release`
+  restent verts, aucun changement de comportement.
+- ✅ **Étape 2 - Serveur minimal** : `server/` (shelf + shelf_router),
+  une route de preuve de concept (`POST /rpc/getAccounts`), config de
+  démarrage par variables d'environnement (`MM_DB_PATH`/`MM_PORT`/
+  `MM_DEV_PIN`, jamais de vraie base par défaut). `dart test` (15 tests)
+  verts, plus une vérification manuelle réelle : serveur lancé en local
+  contre une base de développement jetable, cycle complet login → jeton →
+  requête RPC → vraies données, testé en curl et depuis l'appli Flutter
+  elle-même (voir étape 3 et `tool/verify_api_client.dart`).
+- ✅ **Étape 3 - Authentification serveur** : `PinAuthenticator` (même
+  principe que `PinLockProvider` - salt+hash, compteur de tentatives,
+  blocage 15 min) et `TokenStore` (jetons Bearer opaques, pas de JWT).
+  Un vrai bug trouvé et corrigé en écrivant les tests : le salt du PIN
+  était recalculé deux fois différemment dans le constructeur, cassant
+  toute vérification - jamais visible sans un test qui appelle réellement
+  `verify()`.
+- ✅ **Preuve de bout en bout côté client** : `lib/services/api/
+  api_client.dart` (client HTTP minimal) et `lib/screens/
+  api_debug_screen.dart` (écran de développement, accessible depuis
+  Paramètres → "Test API serveur (chantier)", à retirer avant tout
+  déploiement réel) - vérifiés contre un vrai serveur réellement lancé,
+  via `dart run tool/verify_api_client.dart` (`flutter test` bloque les
+  vraies requêtes HTTP par construction, donc pas testable comme un
+  widget test classique).
+- ⏳ **Étape 4 - Élargir écran par écran** (~12-18 sessions, le plus gros
+  morceau) : pas commencée. C'est le moment de faire un point avant de
+  s'y engager - voir "Prochaine décision" ci-dessous.
+- ⏳ **Étapes 5-6** (IA côté serveur, retrait de l'accès fichier direct) :
+  pas commencées.
+- 🚫 **Déploiement réel sur Excelsior** : non fait, et non faisable depuis
+  cet environnement - aucun accès SSH à Excelsior n'est disponible ici.
+  Toute la vérification ci-dessus s'est faite en local, sur une base de
+  développement jetable, jamais contre le vrai fichier Nextcloud ni un
+  vrai serveur en production.
+
+### Prochaine décision
+
+L'étape 4 (basculer chaque écran, ~12-18 sessions) est un chantier bien
+plus long que ce qui a été fait jusqu'ici et touche potentiellement
+l'expérience réelle de l'appli (async partout, indicateurs de
+chargement) - à démarrer consciemment, pas enchaîné automatiquement.
+Rien n'empêche de continuer dès que voulu ; ce point sert juste de
+repère avant de s'engager dans la partie la plus longue du plan.
 
 ## Où on en est aujourd'hui
 
