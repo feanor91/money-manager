@@ -198,6 +198,16 @@ Handler buildRouter({
     );
     return Response.ok(jsonEncode(totals.map((k, v) => MapEntry('$k', v))));
   });
+  rpcRouter.post('/lastSpendDatePerCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final dates = repo.lastSpendDatePerCategory(
+      DateTime.parse(body['start'] as String),
+      DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(
+        jsonEncode(dates.map((k, v) => MapEntry('$k', v.toIso8601String()))));
+  });
   rpcRouter.post('/categoriesUsedByAccount', (Request request) async {
     final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
     final ids = repo.categoriesUsedByAccount(body['accountId'] as int);
@@ -587,6 +597,30 @@ Handler buildRouter({
     final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
     repo.setIncomeTargetOverride(body['accountId'] as int, (body['amount'] as num).toDouble());
     return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/getIncomeTargetOverride', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final override = repo.getIncomeTargetOverride(body['accountId'] as int);
+    return Response.ok(jsonEncode({'override': override}));
+  });
+  rpcRouter.post('/clearIncomeTargetOverride', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.clearIncomeTargetOverride(body['accountId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/monthlyRecurringIncome', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final income = repo.monthlyRecurringIncome(accountId: body['accountId'] as int?);
+    return Response.ok(jsonEncode({'income': income}));
+  });
+  rpcRouter.post('/incomeCategoryTotalsForPeriod', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.incomeCategoryTotalsForPeriod(
+      DateTime.parse(body['start'] as String),
+      DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode({'totals': totals.map((k, v) => MapEntry('$k', v))}));
   });
   rpcRouter.post('/resetBudgetEnvelopes', (Request request) async {
     final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;

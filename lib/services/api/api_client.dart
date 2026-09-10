@@ -228,6 +228,16 @@ class ApiClient {
     return json.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
   }
 
+  Future<Map<int, DateTime>> lastSpendDatePerCategory(DateTime start, DateTime end,
+      {int? accountId}) async {
+    final json = await _rpc('lastSpendDatePerCategory', body: {
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(int.parse(k), DateTime.parse(v as String)));
+  }
+
   Future<Set<int>> categoriesUsedByAccount(int accountId) async {
     final json = await _rpc('categoriesUsedByAccount', body: {'accountId': accountId}) as List;
     return json.cast<int>().toSet();
@@ -589,6 +599,32 @@ class ApiClient {
 
   Future<void> setIncomeTargetOverride(int accountId, double amount) =>
       _rpc('setIncomeTargetOverride', body: {'accountId': accountId, 'amount': amount});
+
+  Future<double?> getIncomeTargetOverride(int accountId) async {
+    final json = await _rpc('getIncomeTargetOverride', body: {'accountId': accountId});
+    final override = (json as Map<String, dynamic>)['override'];
+    return override == null ? null : (override as num).toDouble();
+  }
+
+  Future<void> clearIncomeTargetOverride(int accountId) =>
+      _rpc('clearIncomeTargetOverride', body: {'accountId': accountId});
+
+  Future<double> monthlyRecurringIncome({int? accountId}) async {
+    final json = await _rpc('monthlyRecurringIncome',
+        body: {if (accountId != null) 'accountId': accountId});
+    return ((json as Map<String, dynamic>)['income'] as num).toDouble();
+  }
+
+  Future<Map<int, double>> incomeCategoryTotalsForPeriod(DateTime start, DateTime end,
+      {int? accountId}) async {
+    final json = await _rpc('incomeCategoryTotalsForPeriod', body: {
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+    });
+    final totals = (json as Map<String, dynamic>)['totals'] as Map<String, dynamic>;
+    return totals.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+  }
 
   Future<void> resetBudgetEnvelopes(int accountId) =>
       _rpc('resetBudgetEnvelopes', body: {'accountId': accountId});

@@ -999,6 +999,85 @@ void main() {
       expect(repo.expectedIncomeForBudget(accountId), 3000.0);
     });
 
+    test('POST /rpc/getIncomeTargetOverride returns the real override', () async {
+      final token = tokenStore.issue();
+      repo.setIncomeTargetOverride(accountId, 2500.0);
+      final response = await router(
+          post('/rpc/getIncomeTargetOverride', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['override'], 2500.0);
+    });
+
+    test('POST /rpc/getIncomeTargetOverride returns null when unset', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/getIncomeTargetOverride', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['override'], isNull);
+    });
+
+    test('POST /rpc/clearIncomeTargetOverride removes the real override', () async {
+      final token = tokenStore.issue();
+      repo.setIncomeTargetOverride(accountId, 2500.0);
+      final response = await router(
+          post('/rpc/clearIncomeTargetOverride', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      expect(repo.getIncomeTargetOverride(accountId), isNull);
+    });
+
+    test('POST /rpc/monthlyRecurringIncome reflects a real recurring deposit', () async {
+      final token = tokenStore.issue();
+      repo.insertBillDeposit(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.deposit,
+        amount: 1500,
+        nextOccurrence: DateTime(2026, 4, 1),
+        period: RecurrencePeriod.monthly,
+        autoExecute: RecurrenceAutoExecute.manual,
+      );
+      final response = await router(
+          post('/rpc/monthlyRecurringIncome', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['income'], 1500.0);
+    });
+
+    test('POST /rpc/incomeCategoryTotalsForPeriod reflects a real deposit', () async {
+      final token = tokenStore.issue();
+      repo.insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.deposit,
+        amount: 900,
+        date: DateTime(2026, 3, 20),
+        categoryId: categoryId,
+      );
+      final response = await router(post('/rpc/incomeCategoryTotalsForPeriod', token: token, body: {
+        'start': '2026-03-01T00:00:00.000',
+        'end': '2026-04-01T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final totals = json['totals'] as Map<String, dynamic>;
+      expect(totals['$categoryId'], 900.0);
+    });
+
+    test('POST /rpc/lastSpendDatePerCategory reflects the real transaction from setUp', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/lastSpendDatePerCategory', token: token, body: {
+        'start': '2026-01-01T00:00:00.000',
+        'end': '2026-12-31T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['$categoryId'], '2026-03-15T00:00:00.000');
+    });
+
     test('POST /rpc/resetBudgetEnvelopes removes every envelope for the account', () async {
       final token = tokenStore.issue();
       repo.upsertBudgetEnvelope(accountId: accountId, categoryId: categoryId, amount: 100);

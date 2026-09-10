@@ -8,6 +8,7 @@ import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/budget_period.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
@@ -16,6 +17,7 @@ import '../theme/app_theme.dart';
 import '../widgets/category_spend_analyzer.dart';
 import '../widgets/envelope_gauge.dart';
 import '../widgets/hover_tooltip.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import '../widgets/transaction_entry_flow.dart';
@@ -116,13 +118,20 @@ class _EnvelopeItem {
 }
 
 /// Données brutes de la vue "enveloppes" (étape 4, uniquement cette vue -
-/// le simulateur "what if" reste entièrement local, voir
+/// le simulateur "what if" reste entièrement local pour ses propres
+/// écritures/lectures spécifiques - scénarios, montants simulés - voir
 /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md et rpc_router.dart pour le détail
-/// de cette décision de périmètre). [categories]/[categoriesById] restent
-/// hors de ce paquet, toujours chargées localement dans build() - le mode
-/// simulateur en a besoin de façon synchrone, et l'écran Catégories a déjà
-/// sa propre bascule API indépendante.
+/// de cette décision de périmètre). [categories] vient aussi du serveur en
+/// mode API (2026-09-10, même correctif que les autres champs ci-dessous -
+/// une simple liste en lecture, rien n'empêche de la partager avec le mode
+/// simulateur qui la reçoit telle quelle).
 class _BudgetData {
+  final CurrencyFormat? currency;
+  final List<Account> accounts;
+  final List<Account> visibleAccounts;
+  final Map<int, Account> accountsById;
+  final int? accountId;
+  final List<Category> categories;
   final List<BudgetEnvelope> envelopes;
   final Map<int, double> recurringTotals;
   final Map<int, double> rawSpend;
@@ -131,6 +140,12 @@ class _BudgetData {
   final double expectedIncome;
 
   const _BudgetData({
+    required this.currency,
+    required this.accounts,
+    required this.visibleAccounts,
+    required this.accountsById,
+    required this.accountId,
+    required this.categories,
     required this.envelopes,
     required this.recurringTotals,
     required this.rawSpend,
@@ -165,11 +180,46 @@ class _BudgetScreenState extends State<BudgetScreen> {
 
   Future<_BudgetData>? _apiFuture;
   _BudgetData? _lastData;
-  ({int accountId, DateTime windowStart})? _apiFutureKey;
+  ({int? selectedAccountId, DateTime windowStart, int dataVersion})? _apiFutureKey;
 
-  _BudgetData _localData(MmexRepository repo, int accountId, BudgetWindow window) {
+  /// La liste des comptes elle-même vient aussi du serveur en mode API -
+  /// même raison que les autres écrans déjà migrés (voir dashboard_screen.
+  /// dart) : un fichier local vide/factice ne doit jamais être consulté
+  /// quand l'application est connectée (2026-09-10, trouvé via un plantage
+  /// au démarrage sur ACCOUNTLIST_V1/INFOTABLE_V1 absentes).
+  _BudgetData _localData(MmexRepository repo, DatabaseProvider dbProvider, BudgetWindow window) {
+    final accounts = repo.getAccounts();
+    final visibleAccounts = accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final accountId = visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
+        ? dbProvider.selectedAccountId
+        : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
+    final accountsById = {for (final a in accounts) a.id: a};
+    final currency = repo.getBaseCurrency();
+    final categories = repo.getCategories(onlyActive: false);
+    if (accountId == null) {
+      return _BudgetData(
+        currency: currency,
+        accounts: accounts,
+        visibleAccounts: visibleAccounts,
+        accountsById: accountsById,
+        accountId: null,
+        categories: categories,
+        envelopes: const [],
+        recurringTotals: const {},
+        rawSpend: const {},
+        usedCategoryIds: const {},
+        income: 0,
+        expectedIncome: 0,
+      );
+    }
     final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: accountId);
     return _BudgetData(
+      currency: currency,
+      accounts: accounts,
+      visibleAccounts: visibleAccounts,
+      accountsById: accountsById,
+      accountId: accountId,
+      categories: categories,
       envelopes: repo.getBudgetEnvelopes(accountId),
       recurringTotals: recurringTotals,
       // includeCategorizedTransfersAsExpense: true (2026-09-05 user request) -
@@ -184,19 +234,61 @@ class _BudgetScreenState extends State<BudgetScreen> {
   }
 
   /// Lecture seule - la modification d'une enveloppe, la suggestion
-  /// automatique, la réinitialisation du budget et tout le simulateur
-  /// continuent de passer par le dépôt local même en mode API, voir chaque
-  /// `repo.xxx` plus bas dans cette classe.
+  /// automatique et la réinitialisation du budget passent par l'API quand
+  /// elle est connectée (voir _openEnvelopeDetail/_addEnvelope/
+  /// _openSuggestions/_resetBudget), à l'exception du simulateur qui reste
+  /// entièrement local (scénarios/montants simulés - voir
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
   Future<_BudgetData> _loadViaApi(
-      ApiSessionProvider session, int accountId, BudgetWindow window) async {
-    final recurringTotals = await session.categoryMonthlyRecurringTotals(accountId: accountId);
-    final rawSpend = await session.categorySpendForPeriod(window.start, window.end,
-        accountId: accountId, includeCategorizedTransfersAsExpense: true);
-    final usedByAccount = await session.categoriesUsedByAccount(accountId);
-    final envelopes = await session.getBudgetEnvelopes(accountId);
-    final income = await session.incomeForPeriod(window.start, window.end, accountId: accountId);
-    final expectedIncome = await session.expectedIncomeForBudget(accountId);
+      ApiSessionProvider session, DatabaseProvider dbProvider, BudgetWindow window) async {
+    final results = await Future.wait(
+        [session.getAccounts(), session.getBaseCurrency(), session.getCategories(onlyActive: false)]);
+    final accounts = results[0] as List<Account>;
+    final currency = results[1] as CurrencyFormat?;
+    final categories = results[2] as List<Category>;
+    final visibleAccounts = accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final accountId = visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
+        ? dbProvider.selectedAccountId
+        : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
+    final accountsById = {for (final a in accounts) a.id: a};
+    if (accountId == null) {
+      return _BudgetData(
+        currency: currency,
+        accounts: accounts,
+        visibleAccounts: visibleAccounts,
+        accountsById: accountsById,
+        accountId: null,
+        categories: categories,
+        envelopes: const [],
+        recurringTotals: const {},
+        rawSpend: const {},
+        usedCategoryIds: const {},
+        income: 0,
+        expectedIncome: 0,
+      );
+    }
+    final dataResults = await Future.wait([
+      session.categoryMonthlyRecurringTotals(accountId: accountId),
+      session.categorySpendForPeriod(window.start, window.end,
+          accountId: accountId, includeCategorizedTransfersAsExpense: true),
+      session.categoriesUsedByAccount(accountId),
+      session.getBudgetEnvelopes(accountId),
+      session.incomeForPeriod(window.start, window.end, accountId: accountId),
+      session.expectedIncomeForBudget(accountId),
+    ]);
+    final recurringTotals = dataResults[0] as Map<int, double>;
+    final rawSpend = dataResults[1] as Map<int, double>;
+    final usedByAccount = dataResults[2] as Set<int>;
+    final envelopes = dataResults[3] as List<BudgetEnvelope>;
+    final income = dataResults[4] as double;
+    final expectedIncome = dataResults[5] as double;
     return _BudgetData(
+      currency: currency,
+      accounts: accounts,
+      visibleAccounts: visibleAccounts,
+      accountsById: accountsById,
+      accountId: accountId,
+      categories: categories,
       envelopes: envelopes,
       recurringTotals: recurringTotals,
       rawSpend: rawSpend,
@@ -206,10 +298,15 @@ class _BudgetScreenState extends State<BudgetScreen> {
     );
   }
 
-  void _refreshApi(ApiSessionProvider session, int accountId, BudgetWindow window) {
+  void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider, BudgetWindow window) {
+    session.bumpDataVersion();
     setState(() {
-      _apiFutureKey = (accountId: accountId, windowStart: window.start);
-      _apiFuture = _loadViaApi(session, accountId, window);
+      _apiFutureKey = (
+        selectedAccountId: dbProvider.selectedAccountId,
+        windowStart: window.start,
+        dataVersion: session.dataVersion,
+      );
+      _apiFuture = _loadViaApi(session, dbProvider, window);
     });
   }
 
@@ -342,35 +439,19 @@ class _BudgetScreenState extends State<BudgetScreen> {
     final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
     final sim = context.watch<PurchaseSimulationProvider>();
-    final currency = repo.getBaseCurrency();
     final startDay = dbProvider.forecastDay;
-
-    final accounts = repo.getAccounts();
-    final accountsById = {for (final a in accounts) a.id: a};
-    final visibleAccounts =
-        accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
-    // Same "always the same account as elsewhere in the app" rule as the
-    // Transactions screen - falls back to the first visible account if
-    // nothing (valid) is selected yet.
-    final accountId = visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
-        ? dbProvider.selectedAccountId
-        : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
 
     final window = budgetWindowContaining(_cursor, startDay);
 
-    // Toujours locales, y compris en mode API : le simulateur ("what if",
-    // voir _buildSimulationBody) en a besoin de façon synchrone, et l'écran
-    // Catégories a déjà sa propre bascule API indépendante pour cette même
-    // liste.
-    final categories = repo.getCategories(onlyActive: false);
-    final categoriesById = {for (final c in categories) c.id: c};
-    final activeCategories = categories.where((c) => c.active).toList();
-
-    if (apiSession.useApiForBudget && accountId != null) {
-      final key = (accountId: accountId, windowStart: window.start);
+    if (apiSession.useApiForBudget) {
+      final key = (
+        selectedAccountId: dbProvider.selectedAccountId,
+        windowStart: window.start,
+        dataVersion: apiSession.dataVersion,
+      );
       if (_apiFuture == null || _apiFutureKey != key) {
         _apiFutureKey = key;
-        _apiFuture = _loadViaApi(apiSession, accountId, window);
+        _apiFuture = _loadViaApi(apiSession, dbProvider, window);
       }
       return FutureBuilder<_BudgetData>(
         future: _apiFuture,
@@ -387,53 +468,48 @@ class _BudgetScreenState extends State<BudgetScreen> {
             }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          return _buildScaffold(
-            context: context,
-            dbProvider: dbProvider,
-            repo: repo,
-            sim: sim,
-            currency: currency,
-            startDay: startDay,
-            accountsById: accountsById,
-            visibleAccounts: visibleAccounts,
-            accountId: accountId,
-            window: window,
-            categories: categories,
-            categoriesById: categoriesById,
-            activeCategories: activeCategories,
-            data: _lastData!,
-            apiSession: apiSession,
-            apiRefresh: () => _refreshApi(apiSession, accountId, window),
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildScaffold(
+              context: context,
+              dbProvider: dbProvider,
+              repo: repo,
+              sim: sim,
+              currency: _lastData!.currency,
+              startDay: startDay,
+              accountsById: _lastData!.accountsById,
+              visibleAccounts: _lastData!.visibleAccounts,
+              accountId: _lastData!.accountId,
+              window: window,
+              categories: _lastData!.categories,
+              categoriesById: {for (final c in _lastData!.categories) c.id: c},
+              activeCategories: _lastData!.categories.where((c) => c.active).toList(),
+              data: _lastData!,
+              apiSession: apiSession,
+              apiRefresh: () => _refreshApi(apiSession, dbProvider, window),
+            ),
           );
         },
       );
     }
 
     _apiFuture = null;
+    final data = _localData(repo, dbProvider, window);
     return _buildScaffold(
       context: context,
       dbProvider: dbProvider,
       repo: repo,
       sim: sim,
-      currency: currency,
+      currency: data.currency,
       startDay: startDay,
-      accountsById: accountsById,
-      visibleAccounts: visibleAccounts,
-      accountId: accountId,
+      accountsById: data.accountsById,
+      visibleAccounts: data.visibleAccounts,
+      accountId: data.accountId,
       window: window,
-      categories: categories,
-      categoriesById: categoriesById,
-      activeCategories: activeCategories,
-      data: accountId == null
-          ? const _BudgetData(
-              envelopes: [],
-              recurringTotals: {},
-              rawSpend: {},
-              usedCategoryIds: {},
-              income: 0,
-              expectedIncome: 0,
-            )
-          : _localData(repo, accountId, window),
+      categories: data.categories,
+      categoriesById: {for (final c in data.categories) c.id: c},
+      activeCategories: data.categories.where((c) => c.active).toList(),
+      data: data,
     );
   }
 
@@ -1927,7 +2003,12 @@ const _suggestionHistoryMonths = 12;
 /// too, unless that child is in [excludeCategoryIds] (already budgeted
 /// with its own separate envelope, and so must not be double-counted into
 /// the parent's own recalculated amount).
-({double average, DateTime? lastSpend}) _historicalMonthlyAverage({
+/// [apiSession] non-null ET connecté : les requêtes passent par le serveur,
+/// une par mois envoyée en parallèle (Future.wait) plutôt qu'en séquence -
+/// même raison que le reste du chantier de performance (2026-09-10, voir
+/// dashboard_screen.dart/transactions_screen.dart) : [months] appels l'un
+/// après l'autre était particulièrement lent ici.
+Future<({double average, DateTime? lastSpend})> _historicalMonthlyAverage({
   required MmexRepository repo,
   required int categoryId,
   required int accountId,
@@ -1935,26 +2016,51 @@ const _suggestionHistoryMonths = 12;
   int months = _suggestionHistoryMonths,
   List<Category> categories = const [],
   Set<int> excludeCategoryIds = const {},
-}) {
-  var window = previousBudgetWindow(budgetWindowContaining(DateTime.now(), startDay), startDay);
-  var total = 0.0;
-  DateTime? earliestStart;
+  ApiSessionProvider? apiSession,
+}) async {
+  final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
   final relevantIds = {
     categoryId,
     for (final c in categories)
       if (c.parentId == categoryId && !excludeCategoryIds.contains(c.id)) c.id,
   };
+  final windows = <BudgetWindow>[];
+  var window = previousBudgetWindow(budgetWindowContaining(DateTime.now(), startDay), startDay);
   for (var i = 0; i < months; i++) {
-    final spend = repo.categorySpendForPeriod(window.start, window.end,
-        accountId: accountId, includeCategorizedTransfersAsExpense: true);
-    for (final id in relevantIds) {
-      total += spend[id] ?? 0;
-    }
-    earliestStart = window.start;
+    windows.add(window);
     window = previousBudgetWindow(window, startDay);
   }
-  final lastSpendByCategory =
-      earliestStart == null ? null : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId);
+  final earliestStart = windows.isEmpty ? null : windows.last.start;
+
+  var total = 0.0;
+  Map<int, DateTime>? lastSpendByCategory;
+  if (useApi) {
+    final spends = await Future.wait([
+      for (final w in windows)
+        apiSession.categorySpendForPeriod(w.start, w.end,
+            accountId: accountId, includeCategorizedTransfersAsExpense: true),
+    ]);
+    for (final spend in spends) {
+      for (final id in relevantIds) {
+        total += spend[id] ?? 0;
+      }
+    }
+    lastSpendByCategory = earliestStart == null
+        ? null
+        : await apiSession.lastSpendDatePerCategory(earliestStart, DateTime.now(),
+            accountId: accountId);
+  } else {
+    for (final w in windows) {
+      final spend = repo.categorySpendForPeriod(w.start, w.end,
+          accountId: accountId, includeCategorizedTransfersAsExpense: true);
+      for (final id in relevantIds) {
+        total += spend[id] ?? 0;
+      }
+    }
+    lastSpendByCategory = earliestStart == null
+        ? null
+        : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId);
+  }
   DateTime? lastSpend;
   if (lastSpendByCategory != null) {
     for (final id in relevantIds) {
@@ -1997,26 +2103,50 @@ Future<void> _openSuggestions({
   // Average real spend over the last few *closed* budget windows (not the
   // one still in progress, which is incomplete) - for categories with no
   // recurring bill of their own, this is the only other signal already
-  // sitting in the file worth suggesting from.
+  // sitting in the file worth suggesting from. En parallèle en mode API
+  // (Future.wait) plutôt qu'en séquence - même raison que
+  // _historicalMonthlyAverage ci-dessus (2026-09-10).
+  final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
+  final windows = <BudgetWindow>[];
   var window = previousBudgetWindow(budgetWindowContaining(DateTime.now(), startDay), startDay);
-  final historyTotals = <int, double>{};
-  DateTime? earliestStart;
   for (var i = 0; i < _suggestionHistoryMonths; i++) {
-    final spend = repo.categorySpendForPeriod(window.start, window.end,
-        accountId: accountId, includeCategorizedTransfersAsExpense: true);
-    spend.forEach((categoryId, amount) {
-      historyTotals[categoryId] = (historyTotals[categoryId] ?? 0) + amount;
-    });
-    earliestStart = window.start;
+    windows.add(window);
     window = previousBudgetWindow(window, startDay);
+  }
+  final earliestStart = windows.isEmpty ? null : windows.last.start;
+  final historyTotals = <int, double>{};
+  final Map<int, DateTime> lastSpendDates;
+  if (useApi) {
+    final spends = await Future.wait([
+      for (final w in windows)
+        apiSession.categorySpendForPeriod(w.start, w.end,
+            accountId: accountId, includeCategorizedTransfersAsExpense: true),
+    ]);
+    for (final spend in spends) {
+      spend.forEach((categoryId, amount) {
+        historyTotals[categoryId] = (historyTotals[categoryId] ?? 0) + amount;
+      });
+    }
+    lastSpendDates = earliestStart == null
+        ? <int, DateTime>{}
+        : await apiSession.lastSpendDatePerCategory(earliestStart, DateTime.now(),
+            accountId: accountId);
+  } else {
+    for (final w in windows) {
+      final spend = repo.categorySpendForPeriod(w.start, w.end,
+          accountId: accountId, includeCategorizedTransfersAsExpense: true);
+      spend.forEach((categoryId, amount) {
+        historyTotals[categoryId] = (historyTotals[categoryId] ?? 0) + amount;
+      });
+    }
+    lastSpendDates = earliestStart == null
+        ? <int, DateTime>{}
+        : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId);
   }
   // Flags a history-based suggestion whose category hasn't actually had a
   // transaction in the last ~3 months - the 1-year average can still be
   // non-zero from something that happened 8 months ago and never again,
   // which isn't a great basis for an ongoing monthly budget.
-  final lastSpendDates = earliestStart == null
-      ? <int, DateTime>{}
-      : repo.lastSpendDatePerCategory(earliestStart, DateTime.now(), accountId: accountId);
   final staleThreshold = DateTime.now().subtract(const Duration(days: 90));
   for (final entry in historyTotals.entries) {
     if (existingCategoryIds.contains(entry.key)) continue;
@@ -2099,6 +2229,7 @@ Future<void> _openSuggestions({
       .where((g) => !(groups[g]!.length == 1 && groups[g]!.first.category.id == g))
       .toSet();
 
+  if (!context.mounted) return;
   bool? confirmed;
   try {
     confirmed = await showDialog<bool>(
@@ -2355,7 +2486,6 @@ Future<void> _openSuggestions({
   }
 
   if (confirmed != true || !context.mounted) return;
-  final useApi = apiSession != null && apiSession.useApiForBudget && apiSession.isConnected;
   for (final groupId in groupOrder) {
     final total = overriddenGroups.contains(groupId)
         ? double.tryParse(groupControllers[groupId]!.text.replaceAll(',', '.')) ?? 0
@@ -2773,12 +2903,38 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     return null;
   }
 
+  // Voir TransactionEditorSheet._apiAccounts/_loadPickerData
+  // (transactions_screen.dart) - même principe pour ce détail d'enveloppe :
+  // tiers et transactions du tiroir restaient toujours lus en local même en
+  // mode API (2026-09-10).
+  Map<int, Payee>? _apiPayees;
+  List<MoneyTransaction>? _apiTransactions;
+
+  Future<void> _loadPickerData() async {
+    final session = widget.apiSession!;
+    final payees = await session.getPayees(onlyActive: false);
+    final transactions = widget.accountId == null
+        ? const <MoneyTransaction>[]
+        : await session.getTransactions(
+            accountId: widget.accountId!,
+            from: widget.window.start,
+            to: widget.window.end,
+            limit: 500,
+          );
+    if (!mounted) return;
+    setState(() {
+      _apiPayees = {for (final p in payees) p.id: p};
+      _apiTransactions = transactions;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.item.displayName);
     _amountController = TextEditingController(text: (_topMember?.target ?? 0).toStringAsFixed(2));
     _manualOverride = _topMember?.manualOverride ?? false;
+    if (_useApi) _loadPickerData();
   }
 
   @override
@@ -2831,7 +2987,7 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
   /// only ever keeping whatever number was typed in months ago. Only
   /// updates the text field - still requires "Enregistrer" to actually
   /// save, same as typing a number in by hand.
-  void _recalculateFromHistory() {
+  Future<void> _recalculateFromHistory() async {
     if (widget.accountId == null) return;
     // Exclude a subcategory that already has its own separate envelope in
     // this group - its history is recalculated on its own card, never
@@ -2841,14 +2997,16 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
         .map((m) => m.category.id)
         .where((id) => id != widget.item.topCategory.id)
         .toSet();
-    final result = _historicalMonthlyAverage(
+    final result = await _historicalMonthlyAverage(
       repo: widget.repo,
       categoryId: widget.item.topCategory.id,
       accountId: widget.accountId!,
       startDay: widget.startDay,
       categories: widget.categories,
       excludeCategoryIds: excludeIds,
+      apiSession: widget.apiSession,
     );
+    if (!mounted) return;
     setState(() {
       _amountController.text = result.average.toStringAsFixed(2);
     });
@@ -2886,6 +3044,15 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
 
   @override
   Widget build(BuildContext context) {
+    if (_useApi && _apiPayees == null) {
+      // Chargement des tiers/transactions en cours (voir _loadPickerData) -
+      // rien à dessiner tant qu'ils ne sont pas là, plutôt que de retomber
+      // sur une lecture locale.
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
     final item = widget.item;
     final repo = widget.repo;
     final window = widget.window;
@@ -2906,9 +3073,13 @@ class _EnvelopeDetailState extends State<_EnvelopeDetail> {
     final relevantChildren = children
         .where((c) => usedCategoryIds.contains(c.id) || memberChildIds.contains(c.id))
         .toList();
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
-    final transactions = repo
-        .getTransactions(accountId: accountId, from: window.start, to: window.end, limit: 500)
+    final payees = _useApi
+        ? _apiPayees!
+        : {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final transactionsSource = _useApi
+        ? _apiTransactions!
+        : repo.getTransactions(accountId: accountId, from: window.start, to: window.end, limit: 500);
+    final transactions = transactionsSource
         .where((t) =>
             t.categoryId != null &&
             relevantIds.contains(t.categoryId) &&
@@ -3179,11 +3350,46 @@ class _IncomeDetail extends StatefulWidget {
 class _IncomeDetailState extends State<_IncomeDetail> {
   late final TextEditingController _expectedController;
 
+  bool get _useApi =>
+      widget.apiSession != null &&
+      widget.apiSession!.useApiForBudget &&
+      widget.apiSession!.isConnected;
+
+  // Voir _EnvelopeDetailState._loadPickerData - même principe : le détail
+  // des revenus restait toujours lu en local même en mode API (2026-09-10).
+  bool? _apiHasOverride;
+  Map<int, Category>? _apiCategoriesById;
+  Map<int, double>? _apiTotalsByCategory;
+  Map<int, Payee>? _apiPayees;
+  List<MoneyTransaction>? _apiTransactions;
+
+  Future<void> _loadPickerData() async {
+    final session = widget.apiSession!;
+    final results = await Future.wait([
+      session.getIncomeTargetOverride(widget.accountId),
+      session.getCategories(onlyActive: false),
+      session.incomeCategoryTotalsForPeriod(widget.window.start, widget.window.end,
+          accountId: widget.accountId),
+      session.getPayees(onlyActive: false),
+      session.getTransactions(
+          accountId: widget.accountId, from: widget.window.start, to: widget.window.end, limit: 500),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _apiHasOverride = (results[0] as double?) != null;
+      _apiCategoriesById = {for (final c in results[1] as List<Category>) c.id: c};
+      _apiTotalsByCategory = results[2] as Map<int, double>;
+      _apiPayees = {for (final p in results[3] as List<Payee>) p.id: p};
+      _apiTransactions = results[4] as List<MoneyTransaction>;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _expectedController =
         TextEditingController(text: widget.expectedIncome.toStringAsFixed(2));
+    if (_useApi) _loadPickerData();
   }
 
   @override
@@ -3210,48 +3416,73 @@ class _IncomeDetailState extends State<_IncomeDetail> {
   Future<void> _saveExpectedOverride() async {
     final amount = double.tryParse(_expectedController.text.replaceAll(',', '.'));
     if (amount == null) return;
-    if (widget.apiSession != null &&
-        widget.apiSession!.useApiForBudget &&
-        widget.apiSession!.isConnected) {
+    if (_useApi) {
       await widget.apiSession!.setIncomeTargetOverride(widget.accountId, amount);
     } else {
       widget.repo.setIncomeTargetOverride(widget.accountId, amount);
     }
     widget.onChanged();
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _apiHasOverride = true);
   }
 
   /// Clears the manual override and refills the field with the automatic
   /// total - the "Revenus attendus" equivalent of stopping a custom
   /// envelope amount from overriding its recurring-bill total.
-  void _resetToAutomatic() {
-    widget.repo.clearIncomeTargetOverride(widget.accountId);
-    widget.onChanged();
-    setState(() {
-      _expectedController.text =
+  Future<void> _resetToAutomatic() async {
+    final String automaticText;
+    if (_useApi) {
+      await widget.apiSession!.clearIncomeTargetOverride(widget.accountId);
+      automaticText =
+          (await widget.apiSession!.monthlyRecurringIncome(accountId: widget.accountId))
+              .toStringAsFixed(2);
+    } else {
+      widget.repo.clearIncomeTargetOverride(widget.accountId);
+      automaticText =
           widget.repo.monthlyRecurringIncome(accountId: widget.accountId).toStringAsFixed(2);
+    }
+    widget.onChanged();
+    if (!mounted) return;
+    setState(() {
+      _apiHasOverride = false;
+      _expectedController.text = automaticText;
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_useApi && _apiHasOverride == null) {
+      // Chargement en cours (voir _loadPickerData) - rien à dessiner tant
+      // que les données ne sont pas là, plutôt que de retomber sur une
+      // lecture locale.
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
     final repo = widget.repo;
     final window = widget.window;
     final accountId = widget.accountId;
     final currency = widget.currency;
     final income = widget.income;
-    final hasOverride = repo.getIncomeTargetOverride(accountId) != null;
-    final categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
-    final totalsByCategory = repo.incomeCategoryTotalsForPeriod(window.start, window.end,
-        accountId: accountId);
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final hasOverride =
+        _useApi ? _apiHasOverride! : repo.getIncomeTargetOverride(accountId) != null;
+    final categoriesById = _useApi
+        ? _apiCategoriesById!
+        : {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
+    final totalsByCategory = _useApi
+        ? _apiTotalsByCategory!
+        : repo.incomeCategoryTotalsForPeriod(window.start, window.end, accountId: accountId);
+    final payees =
+        _useApi ? _apiPayees! : {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
 
     // Same convention the transfer-as-expense side uses: a Deposit counts
     // via ACCOUNTID, an incoming Transfer via TOACCOUNTID - matches
     // MmexRepository.incomeCategoryTotalsForPeriod's own filter exactly,
     // so this list always agrees with the totals it backs.
-    final transactions = repo
-        .getTransactions(accountId: accountId, from: window.start, to: window.end, limit: 500)
+    final transactionsSource = _useApi
+        ? _apiTransactions!
+        : repo.getTransactions(accountId: accountId, from: window.start, to: window.end, limit: 500);
+    final transactions = transactionsSource
         .where((t) =>
             t.categoryId != null &&
             !t.isVoid &&

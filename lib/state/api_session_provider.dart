@@ -207,6 +207,10 @@ class ApiSessionProvider extends ChangeNotifier {
         includeCategorizedTransfersAsExpense: includeCategorizedTransfersAsExpense,
       );
 
+  Future<Map<int, DateTime>> lastSpendDatePerCategory(DateTime start, DateTime end,
+          {int? accountId}) =>
+      _requireClient().lastSpendDatePerCategory(start, end, accountId: accountId);
+
   Future<Set<int>> categoriesUsedByAccount(int accountId) =>
       _requireClient().categoriesUsedByAccount(accountId);
 
@@ -464,6 +468,19 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<void> setIncomeTargetOverride(int accountId, double amount) =>
       _requireClient().setIncomeTargetOverride(accountId, amount);
+
+  Future<double?> getIncomeTargetOverride(int accountId) =>
+      _requireClient().getIncomeTargetOverride(accountId);
+
+  Future<void> clearIncomeTargetOverride(int accountId) =>
+      _requireClient().clearIncomeTargetOverride(accountId);
+
+  Future<double> monthlyRecurringIncome({int? accountId}) =>
+      _requireClient().monthlyRecurringIncome(accountId: accountId);
+
+  Future<Map<int, double>> incomeCategoryTotalsForPeriod(DateTime start, DateTime end,
+          {int? accountId}) =>
+      _requireClient().incomeCategoryTotalsForPeriod(start, end, accountId: accountId);
 
   Future<void> resetBudgetEnvelopes(int accountId) =>
       _requireClient().resetBudgetEnvelopes(accountId);
