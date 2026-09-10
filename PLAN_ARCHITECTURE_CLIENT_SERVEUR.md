@@ -163,11 +163,33 @@ le repo pour ne pas la perdre.
 
   650 tests Flutter au total (7 nouveaux depuis Transactions - 6 côté
   ApiClient, 1 côté ApiSessionProvider) + 46 tests côté serveur (8
-  nouveaux, un par nouvelle route), tous verts. Toujours **non vérifiable
-  dans cet environnement** : le clic-à-clic réel dans un navigateur (même
-  blocage - l'appli démarre et s'affiche normalement jusqu'à l'écran de
-  sélection du fichier .mmb, aucune erreur dans la console, mais
-  impossible d'aller plus loin sans sélectionner un vrai fichier).
+  nouveaux, un par nouvelle route), tous verts.
+
+  **Mise à jour 2026-09-10 - vérifié pour de vrai dans un navigateur, un
+  vrai bug trouvé et corrigé** : l'utilisateur a configuré l'accès à sa
+  base réelle dans cet environnement, ce qui a permis de dépasser pour la
+  première fois l'écran de sélection de fichier bloquant jusqu'ici. Un
+  serveur de test jetable (base de test locale, jamais le vrai fichier
+  Nextcloud - voir tool/seed_budget_test_db.dart) a révélé que **le
+  serveur ne renvoyait aucun en-tête CORS** : chaque requête de l'appli
+  web (servie sur une autre origine que le serveur) était bloquée par le
+  navigateur avant même d'atteindre le serveur - "Failed to fetch" côté
+  appli, invisible côté serveur et côté tests (`dart test`/
+  `tool/verify_api_client.dart` n'utilisent pas un vrai navigateur, donc
+  aucun des deux n'aurait jamais détecté ça). **Ce bug touchait toutes les
+  bascules API déjà migrées avant Budget** (Comptes, Tiers, Catégories,
+  Explorateur, Récurrentes, Transactions) - aucune n'avait donc jamais pu
+  réellement fonctionner dans un navigateur jusqu'à ce correctif, malgré
+  "tous les tests verts" à chaque étape. Corrigé (middleware CORS,
+  `Access-Control-Allow-Origin: *` - une origine précise n'ajouterait pas
+  de sécurité réelle ici, seul le jeton Bearer protège les données),
+  testé en direct : connexion, chargement des comptes, et les 6 nouvelles
+  routes Budget répondent toutes 200 dans le vrai navigateur (build
+  release), enveloppes vides affichées correctement pour un compte
+  connu localement mais absent de la base de test (pas de crash). Reste à
+  redéployer le binaire serveur sur Excelsior pour que ce correctif (et
+  les nouvelles routes Budget) y soient disponibles - pas fait
+  automatiquement, le déploiement reste une action explicite.
 
 - 🚫 **Simulation (2584 lignes) - passée en revue, migration écartée pour
   la même raison structurelle que le simulateur du Budget** : c'est un
