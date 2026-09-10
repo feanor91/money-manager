@@ -17,6 +17,7 @@ import '../utils/date_picker.dart';
 import '../utils/list_utils.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 
@@ -87,12 +88,22 @@ class _RecurringScreenState extends State<RecurringScreen> {
   /// API, voir [_openEditor]. Pas de rafraîchissement automatique après une
   /// modification - même nuance que les autres écrans déjà migrés.
   Future<_RecurringData> _loadViaApi(ApiSessionProvider session) async {
-    final currency = await session.getBaseCurrency();
-    final bills = await session.getBillDeposits();
-    final accounts = await session.getAccounts();
-    final categories = await session.getCategories();
-    final payees = await session.getPayees(onlyActive: false);
-    final occurrenceTotals = await session.billOccurrenceTotals();
+    // En parallèle plutôt qu'en séquence - voir la même remarque dans
+    // dashboard_screen.dart/transactions_screen.dart (2026-09-10).
+    final results = await Future.wait([
+      session.getBaseCurrency(),
+      session.getBillDeposits(),
+      session.getAccounts(),
+      session.getCategories(),
+      session.getPayees(onlyActive: false),
+      session.billOccurrenceTotals(),
+    ]);
+    final currency = results[0] as CurrencyFormat?;
+    final bills = results[1] as List<BillDeposit>;
+    final accounts = results[2] as List<Account>;
+    final categories = results[3] as List<Category>;
+    final payees = results[4] as List<Payee>;
+    final occurrenceTotals = results[5] as Map<int, int>;
     return _RecurringData(
       currency: currency,
       bills: bills,
@@ -125,8 +136,11 @@ class _RecurringScreenState extends State<RecurringScreen> {
             }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          return _buildScaffold(context, dbProvider, repo, _lastData!,
-              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession));
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildScaffold(context, dbProvider, repo, _lastData!,
+                apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession)),
+          );
         },
       );
     }

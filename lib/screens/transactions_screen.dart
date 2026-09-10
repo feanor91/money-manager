@@ -22,6 +22,7 @@ import '../utils/list_utils.dart';
 import '../widgets/bill_amount_sync.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import '../widgets/transaction_entry_flow.dart';
@@ -317,6 +318,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// rafraîchissement automatique après une modification - même nuance que
   /// les autres écrans déjà migrés.
   Future<_TransactionsData> _loadViaApi(ApiSessionProvider session, DatabaseProvider dbProvider) async {
+    // Toujours la liste des comptes d'abord (accountId en dépend), puis tout
+    // le reste en parallèle (Future.wait) plutôt qu'en séquence - un aller-
+    // retour réseau à la fois par champ était lent en conditions réelles
+    // (2026-09-10, retour utilisateur "temps de réponse catastrophiques").
     final accounts = await session.getAccounts();
     final visibleAccounts =
         accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
@@ -327,17 +332,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final accountsById = {for (final a in accounts) a.id: a};
     final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
-    final currency = await session.getBaseCurrency();
-    final categories = await session.getCategories();
-    final payees = await session.getPayees(onlyActive: false);
-    final recurringTxIds = await session.recurringTransactionIds();
-    final recurringOccurrences = await session.recurringTransactionOccurrences();
-    final allRows = accountId == null
-        ? const <TransactionWithBalance>[]
-        : await session.getTransactionsWithRunningBalance(accountId,
-            from: _showFullLedger ? null : previousMonth,
-            to: _showFullLedger ? null : nextMonth);
-    final yearRange = accountId == null ? null : await session.transactionYearRange(accountId);
+    final results = await Future.wait([
+      session.getBaseCurrency(),
+      session.getCategories(),
+      session.getPayees(onlyActive: false),
+      session.recurringTransactionIds(),
+      session.recurringTransactionOccurrences(),
+      accountId == null
+          ? Future.value(const <TransactionWithBalance>[])
+          : session.getTransactionsWithRunningBalance(accountId,
+              from: _showFullLedger ? null : previousMonth,
+              to: _showFullLedger ? null : nextMonth),
+      accountId == null ? Future.value(null) : session.transactionYearRange(accountId),
+    ]);
+    final currency = results[0] as CurrencyFormat?;
+    final categories = results[1] as List<Category>;
+    final payees = results[2] as List<Payee>;
+    final recurringTxIds = results[3] as Set<int>;
+    final recurringOccurrences = results[4] as Map<int, ({int index, int total})>;
+    final allRows = results[5] as List<TransactionWithBalance>;
+    final yearRange = results[6] as ({int min, int max})?;
     return _TransactionsData(
       accounts: accounts,
       visibleAccounts: visibleAccounts,
@@ -387,8 +401,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          return _buildScaffold(context, dbProvider, repo, _lastData!,
-              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, dbProvider));
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildScaffold(context, dbProvider, repo, _lastData!,
+                apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, dbProvider)),
+          );
         },
       );
     }

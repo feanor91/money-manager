@@ -16,6 +16,7 @@ import 'package:money_manager_core/models/transaction.dart';
 import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/transaction_tile.dart';
 
 /// Bundle des options de filtre (pas des résultats - voir [_applyFilters])
@@ -289,17 +290,21 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
   }
 
   Future<_FilterOptions> _loadOptionsViaApi(ApiSessionProvider session) async {
-    final currency = await session.getBaseCurrency();
-    final categories = await session.getCategories(onlyActive: false);
-    final payees = await session.getPayees(onlyActive: false);
-    final accounts = await session.getAccounts();
-    final yearRange = await session.transactionYearRangeAll();
+    // En parallèle plutôt qu'en séquence - voir la même remarque dans
+    // dashboard_screen.dart (2026-09-10).
+    final results = await Future.wait([
+      session.getBaseCurrency(),
+      session.getCategories(onlyActive: false),
+      session.getPayees(onlyActive: false),
+      session.getAccounts(),
+      session.transactionYearRangeAll(),
+    ]);
     return _FilterOptions(
-      currency: currency,
-      categories: categories,
-      payees: payees,
-      accounts: accounts,
-      yearRange: yearRange,
+      currency: results[0] as CurrencyFormat?,
+      categories: results[1] as List<Category>,
+      payees: results[2] as List<Payee>,
+      accounts: results[3] as List<Account>,
+      yearRange: results[4] as ({int min, int max})?,
     );
   }
 
@@ -323,7 +328,10 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
               }
               return const Center(child: CircularProgressIndicator());
             }
-            return _buildBody(context, repo, apiSession, _lastOptions!);
+            return RefreshingOverlay(
+              refreshing: snapshot.connectionState != ConnectionState.done,
+              child: _buildBody(context, repo, apiSession, _lastOptions!),
+            );
           },
         ),
       );

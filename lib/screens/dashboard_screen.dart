@@ -21,6 +21,7 @@ import '../widgets/category_spend_analyzer.dart';
 import '../widgets/category_spend_bar_chart.dart';
 import '../widgets/forecast_chart.dart';
 import '../widgets/nl_query_dialog.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/transaction_entry_flow.dart';
 import '../widgets/transaction_tile.dart';
@@ -129,11 +130,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// par le dépôt local même en mode API, voir chaque `repo.xxx` dans
   /// [_buildScaffold].
   Future<_DashboardData> _loadViaApi(ApiSessionProvider session, DatabaseProvider dbProvider) async {
-    final allAccounts = await session.getAccounts();
+    // Tous les appels indépendants partent en parallèle (Future.wait) plutôt
+    // qu'en séquence - un aller-retour réseau à la fois pouvait facilement
+    // cumuler plusieurs dizaines/centaines de ms par écran (et jusqu'à 3 par
+    // compte pour les soldes, avant ce correctif) - trouvé lent en testant
+    // en conditions réelles (2026-09-10, retour utilisateur "temps de
+    // réponse catastrophiques").
+    final results = await Future.wait([
+      session.getAccounts(),
+      session.getAccounts(onlyOpen: true),
+      session.getBaseCurrency(),
+      session.getCategories(),
+      session.getPayees(onlyActive: false),
+    ]);
+    final allAccounts = results[0] as List<Account>;
     final allAccountsById = {for (final a in allAccounts) a.id: a};
-    final unorderedAccounts = (await session.getAccounts(onlyOpen: true))
-        .where((a) => !dbProvider.isAccountHidden(a.id))
-        .toList();
+    final unorderedAccounts =
+        (results[1] as List<Account>).where((a) => !dbProvider.isAccountHidden(a.id)).toList();
     final accounts = dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
     final selectedAccountId = accounts.any((a) => a.id == dbProvider.selectedAccountId)
         ? dbProvider.selectedAccountId
@@ -142,20 +155,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final today = DateTime(now.year, now.month, now.day);
     final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
 
-    final currency = await session.getBaseCurrency();
-    final balances = <int, double>{};
-    final forecastBalances = <int, double>{};
-    final negativeDates = <int, DateTime?>{};
-    for (final a in accounts) {
-      balances[a.id] = await session.accountBalance(a.id, asOf: today);
-      forecastBalances[a.id] = await session.forecastAccountBalance(a.id, forecastDate);
-      negativeDates[a.id] = await session.forecastNegativeDate(a.id);
-    }
-    final categories = await session.getCategories();
+    final currency = results[2] as CurrencyFormat?;
+    final categories = results[3] as List<Category>;
+    final payees = results[4] as List<Payee>;
+
+    final balancesList = await Future.wait([for (final a in accounts) session.accountBalance(a.id, asOf: today)]);
+    final forecastBalancesList =
+        await Future.wait([for (final a in accounts) session.forecastAccountBalance(a.id, forecastDate)]);
+    final negativeDatesList =
+        await Future.wait([for (final a in accounts) session.forecastNegativeDate(a.id)]);
+    final balances = {for (var i = 0; i < accounts.length; i++) accounts[i].id: balancesList[i]};
+    final forecastBalances = {
+      for (var i = 0; i < accounts.length; i++) accounts[i].id: forecastBalancesList[i]
+    };
+    final negativeDates = {
+      for (var i = 0; i < accounts.length; i++) accounts[i].id: negativeDatesList[i]
+    };
     final recentTx = selectedAccountId == null
         ? const <MoneyTransaction>[]
         : await session.getTransactions(accountId: selectedAccountId, limit: 6);
-    final payees = await session.getPayees(onlyActive: false);
     return _DashboardData(
       accounts: accounts,
       allAccountsById: allAccountsById,
@@ -205,9 +223,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
             }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          return _buildContent(context, dbProvider, repo, _lastData!,
-              apiSession: apiSession,
-              apiRefresh: () => _refreshApi(apiSession, dbProvider));
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildContent(context, dbProvider, repo, _lastData!,
+                apiSession: apiSession,
+                apiRefresh: () => _refreshApi(apiSession, dbProvider)),
+          );
         },
       );
     }

@@ -5,6 +5,7 @@ import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/payee.dart';
 import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 
@@ -97,7 +98,10 @@ class _PayeesScreenState extends State<PayeesScreen> {
               }
               return const Center(child: CircularProgressIndicator());
             }
-            return _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession);
+            return RefreshingOverlay(
+              refreshing: snapshot.connectionState != ConnectionState.done,
+              child: _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession),
+            );
           },
         ),
       );

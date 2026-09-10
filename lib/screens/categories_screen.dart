@@ -5,6 +5,7 @@ import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/category.dart';
 import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 
@@ -112,7 +113,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
               }
               return const Center(child: CircularProgressIndicator());
             }
-            return _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession);
+            return RefreshingOverlay(
+              refreshing: snapshot.connectionState != ConnectionState.done,
+              child: _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession),
+            );
           },
         ),
       );

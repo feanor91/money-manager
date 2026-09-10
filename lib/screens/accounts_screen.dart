@@ -8,6 +8,7 @@ import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
+import '../widgets/refreshing_overlay.dart';
 import '../widgets/responsive_body.dart';
 
 /// Regroupe ce qu'il faut pour dessiner l'écran, qu'il vienne du fichier
@@ -54,8 +55,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
   /// plan sur la bascule des écritures, jamais progressive comme les
   /// lectures).
   Future<_AccountsData> _loadViaApi(ApiSessionProvider session) async {
-    final accounts = await session.getAccounts();
-    final currency = await session.getBaseCurrency();
+    final results = await Future.wait([session.getAccounts(), session.getBaseCurrency()]);
+    final accounts = results[0] as List<Account>;
+    final currency = results[1] as CurrencyFormat?;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final balances = await Future.wait(
@@ -114,7 +116,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
               }
               return const Center(child: CircularProgressIndicator());
             }
-            return _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession);
+            return RefreshingOverlay(
+              refreshing: snapshot.connectionState != ConnectionState.done,
+              child: _buildBody(context, dbProvider, repo, _lastData!, apiSession: apiSession),
+            );
           },
         ),
       );
