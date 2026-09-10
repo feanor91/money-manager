@@ -254,6 +254,50 @@ void main() {
     });
   });
 
+  group('POST /rpc/getTransactionsWithRunningBalance', () {
+    test('returns the transaction with a running balance', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getTransactionsWithRunningBalance',
+          token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final rows = jsonDecode(await response.readAsString()) as List;
+      expect(rows, hasLength(1));
+      expect(rows.single['balanceAfter'], 1000 - 42.5);
+    });
+  });
+
+  group('POST /rpc/transactionYearRange', () {
+    test('returns the year range for the account', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/transactionYearRange', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['min'], 2026);
+      expect(json['max'], 2026);
+    });
+  });
+
+  group('POST /rpc/recurringTransactionIds', () {
+    test('is empty when no transaction was auto-added from a recurring bill', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/recurringTransactionIds', token: token));
+      expect(response.statusCode, 200);
+      final ids = jsonDecode(await response.readAsString()) as List;
+      expect(ids, isEmpty);
+    });
+  });
+
+  group('POST /rpc/recurringTransactionOccurrences', () {
+    test('is empty when no bill has a limited duration', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/recurringTransactionOccurrences', token: token));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json, isEmpty);
+    });
+  });
+
   group('POST /auth/logout', () {
     test('revokes the token used to call it', () async {
       final token = tokenStore.issue();

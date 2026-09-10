@@ -374,6 +374,15 @@ class SettingsScreen extends StatelessWidget {
                         ? (v) => apiSession.useApiForRecurring = v
                         : null,
                   ),
+                  SwitchListTile(
+                    title: const Text('Transactions via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "Le grand livre lit ses données depuis le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForTransactions,
+                    onChanged: apiSession.isConnected
+                        ? (v) => apiSession.useApiForTransactions = v
+                        : null,
+                  ),
                 ],
               ),
             );

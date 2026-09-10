@@ -66,6 +66,9 @@ class ApiSessionProvider extends ChangeNotifier {
   bool get useApiForRecurring => _useApiFor('recurring');
   set useApiForRecurring(bool value) => _setUseApiFor('recurring', value);
 
+  bool get useApiForTransactions => _useApiFor('transactions');
+  set useApiForTransactions(bool value) => _setUseApiFor('transactions', value);
+
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
     _error = null;
@@ -130,6 +133,18 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<({double percent, DateTime anchor, double yearsSpan})?> suggestedAnnualIncrease(int billId) =>
       _requireClient().suggestedAnnualIncrease(billId);
+
+  Future<List<TransactionWithBalance>> getTransactionsWithRunningBalance(int accountId,
+          {DateTime? from, DateTime? to}) =>
+      _requireClient().getTransactionsWithRunningBalance(accountId, from: from, to: to);
+
+  Future<({int min, int max})?> transactionYearRange(int accountId) =>
+      _requireClient().transactionYearRange(accountId);
+
+  Future<Set<int>> recurringTransactionIds() => _requireClient().recurringTransactionIds();
+
+  Future<Map<int, ({int index, int total})>> recurringTransactionOccurrences() =>
+      _requireClient().recurringTransactionOccurrences();
 
   ApiClient _requireClient() {
     final client = _client;

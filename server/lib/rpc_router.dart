@@ -144,6 +144,31 @@ Router buildRouter({
             'yearsSpan': suggestion.yearsSpan,
           }));
   });
+  rpcRouter.post('/getTransactionsWithRunningBalance', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final fromStr = body['from'] as String?;
+    final toStr = body['to'] as String?;
+    final rows = repo.getTransactionsWithRunningBalance(
+      body['accountId'] as int,
+      from: fromStr == null ? null : DateTime.parse(fromStr),
+      to: toStr == null ? null : DateTime.parse(toStr),
+    );
+    return Response.ok(jsonEncode([for (final r in rows) r.toJson()]));
+  });
+  rpcRouter.post('/transactionYearRange', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final range = repo.transactionYearRange(body['accountId'] as int);
+    return Response.ok(jsonEncode(range == null ? null : {'min': range.min, 'max': range.max}));
+  });
+  rpcRouter.post('/recurringTransactionIds', (Request request) async {
+    final ids = repo.recurringTransactionIds();
+    return Response.ok(jsonEncode(ids.toList()));
+  });
+  rpcRouter.post('/recurringTransactionOccurrences', (Request request) async {
+    final occurrences = repo.recurringTransactionOccurrences();
+    return Response.ok(jsonEncode(occurrences
+        .map((k, v) => MapEntry('$k', {'index': v.index, 'total': v.total}))));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));

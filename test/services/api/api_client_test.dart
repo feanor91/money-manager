@@ -371,4 +371,91 @@ void main() {
       expect(await client.suggestedAnnualIncrease(1), isNull);
     });
   });
+
+  group('getTransactionsWithRunningBalance / transactionYearRange / recurring transaction links', () {
+    test('parses rows with a running balance', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode([
+                {
+                  'transaction': {
+                    'id': 1,
+                    'accountId': 1,
+                    'toAccountId': null,
+                    'payeeId': 1,
+                    'transCode': 'withdrawal',
+                    'amount': 42.5,
+                    'toAmount': 42.5,
+                    'status': '',
+                    'categoryId': null,
+                    'date': DateTime(2026, 3, 15).toIso8601String(),
+                    'notes': null,
+                  },
+                  'balanceAfter': 957.5,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final rows = await client.getTransactionsWithRunningBalance(1);
+      expect(rows.single.balanceAfter, 957.5);
+      expect(rows.single.transaction.amount, 42.5);
+    });
+
+    test('transactionYearRange returns the range', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'min': 2020, 'max': 2026}), 200);
+        }),
+      );
+      await client.login('1234');
+      final range = await client.transactionYearRange(1);
+      expect(range?.min, 2020);
+      expect(range?.max, 2026);
+    });
+
+    test('recurringTransactionIds parses the id list', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode([3, 7]), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.recurringTransactionIds(), {3, 7});
+    });
+
+    test('recurringTransactionOccurrences converts string keys back to ints', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode({
+                '5': {'index': 2, 'total': 6}
+              }),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final occurrences = await client.recurringTransactionOccurrences();
+      expect(occurrences[5]?.index, 2);
+      expect(occurrences[5]?.total, 6);
+    });
+  });
 }

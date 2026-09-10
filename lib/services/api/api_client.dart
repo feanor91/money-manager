@@ -154,6 +154,42 @@ class ApiClient {
     );
   }
 
+  Future<List<TransactionWithBalance>> getTransactionsWithRunningBalance(
+    int accountId, {
+    DateTime? from,
+    DateTime? to,
+  }) async {
+    final json = await _rpc('getTransactionsWithRunningBalance', body: {
+      'accountId': accountId,
+      if (from != null) 'from': from.toIso8601String(),
+      if (to != null) 'to': to.toIso8601String(),
+    });
+    final list = json as List;
+    return [
+      for (final row in list) TransactionWithBalance.fromJson(row as Map<String, dynamic>)
+    ];
+  }
+
+  Future<({int min, int max})?> transactionYearRange(int accountId) async {
+    final json = await _rpc('transactionYearRange', body: {'accountId': accountId});
+    if (json == null) return null;
+    final map = json as Map<String, dynamic>;
+    return (min: map['min'] as int, max: map['max'] as int);
+  }
+
+  Future<Set<int>> recurringTransactionIds() async {
+    final json = await _rpc('recurringTransactionIds') as List;
+    return json.cast<int>().toSet();
+  }
+
+  Future<Map<int, ({int index, int total})>> recurringTransactionOccurrences() async {
+    final json = await _rpc('recurringTransactionOccurrences') as Map<String, dynamic>;
+    return json.map((k, v) {
+      final map = v as Map<String, dynamic>;
+      return MapEntry(int.parse(k), (index: map['index'] as int, total: map['total'] as int));
+    });
+  }
+
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {
     final token = _token;
     if (token == null) {

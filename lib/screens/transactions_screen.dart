@@ -14,6 +14,7 @@ import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import '../services/voice_entry/voice_transaction_parser.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
@@ -168,6 +169,31 @@ int _compareLedgerRows(
   }
 }
 
+/// Bundle des données nécessaires pour dessiner le grand livre, qu'elles
+/// viennent du fichier local ou du serveur API - étape 4 du chantier
+/// client/serveur (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md). Les
+/// écritures (pointer/dépointer, modifier date/montant en ligne, l'éditeur
+/// complet...) continuent de passer par le dépôt local dans tous les cas.
+class _TransactionsData {
+  final CurrencyFormat? currency;
+  final Map<int, Category> categories;
+  final Map<int, Payee> payees;
+  final Set<int> recurringTxIds;
+  final Map<int, ({int index, int total})> recurringOccurrences;
+  final List<TransactionWithBalance> allRows;
+  final ({int min, int max})? yearRange;
+
+  _TransactionsData({
+    required this.currency,
+    required this.categories,
+    required this.payees,
+    required this.recurringTxIds,
+    required this.recurringOccurrences,
+    required this.allRows,
+    required this.yearRange,
+  });
+}
+
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
 
@@ -239,9 +265,68 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     super.dispose();
   }
 
+  Future<_TransactionsData>? _apiFuture;
+  ({int? accountId, DateTime month})? _apiFutureKey;
+
+  _TransactionsData _localData(MmexRepository repo, int? accountId) {
+    final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+    final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+    return _TransactionsData(
+      currency: repo.getBaseCurrency(),
+      categories: {for (final c in repo.getCategories()) c.id: c},
+      payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
+      recurringTxIds: repo.recurringTransactionIds(),
+      recurringOccurrences: repo.recurringTransactionOccurrences(),
+      allRows: accountId == null
+          ? const <TransactionWithBalance>[]
+          : repo.getTransactionsWithRunningBalance(accountId,
+              from: _showFullLedger ? null : previousMonth,
+              to: _showFullLedger ? null : nextMonth),
+      yearRange: accountId == null ? null : repo.transactionYearRange(accountId),
+    );
+  }
+
+  /// Lecture seule - toutes les écritures (pointer, modifier en ligne,
+  /// l'éditeur complet...) continuent de passer par le dépôt local même en
+  /// mode API, voir chaque `repo.xxx` plus bas dans cette classe. Pas de
+  /// rafraîchissement automatique après une modification - même nuance que
+  /// les autres écrans déjà migrés.
+  Future<_TransactionsData> _loadViaApi(ApiSessionProvider session, int? accountId) async {
+    final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+    final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+    final currency = await session.getBaseCurrency();
+    final categories = await session.getCategories();
+    final payees = await session.getPayees(onlyActive: false);
+    final recurringTxIds = await session.recurringTransactionIds();
+    final recurringOccurrences = await session.recurringTransactionOccurrences();
+    final allRows = accountId == null
+        ? const <TransactionWithBalance>[]
+        : await session.getTransactionsWithRunningBalance(accountId,
+            from: _showFullLedger ? null : previousMonth,
+            to: _showFullLedger ? null : nextMonth);
+    final yearRange = accountId == null ? null : await session.transactionYearRange(accountId);
+    return _TransactionsData(
+      currency: currency,
+      categories: {for (final c in categories) c.id: c},
+      payees: {for (final p in payees) p.id: p},
+      recurringTxIds: recurringTxIds,
+      recurringOccurrences: recurringOccurrences,
+      allRows: allRows,
+      yearRange: yearRange,
+    );
+  }
+
+  void _refreshApi(ApiSessionProvider session, int? accountId) {
+    setState(() {
+      _apiFutureKey = (accountId: accountId, month: _selectedMonth);
+      _apiFuture = _loadViaApi(session, accountId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
     final accounts = repo.getAccounts();
     final visibleAccounts =
@@ -254,28 +339,61 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
             ? dbProvider.selectedAccountId
             : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
-
-    final currency = repo.getBaseCurrency();
     final accountsById = {for (final a in accounts) a.id: a};
-    final categories = {for (final c in repo.getCategories()) c.id: c};
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
-    final recurringTxIds = repo.recurringTransactionIds();
-    final recurringOccurrences = repo.recurringTransactionOccurrences();
-    final previousMonth =
-        DateTime(_selectedMonth.year, _selectedMonth.month - 1);
-    final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
-    final allRows = accountId == null
-        ? const <TransactionWithBalance>[]
-        : repo.getTransactionsWithRunningBalance(accountId,
-            from: _showFullLedger ? null : previousMonth,
-            to: _showFullLedger ? null : nextMonth);
+
+    if (apiSession.useApiForTransactions) {
+      final key = (accountId: accountId, month: _selectedMonth);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, accountId);
+      }
+      return FutureBuilder<_TransactionsData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildScaffold(
+              context, dbProvider, repo, accountId, visibleAccounts, accountsById, snapshot.data!,
+              apiRefresh: () => _refreshApi(apiSession, accountId));
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildScaffold(
+        context, dbProvider, repo, accountId, visibleAccounts, accountsById, _localData(repo, accountId));
+  }
+
+  /// [apiRefresh] non-null seulement en mode API - ajoute le bouton de
+  /// rafraîchissement manuel dans l'AppBar (voir [_loadViaApi]). [repo] est
+  /// toujours le dépôt local, quel que soit le mode - toutes les écritures
+  /// (pointer, modifier en ligne...) continuent de passer par lui.
+  Widget _buildScaffold(
+    BuildContext context,
+    DatabaseProvider dbProvider,
+    MmexRepository repo,
+    int? accountId,
+    List<Account> visibleAccounts,
+    Map<int, Account> accountsById,
+    _TransactionsData data, {
+    VoidCallback? apiRefresh,
+  }) {
+    final currency = data.currency;
+    final categories = data.categories;
+    final payees = data.payees;
+    final recurringTxIds = data.recurringTxIds;
+    final recurringOccurrences = data.recurringOccurrences;
+    final allRows = data.allRows;
 
     // Bounds the year dropdown to years that actually have data for this
     // account, always widened to also include today's year and whatever
     // year is currently selected (arrow navigation can land outside the
     // account's own data range, e.g. one month past its last transaction).
-    final yearRange =
-        accountId == null ? null : repo.transactionYearRange(accountId);
+    final yearRange = data.yearRange;
     final candidateYears = [
       DateTime.now().year,
       _selectedMonth.year,
@@ -327,10 +445,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         });
     }
 
+    final titleSuffix = apiRefresh != null ? ' (via API)' : '';
     return Scaffold(
       appBar: AppBar(
         title: Text(
-            accountId == null ? 'Transactions' : accountsById[accountId]!.name),
+            (accountId == null ? 'Transactions' : accountsById[accountId]!.name) + titleSuffix),
         actions: [
           PopupMenuButton<int>(
             icon: const Icon(Icons.filter_list),
@@ -359,6 +478,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             tooltip: 'Colonnes du grand livre',
             onPressed: () => _openColumnSettings(context, dbProvider),
           ),
+          if (apiRefresh != null)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Rafraîchir',
+              onPressed: apiRefresh,
+            ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Paramètres',
