@@ -10,25 +10,31 @@
 # de permissions "ACL" de File Station est peu pratique pour ça (voir
 # LISEZMOI_DEPLOIEMENT.md). Cette ligne veut dire que start.sh n'a même
 # pas besoin d'être exécutable lui-même : il suffit de le lancer via
-# `sh start.sh` (voir l'étape 3 du planificateur de tâches).
+# `sh start.sh` (voir l'étape 2 du guide).
 #
-# À lancer depuis DSM : Panneau de configuration -> Planificateur de
-# tâches -> Créer -> Tâche déclenchée -> Au démarrage -> Script défini
-# par l'utilisateur -> coller (en remplaçant les valeurs ci-dessous) :
-#
-#   MM_DB_PATH="/chemin/reel/vers/MesComptes.mmb" \
-#   MM_PORT="8899" \
-#   MM_DEV_PIN="<choisir un vrai code>" \
-#   sh /volume1/web/mmex-server/start.sh &
-#
-# Le "&" final est important - sans lui, la tâche planifiée DSM reste
-# "en cours d'exécution" indéfiniment et ne redémarre jamais le NAS
-# proprement. MM_DB_PATH ne doit JAMAIS pointer vers le vrai fichier
-# Nextcloud tant que ce serveur n'a pas été validé en usage réel - une
-# copie de test d'abord (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md,
-# "Configuration du serveur - deux niveaux distincts").
+# Pas de déclencheur "Au démarrage" disponible sur toutes les versions/
+# installations de DSM (signalé par l'utilisateur - absent du menu créé)
+# - à la place, une "Tâche planifiée" classique en répétition horaire
+# (voir l'étape 2 du guide) rappelle ce script toutes les heures, y
+# compris après un redémarrage du NAS. D'où le verrou ci-dessous : sans
+# lui, chaque rappel horaire lancerait une deuxième boucle de
+# supervision en plus de celle déjà en cours, avec un deuxième processus
+# qui échouerait juste à se lier au port déjà pris - inoffensif mais
+# confus dans les journaux, ce verrou l'évite proprement.
 
 cd "$(dirname "$0")" || exit 1
+
+PIDFILE="server.pid"
+if [ -f "$PIDFILE" ]; then
+  OLDPID="$(cat "$PIDFILE" 2>/dev/null)"
+  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+    # Une instance tourne déjà (rappel horaire alors que le serveur de
+    # l'heure précédente tourne toujours) - rien à faire.
+    exit 0
+  fi
+fi
+echo $$ > "$PIDFILE"
+
 chmod +x ./money_manager_server_linux_x64 2>/dev/null
 export LD_LIBRARY_PATH="$(pwd)"
 
