@@ -26,14 +26,15 @@ Excelsior, par exemple `/volume1/web/mmex-server/` (à côté de
 directement via le partage réseau déjà utilisé pour déployer le site
 web.
 
-## Étape 2 - Rendre le script exécutable
+## Étape 2 - Créer la tâche planifiée (démarrage automatique)
 
-Depuis DSM, ouvrir **File Station**, faire un clic droit sur
-`start.sh` -> Propriétés -> Permission, et cocher "Exécuter" pour le
-propriétaire. (Ou, si un terminal DSM redevient disponible plus tard :
-`chmod +x start.sh`.)
-
-## Étape 3 - Créer la tâche planifiée (démarrage automatique)
+**Pas besoin de toucher aux permissions dans File Station** - l'éditeur
+de permissions qui s'y affiche est la vue "ACL" (façon Windows), peu
+pratique pour ça. `start.sh` se charge lui-même de rendre l'exécutable
+du serveur exécutable (`chmod +x`) à chaque lancement - il suffit de
+lancer `start.sh` via l'interpréteur `sh` (`sh start.sh`), qui n'a lui
+non plus besoin d'aucun bit d'exécution particulier pour être lu et
+exécuté.
 
 Panneau de configuration -> **Planificateur de tâches** -> Créer ->
 **Tâche déclenchée** -> **Script défini par l'utilisateur**.
@@ -47,7 +48,7 @@ Panneau de configuration -> **Planificateur de tâches** -> Créer ->
 MM_DB_PATH="/chemin/reel/vers/MesComptes.mmb" \
 MM_PORT="8899" \
 MM_DEV_PIN="choisir un vrai code, pas 1234" \
-/volume1/web/mmex-server/start.sh &
+sh /volume1/web/mmex-server/start.sh &
 ```
 
 **Important** : `MM_DB_PATH` ne doit JAMAIS pointer vers le vrai fichier
@@ -60,7 +61,7 @@ Une fois la tâche créée, la lancer une première fois manuellement (clic
 droit -> Exécuter) pour vérifier qu'elle démarre sans attendre un
 redémarrage du NAS.
 
-## Étape 4 - Exposer le serveur via nginx (proxy inversé)
+## Étape 3 - Exposer le serveur via nginx (proxy inversé)
 
 Pas besoin d'éditer de fichier de configuration à la main - DSM a son
 propre outil graphique pour ça :
@@ -72,18 +73,18 @@ inversé** -> Créer.
   port `8443`, chemin `/api/` - à adapter selon ce qui existe déjà pour
   le site)
 - Destination : `127.0.0.1` (ou `localhost`), port `8899` (ou la valeur
-  choisie dans `MM_PORT` à l'étape 3)
+  choisie dans `MM_PORT` à l'étape 2)
 - HTTPS déjà géré par ce que sert déjà `bteuile.ddns.net:8443` - pas de
   nouveau certificat à créer.
 
 ## Vérifier que ça marche
 
-Depuis n'importe quel appareil, une fois les étapes 1 à 4 faites :
+Depuis n'importe quel appareil, une fois les étapes 1 à 3 faites :
 
 ```bash
 curl -X POST https://bteuile.ddns.net:8443/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"pin":"le code choisi à l'\''étape 3"}'
+  -d '{"pin":"le code choisi à l'\''étape 2"}'
 ```
 
 Doit renvoyer `{"token":"..."}`. Sinon, consulter `server.log` dans le
