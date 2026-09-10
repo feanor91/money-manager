@@ -58,6 +58,19 @@ void main() {
     );
   }
 
+  group('CORS', () {
+    test('every response carries Access-Control-Allow-Origin', () async {
+      final response = await router(post('/auth/login', body: {'pin': '1234'}));
+      expect(response.headers['Access-Control-Allow-Origin'], '*');
+    });
+
+    test('an OPTIONS preflight request succeeds without a token', () async {
+      final response = await router(Request('OPTIONS', Uri.parse('http://localhost/rpc/getAccounts')));
+      expect(response.statusCode, 200);
+      expect(response.headers['Access-Control-Allow-Origin'], '*');
+    });
+  });
+
   group('POST /auth/login', () {
     test('correct pin returns a usable token', () async {
       final response = await router(post('/auth/login', body: {'pin': '1234'}));

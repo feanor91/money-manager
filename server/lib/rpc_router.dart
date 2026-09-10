@@ -17,7 +17,7 @@ import 'auth/token_store.dart';
 /// Une seule route pour cette première preuve de concept
 /// (`getAccounts`) - les autres arriveront une à une à l'étape 4, au fur
 /// et à mesure que chaque écran est basculé.
-Router buildRouter({
+Handler buildRouter({
   required MmexRepository repo,
   required PinAuthenticator pinAuth,
   required TokenStore tokenStore,
@@ -217,7 +217,36 @@ Router buildRouter({
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));
 
-  return router;
+  return const Pipeline().addMiddleware(_cors()).addHandler(router.call);
+}
+
+/// Autorise l'appli web (servie sur une autre origine que le serveur API -
+/// pas de routage par chemin possible avec le reverse-proxy DSM, voir
+/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) à appeler ce serveur - sans ça, le
+/// navigateur bloque silencieusement chaque requête AVANT même qu'elle
+/// n'atteigne le serveur (bloqué en local le 2026-09-10 en essayant de
+/// vérifier l'écran Budget en direct : "Failed to fetch" côté appli,
+/// "blocked by CORS policy" dans la console). `*` plutôt qu'une origine
+/// précise - ce serveur n'est protégé que par le code PIN/jeton Bearer, pas
+/// par l'origine de la requête, donc restreindre l'origine n'ajouterait pas
+/// de sécurité réelle ici, seulement de la friction (URL du serveur
+/// configurable côté appli, potentiellement différente en local/déployé/
+/// tunnel).
+Middleware _cors() {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+  return (Handler innerHandler) {
+    return (Request request) async {
+      if (request.method == 'OPTIONS') {
+        return Response.ok('', headers: headers);
+      }
+      final response = await innerHandler(request);
+      return response.change(headers: headers);
+    };
+  };
 }
 
 /// Middleware qui vérifie `Authorization: Bearer <jeton>` sur toutes les
