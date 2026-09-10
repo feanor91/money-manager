@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart' show rootBundle;
 
-import 'mmex_database.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
 
 /// Default base currency for a freshly created database - EUR (CURRENCYID
 /// 2 in the bundled schema), matching this app's only user. Real MMEX

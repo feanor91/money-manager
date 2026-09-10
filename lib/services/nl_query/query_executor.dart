@@ -1,6 +1,6 @@
-import '../../data/mmex_repository.dart';
-import '../../models/category.dart';
-import '../../models/transaction.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'ad_hoc_query.dart';
 import 'query_intent.dart';
 

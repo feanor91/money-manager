@@ -1,8 +1,8 @@
 import 'dart:io';
 
-import 'package:money_manager/data/mmex_database.dart';
-import 'package:money_manager/data/mmex_database_io.dart' as io_db;
-import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
+import 'package:money_manager_core/data/mmex_database_io.dart' as io_db;
+import 'package:money_manager_core/data/mmex_repository.dart';
 
 /// A blank-but-real MMEX database, in memory - loads the same schema asset
 /// used to create a brand-new .mmb (see blank_database.dart), minus its

@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager/services/nl_query/local_llm/llama_server_client.dart';
 import 'package:money_manager/services/nl_query/local_llm/llm_engine.dart';
 import 'package:money_manager/services/nl_query/local_llm/local_llm_manager_web.dart';

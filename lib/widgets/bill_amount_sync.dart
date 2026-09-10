@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../data/mmex_repository.dart';
-import '../models/transaction.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../state/database_provider.dart';
 import '../utils/list_utils.dart';
 

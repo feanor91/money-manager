@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:money_manager/data/mmex_database_io.dart' as io_db;
+import 'package:money_manager_core/data/mmex_database_io.dart' as io_db;
 import 'package:money_manager/services/nl_query/local_llm/local_llm_manager_io.dart';
 import 'package:money_manager/services/nl_query/local_llm/sql_query_engine.dart'
     as sql_engine;

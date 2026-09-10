@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:money_manager/models/account.dart';
-import 'package:money_manager/models/category.dart';
-import 'package:money_manager/models/payee.dart';
-import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager/services/voice_entry/voice_transaction_parser.dart';
 
 void main() {

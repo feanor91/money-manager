@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:money_manager/data/mmex_database_io.dart' as io_db;
+import 'package:money_manager_core/data/mmex_database_io.dart' as io_db;
 
 void main() {
   group('openFromPath missing-file behavior', () {

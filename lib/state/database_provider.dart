@@ -6,10 +6,10 @@ import 'package:flutter/material.dart' show ThemeMode;
 
 import '../data/android_file_link.dart';
 import '../data/blank_database.dart';
-import '../data/db_backup.dart';
+import 'package:money_manager_core/data/db_backup.dart';
 import '../data/db_companion_settings.dart';
-import '../data/mmex_database.dart';
-import '../data/mmex_repository.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
 import '../data/web_file_link.dart';
 import '../services/webdav/webdav_client.dart' show WebDavTestResult;
 import '../services/webdav/webdav_sync_decision.dart' show SyncAction;

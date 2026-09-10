@@ -8,9 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/in_memory_shared_preferences_async.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_async_platform_interface.dart';
 
-import 'package:money_manager/data/mmex_database.dart';
-import 'package:money_manager/data/mmex_repository.dart';
-import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager/state/app_preferences.dart';
 import 'package:money_manager/state/pin_lock_provider.dart';
 import 'package:money_manager/widgets/nl_query_dialog.dart';

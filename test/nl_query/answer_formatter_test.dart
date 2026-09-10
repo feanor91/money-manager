@@ -1,10 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:money_manager/models/account.dart';
-import 'package:money_manager/models/category.dart';
-import 'package:money_manager/models/currency.dart';
-import 'package:money_manager/models/payee.dart';
-import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager/services/nl_query/answer_formatter.dart';
 import 'package:money_manager/services/nl_query/query_executor.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';

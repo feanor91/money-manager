@@ -11,9 +11,9 @@ import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../data/mmex_repository.dart';
-import '../models/account.dart';
-import '../models/budget_period.dart' show nextForecastDay;
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/budget_period.dart' show nextForecastDay;
 import '../services/nl_query/answer_formatter.dart';
 import '../services/nl_query/local_llm/local_llm_manager.dart';
 import '../services/nl_query/local_llm/local_llm_support.dart';

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../models/transaction.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../screens/transactions_screen.dart' show TransactionEditorResult, TransactionEditorSheet;
 import '../services/voice_entry/voice_transaction_parser.dart';
 import '../state/database_provider.dart';

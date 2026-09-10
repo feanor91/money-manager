@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../data/mmex_repository.dart';
-import '../models/budget.dart';
-import '../models/budget_period.dart';
-import '../models/category.dart';
-import '../models/currency.dart';
-import '../models/transaction.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/budget.dart';
+import 'package:money_manager_core/models/budget_period.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 import 'hover_tooltip.dart';

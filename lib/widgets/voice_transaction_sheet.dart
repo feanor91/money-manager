@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../models/account.dart';
-import '../models/category.dart';
-import '../models/payee.dart';
-import '../models/transaction.dart' show TransCode;
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart' show TransCode;
 import '../services/voice_entry/voice_transaction_parser.dart';
 import '../utils/list_utils.dart' show findById;
 

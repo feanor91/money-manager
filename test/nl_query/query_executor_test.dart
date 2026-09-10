@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:money_manager/data/mmex_database.dart';
-import 'package:money_manager/data/mmex_repository.dart';
-import 'package:money_manager/models/recurrence.dart';
-import 'package:money_manager/models/transaction.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager/services/nl_query/query_executor.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';
 

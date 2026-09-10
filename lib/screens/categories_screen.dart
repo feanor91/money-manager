@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../data/mmex_repository.dart';
-import '../models/category.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/category.dart';
 import '../state/database_provider.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';

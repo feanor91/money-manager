@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../models/account.dart';
-import '../models/category.dart';
-import '../models/currency.dart';
-import '../models/payee.dart';
-import '../models/transaction.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../theme/app_theme.dart';
 
 class TransactionTile extends StatelessWidget {

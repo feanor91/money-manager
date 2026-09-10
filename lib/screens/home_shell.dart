@@ -4,10 +4,10 @@ import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
-import '../data/mmex_repository.dart';
-import '../models/bill_deposit.dart';
-import '../models/recurrence.dart';
-import '../models/transaction.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/bill_deposit.dart';
+import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../state/database_provider.dart';
 import '../widgets/webdav_conflict_dialog.dart';
 import 'accounts_screen.dart';

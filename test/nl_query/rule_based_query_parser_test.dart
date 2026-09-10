@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:money_manager/models/account.dart';
-import 'package:money_manager/models/category.dart';
-import 'package:money_manager/models/payee.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager/services/nl_query/query_intent.dart';
 import 'package:money_manager/services/nl_query/rule_based_query_parser.dart';
 

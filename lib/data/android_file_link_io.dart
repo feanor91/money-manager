@@ -5,7 +5,7 @@ import 'package:saf_util/saf_util.dart';
 
 import '../state/app_preferences.dart';
 import 'android_file_link.dart';
-import 'db_backup.dart' show backupFileNamesToDelete;
+import 'package:money_manager_core/data/db_backup.dart' show backupFileNamesToDelete;
 
 const _prefsKeyDirectoryUri = 'mmex_android_dir_uri';
 const _prefsKeyFileName = 'mmex_android_file_name';

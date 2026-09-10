@@ -1,7 +1,7 @@
-import '../../../data/mmex_repository.dart';
-import '../../../models/account.dart';
-import '../../../models/category.dart';
-import '../../../models/payee.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
 import '../query_intent.dart';
 import 'llm_engine.dart' show LlmChunkCallback, LlmFreeformOutcome;
 import 'model_catalog.dart';

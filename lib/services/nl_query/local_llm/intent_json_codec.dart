@@ -1,8 +1,8 @@
 import 'dart:convert';
 
-import '../../../models/account.dart';
-import '../../../models/category.dart';
-import '../../../models/payee.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
 import '../../../utils/list_utils.dart';
 import '../name_matcher.dart';
 import '../period_parser.dart';

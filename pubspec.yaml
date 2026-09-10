@@ -12,6 +12,11 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
+  # Coeur metier pur Dart (modeles + MmexRepository) - partage avec le futur
+  # serveur API, voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md
+  money_manager_core:
+    path: packages/money_manager_core
+
   # Acces base SQLite (le fichier .mmb est une base SQLite standard)
   sqlite3: ^2.4.6
   sqlite3_flutter_libs: ^0.5.24 # bundle la lib native sqlite3 pour Android/desktop

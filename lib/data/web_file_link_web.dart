@@ -6,7 +6,7 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
-import 'db_backup.dart' show backupFileNamesToDelete;
+import 'package:money_manager_core/data/db_backup.dart' show backupFileNamesToDelete;
 import 'web_file_link.dart';
 
 const _dbName = 'money_manager_file_handles';

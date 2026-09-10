@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../models/account.dart';
-import '../models/currency.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/currency.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 

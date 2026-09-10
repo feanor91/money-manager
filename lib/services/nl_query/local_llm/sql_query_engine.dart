@@ -1,9 +1,9 @@
 import 'dart:convert';
 
-import '../../../data/mmex_repository.dart';
-import '../../../models/account.dart';
-import '../../../models/category.dart';
-import '../../../models/payee.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'llm_engine.dart';
 
 /// `(phase, text, isReasoning)` - see [answerViaFullSqlAccess]'s own

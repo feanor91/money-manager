@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../data/mmex_repository.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
 import '../state/database_provider.dart';
 
 /// A just-saved category edit on an existing transaction or recurring bill,

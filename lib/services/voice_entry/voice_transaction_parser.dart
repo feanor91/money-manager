@@ -1,7 +1,7 @@
-import '../../models/account.dart';
-import '../../models/category.dart';
-import '../../models/payee.dart';
-import '../../models/transaction.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 import '../../utils/list_utils.dart';
 import '../nl_query/name_matcher.dart';
 

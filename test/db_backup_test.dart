@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:money_manager/data/db_backup.dart';
-import 'package:money_manager/data/db_backup_io.dart' as db_backup_io;
+import 'package:money_manager_core/data/db_backup.dart';
+import 'package:money_manager_core/data/db_backup_io.dart' as db_backup_io;
 
 void main() {
   group('backupFileName / backupTimestamp round-trip', () {

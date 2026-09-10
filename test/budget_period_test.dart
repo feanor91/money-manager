@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:money_manager/models/budget_period.dart';
+import 'package:money_manager_core/models/budget_period.dart';
 
 void main() {
   group('nextForecastDay', () {

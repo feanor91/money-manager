@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../data/mmex_repository.dart';
-import '../models/account.dart';
-import '../models/currency.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/currency.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';

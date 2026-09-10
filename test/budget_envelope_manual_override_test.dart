@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:money_manager/data/mmex_database.dart';
-import 'package:money_manager/data/mmex_repository.dart';
+import 'package:money_manager_core/data/mmex_database.dart';
+import 'package:money_manager_core/data/mmex_repository.dart';
 
 import 'test_helpers.dart';
 
