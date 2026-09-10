@@ -4,10 +4,25 @@ import 'package:provider/provider.dart';
 import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/currency.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
 import '../widgets/responsive_body.dart';
+
+/// Regroupe ce qu'il faut pour dessiner l'écran, qu'il vienne du fichier
+/// local ([_AccountsScreenState._localData]) ou du serveur API
+/// ([_AccountsScreenState._loadViaApi]) - étape 4 du chantier
+/// client/serveur (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md). Les deux
+/// chemins alimentent exactement le même arbre de widgets plus bas, pour
+/// ne pas dupliquer tout l'affichage.
+class _AccountsData {
+  final List<Account> accounts;
+  final CurrencyFormat? currency;
+  final double Function(int accountId) balanceOf;
+
+  _AccountsData({required this.accounts, required this.currency, required this.balanceOf});
+}
 
 class AccountsScreen extends StatefulWidget {
   const AccountsScreen({super.key});
@@ -17,22 +32,90 @@ class AccountsScreen extends StatefulWidget {
 }
 
 class _AccountsScreenState extends State<AccountsScreen> {
+  Future<_AccountsData>? _apiFuture;
+
+  _AccountsData _localData(MmexRepository repo) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return _AccountsData(
+      accounts: repo.getAccounts(),
+      currency: repo.getBaseCurrency(),
+      balanceOf: (id) => repo.accountBalance(id, asOf: today),
+    );
+  }
+
+  /// Lecture seule - les écritures (ajouter/modifier/supprimer un compte,
+  /// masquer/réafficher) continuent de passer par le fichier local même
+  /// en mode API, voir [openAccountEditor]. Ça veut dire qu'une
+  /// modification faite ici ne se reflète pas automatiquement dans cette
+  /// vue tant qu'on n'a pas rafraîchi manuellement - limitation connue
+  /// d'un premier pilote en lecture seule, pas un bug (voir la nuance du
+  /// plan sur la bascule des écritures, jamais progressive comme les
+  /// lectures).
+  Future<_AccountsData> _loadViaApi(ApiSessionProvider session) async {
+    final accounts = await session.getAccounts();
+    final currency = await session.getBaseCurrency();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final balances = await Future.wait(
+        [for (final a in accounts) session.accountBalance(a.id, asOf: today)]);
+    final balanceById = {for (var i = 0; i < accounts.length; i++) accounts[i].id: balances[i]};
+    return _AccountsData(
+      accounts: accounts,
+      currency: currency,
+      balanceOf: (id) => balanceById[id] ?? 0,
+    );
+  }
+
+  void _refreshApi(ApiSessionProvider session) {
+    setState(() => _apiFuture = _loadViaApi(session));
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final currency = repo.getBaseCurrency();
-    final accounts = repo.getAccounts();
-    final visible =
-        accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
-    final hidden =
-        accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
-    // asOf: today - see dashboard_screen.dart's balances map for why (a
-    // postdated transaction shouldn't count against "solde" before its own
-    // date).
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
 
+    if (apiSession.useApiForAccounts) {
+      _apiFuture ??= _loadViaApi(apiSession);
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Comptes (via API)'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Rafraîchir',
+              onPressed: () => _refreshApi(apiSession),
+            ),
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: 'Paramètres',
+              onPressed: () => Navigator.of(context).pushNamed('/settings'),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () => openAccountEditor(context, repo),
+          icon: const Icon(Icons.add),
+          label: const Text('Nouveau compte'),
+        ),
+        body: FutureBuilder<_AccountsData>(
+          future: _apiFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Erreur : ${snapshot.error}'));
+            }
+            return _buildBody(context, dbProvider, repo, snapshot.data!);
+          },
+        ),
+      );
+    }
+
+    _apiFuture = null; // en attente d'une prochaine bascule vers l'API
     return Scaffold(
       appBar: AppBar(
         title: const Text('Comptes'),
@@ -49,52 +132,58 @@ class _AccountsScreenState extends State<AccountsScreen> {
         icon: const Icon(Icons.add),
         label: const Text('Nouveau compte'),
       ),
-      body: accounts.isEmpty
-          ? const Center(child: Text('Aucun compte'))
-          : ResponsiveBody(
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                children: [
-                  if (visible.isNotEmpty) ...[
-                    _SectionHeader('Visibles (${visible.length})'),
-                    const SizedBox(height: 8),
-                    for (final account in visible)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _AccountRow(
-                          account: account,
-                          balance: repo.accountBalance(account.id, asOf: today),
-                          currency: currency,
-                          hidden: false,
-                          onTap: () => openAccountEditor(context, repo,
-                              existing: account),
-                          onToggleHidden: () =>
-                              dbProvider.setAccountHidden(account.id, true),
-                        ),
-                      ),
-                  ],
-                  if (hidden.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    _SectionHeader('Masqués (${hidden.length})'),
-                    const SizedBox(height: 8),
-                    for (final account in hidden)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _AccountRow(
-                          account: account,
-                          balance: repo.accountBalance(account.id, asOf: today),
-                          currency: currency,
-                          hidden: true,
-                          onTap: () => openAccountEditor(context, repo,
-                              existing: account),
-                          onToggleHidden: () =>
-                              dbProvider.setAccountHidden(account.id, false),
-                        ),
-                      ),
-                  ],
-                ],
+      body: _buildBody(context, dbProvider, repo, _localData(repo)),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, DatabaseProvider dbProvider, MmexRepository repo,
+      _AccountsData data) {
+    final accounts = data.accounts;
+    final visible = accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final hidden = accounts.where((a) => dbProvider.isAccountHidden(a.id)).toList();
+
+    if (accounts.isEmpty) {
+      return const Center(child: Text('Aucun compte'));
+    }
+    return ResponsiveBody(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+        children: [
+          if (visible.isNotEmpty) ...[
+            _SectionHeader('Visibles (${visible.length})'),
+            const SizedBox(height: 8),
+            for (final account in visible)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _AccountRow(
+                  account: account,
+                  balance: data.balanceOf(account.id),
+                  currency: data.currency,
+                  hidden: false,
+                  onTap: () => openAccountEditor(context, repo, existing: account),
+                  onToggleHidden: () => dbProvider.setAccountHidden(account.id, true),
+                ),
               ),
-            ),
+          ],
+          if (hidden.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _SectionHeader('Masqués (${hidden.length})'),
+            const SizedBox(height: 8),
+            for (final account in hidden)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _AccountRow(
+                  account: account,
+                  balance: data.balanceOf(account.id),
+                  currency: data.currency,
+                  hidden: true,
+                  onTap: () => openAccountEditor(context, repo, existing: account),
+                  onToggleHidden: () => dbProvider.setAccountHidden(account.id, false),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }

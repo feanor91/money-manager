@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:money_manager_core/models/account.dart';
+import 'package:provider/provider.dart';
 
-import '../services/api/api_client.dart';
+import '../state/api_session_provider.dart';
 
-/// Écran de développement pour prouver que l'appli Flutter peut réellement
-/// parler au serveur API construit à l'étape 2/3 (voir
-/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - pas un écran destiné à rester
-/// dans l'appli finale, juste la preuve de bout en bout demandée par le
-/// plan avant de s'attaquer à l'étape 4 (basculer chaque écran réel un
-/// par un, un chantier bien plus large).
+/// Écran de connexion au serveur API du chantier client/serveur (voir
+/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - se connecte au [ApiSessionProvider]
+/// partagé par toute l'appli (pas un client jetable propre à cet écran),
+/// donc une fois connecté ici, l'écran Comptes (étape 4) peut utiliser la
+/// même session. Reste un écran de développement, à retirer avant tout
+/// déploiement réel de l'appli elle-même (pas le serveur, l'appli).
 class ApiDebugScreen extends StatefulWidget {
   const ApiDebugScreen({super.key});
 
@@ -19,10 +20,9 @@ class ApiDebugScreen extends StatefulWidget {
 class _ApiDebugScreenState extends State<ApiDebugScreen> {
   final _urlController = TextEditingController(text: 'http://localhost:8899');
   final _pinController = TextEditingController();
-  ApiClient? _client;
   List<Account>? _accounts;
-  String? _error;
-  bool _busy = false;
+  String? _loadError;
+  bool _loadingAccounts = false;
 
   @override
   void dispose() {
@@ -31,100 +31,84 @@ class _ApiDebugScreenState extends State<ApiDebugScreen> {
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _loadAccounts(ApiSessionProvider session) async {
     setState(() {
-      _busy = true;
-      _error = null;
-    });
-    final client = ApiClient(baseUrl: _urlController.text.trim());
-    try {
-      await client.login(_pinController.text.trim());
-      setState(() {
-        _client = client;
-        _busy = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = '$e';
-        _busy = false;
-      });
-    }
-  }
-
-  Future<void> _loadAccounts() async {
-    final client = _client;
-    if (client == null) return;
-    setState(() {
-      _busy = true;
-      _error = null;
+      _loadingAccounts = true;
+      _loadError = null;
     });
     try {
-      final accounts = await client.getAccounts();
-      setState(() {
-        _accounts = accounts;
-        _busy = false;
-      });
+      final accounts = await session.getAccounts();
+      setState(() => _accounts = accounts);
     } catch (e) {
-      setState(() {
-        _error = '$e';
-        _busy = false;
-      });
+      setState(() => _loadError = '$e');
+    } finally {
+      setState(() => _loadingAccounts = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final client = _client;
+    final session = context.watch<ApiSessionProvider>();
     return Scaffold(
-      appBar: AppBar(title: const Text('Test API serveur (chantier)')),
+      appBar: AppBar(title: const Text('Connexion au serveur API (chantier)')),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Preuve de bout en bout - se connecte au serveur API du chantier '
-              'client/serveur (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) et '
-              'récupère la vraie liste des comptes via /rpc/getAccounts.',
+            Text(
+              session.isConnected
+                  ? 'Connecté à ${session.serverUrl} - la session est partagée '
+                      'par toute l\'appli (voir Paramètres → Comptes via API).'
+                  : 'Connexion au serveur API du chantier client/serveur (voir '
+                      'PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).',
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _urlController,
               decoration: const InputDecoration(labelText: 'URL du serveur'),
-              enabled: client == null,
+              enabled: !session.isConnected,
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _pinController,
               decoration: const InputDecoration(labelText: 'Code PIN'),
               obscureText: true,
-              enabled: client == null,
-              onSubmitted: (_) => _login(),
+              enabled: !session.isConnected,
+              onSubmitted: (_) => session.login(_urlController.text.trim(), _pinController.text.trim()),
             ),
             const SizedBox(height: 12),
-            if (client == null)
+            if (!session.isConnected)
               FilledButton(
-                onPressed: _busy ? null : _login,
-                child: Text(_busy ? 'Connexion...' : 'Se connecter'),
+                onPressed: session.isBusy
+                    ? null
+                    : () => session.login(_urlController.text.trim(), _pinController.text.trim()),
+                child: Text(session.isBusy ? 'Connexion...' : 'Se connecter'),
               )
             else ...[
               FilledButton(
-                onPressed: _busy ? null : _loadAccounts,
-                child: Text(_busy ? 'Chargement...' : 'Charger les comptes'),
+                onPressed: _loadingAccounts ? null : () => _loadAccounts(session),
+                child: Text(_loadingAccounts ? 'Chargement...' : 'Charger les comptes'),
               ),
               const SizedBox(height: 8),
               OutlinedButton(
-                onPressed: () => setState(() {
-                  _client = null;
-                  _accounts = null;
-                  _error = null;
-                }),
-                child: const Text('Se déconnecter'),
+                onPressed: () {
+                  session.logout();
+                  setState(() {
+                    _accounts = null;
+                    _loadError = null;
+                  });
+                },
+                child: const Text('Se déconnecter (révoque le jeton)'),
               ),
             ],
-            if (_error != null) ...[
+            if (session.error != null) ...[
               const SizedBox(height: 12),
-              Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              Text(session.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ],
+            if (_loadError != null) ...[
+              const SizedBox(height: 12),
+              Text(_loadError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ],
             if (_accounts != null) ...[
               const SizedBox(height: 16),

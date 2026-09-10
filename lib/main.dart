@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import 'app.dart';
 import 'services/nl_query/local_llm/local_llm_manager.dart';
+import 'state/api_session_provider.dart';
 import 'state/database_provider.dart';
 import 'state/pin_lock_provider.dart';
 import 'state/purchase_simulation_provider.dart';
@@ -55,6 +56,7 @@ Future<void> main() async {
         ChangeNotifierProvider.value(value: dbProvider),
         ChangeNotifierProvider.value(value: pinLockProvider),
         ChangeNotifierProvider(create: (_) => PurchaseSimulationProvider()),
+        ChangeNotifierProvider(create: (_) => ApiSessionProvider()),
       ],
       child: const MoneyManagerApp(),
     ),

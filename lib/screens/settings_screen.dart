@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
@@ -309,17 +310,40 @@ class SettingsScreen extends StatelessWidget {
           // (branche `client-serveur`, voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md)
           // - à retirer avant tout déploiement réel, ne fait rien sans un
           // serveur de développement lancé à la main à côté.
-          Card(
-            child: ListTile(
-              leading: const Icon(Icons.dns_outlined),
-              title: const Text('Test API serveur (chantier)'),
-              subtitle: const Text('Preuve de concept du chantier client/serveur'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const ApiDebugScreen()),
+          Builder(builder: (context) {
+            final apiSession = context.watch<ApiSessionProvider>();
+            return Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: const Icon(Icons.dns_outlined),
+                    title: const Text('Connexion serveur API (chantier)'),
+                    subtitle: Text(apiSession.isConnected
+                        ? 'Connecté à ${apiSession.serverUrl}'
+                        : 'Non connecté'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ApiDebugScreen()),
+                    ),
+                  ),
+                  // Étape 4 (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - lecture
+                  // seule pour l'instant, les écritures de l'écran Comptes
+                  // continuent de passer par le fichier local même quand cette
+                  // bascule est active (voir la nuance du plan sur la coupure
+                  // coordonnée des écritures, pas progressive comme les lectures).
+                  SwitchListTile(
+                    title: const Text('Comptes via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "L'écran Comptes lit ses données depuis le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForAccounts,
+                    onChanged: apiSession.isConnected
+                        ? (v) => apiSession.useApiForAccounts = v
+                        : null,
+                  ),
+                ],
               ),
-            ),
-          ),
+            );
+          }),
           const SizedBox(height: 16),
           const Center(child: _VersionLabel()),
         ],

@@ -27,3 +27,7 @@ Database/
 # authored source, not build output).
 server/deploy_*/*server_linux_x64*
 server/deploy_*/libsqlite3.so
+# Artefacts d'exécution locale de start.sh (log + fichier PID) - jamais
+# committés non plus.
+server/deploy_*/server.log
+server/deploy_*/server.pid

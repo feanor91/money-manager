@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'currency.g.dart';
+
+@JsonSerializable()
 class CurrencyFormat {
   final int id;
   final String name;
@@ -25,6 +30,10 @@ class CurrencyFormat {
       groupSeparator: row['GROUP_SEPARATOR'] as String? ?? ' ',
     );
   }
+
+  factory CurrencyFormat.fromJson(Map<String, dynamic> json) =>
+      _$CurrencyFormatFromJson(json);
+  Map<String, dynamic> toJson() => _$CurrencyFormatToJson(this);
 
   String format(double value) {
     final negative = value < 0;

@@ -53,11 +53,35 @@ Router buildRouter({
     return Response.ok(jsonEncode({'token': token}));
   });
 
+  // Authentifiée (comme /rpc/*) plutôt que publique - un jeton ne peut
+  // révoquer que lui-même, jamais un jeton arbitraire passé en paramètre.
+  // À utiliser en cas de doute sur une fuite (voir la discussion sécurité
+  // dans PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) plutôt que d'attendre
+  // l'expiration naturelle (7 jours).
+  router.post(
+      '/auth/logout',
+      const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler((Request request) async {
+        tokenStore.revoke(request.context['bearerToken'] as String);
+        return Response.ok(jsonEncode({'ok': true}));
+      }));
+
   final rpcRouter = Router();
   rpcRouter.post('/getAccounts', (Request request) async {
     final onlyOpen = request.url.queryParameters['onlyOpen'] == 'true';
     final accounts = repo.getAccounts(onlyOpen: onlyOpen);
     return Response.ok(jsonEncode([for (final a in accounts) a.toJson()]));
+  });
+  rpcRouter.post('/getBaseCurrency', (Request request) async {
+    final currency = repo.getBaseCurrency();
+    return Response.ok(jsonEncode(currency?.toJson()));
+  });
+  rpcRouter.post('/accountBalance', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final accountId = body['accountId'] as int;
+    final asOfStr = body['asOf'] as String?;
+    final balance = repo.accountBalance(accountId,
+        asOf: asOfStr == null ? null : DateTime.parse(asOfStr));
+    return Response.ok(jsonEncode({'balance': balance}));
   });
 
   router.mount(
@@ -80,7 +104,7 @@ Middleware _bearerAuth(TokenStore tokenStore) {
       if (!tokenStore.isValid(token)) {
         return Response(401, body: jsonEncode({'error': 'jeton invalide ou expiré'}));
       }
-      return innerHandler(request);
+      return innerHandler(request.change(context: {'bearerToken': token}));
     };
   };
 }

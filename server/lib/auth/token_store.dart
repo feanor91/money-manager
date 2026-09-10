@@ -15,7 +15,11 @@ class TokenStore {
   final Duration ttl;
   final Map<String, DateTime> _issuedAt = {};
 
-  TokenStore({this.ttl = const Duration(days: 30)});
+  // 7 jours par défaut (réduit de 30 - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md,
+  // discussion sur la fenêtre d'exposition d'un jeton qui fuiterait) - un
+  // compromis entre reconnexion fréquente et exposition prolongée, pas une
+  // valeur figée à ne jamais revoir.
+  TokenStore({this.ttl = const Duration(days: 7)});
 
   String issue() {
     final bytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
