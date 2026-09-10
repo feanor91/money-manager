@@ -20,3 +20,10 @@ ios/Pods/
 # extraction can leave it inside instead).
 Database/
 *.mmb
+
+# Server deployment packages - compiled binaries built on demand (see
+# server/deploy_linux_x64/LISEZMOI_DEPLOIEMENT.md), same as build/ above.
+# start.sh/LISEZMOI_DEPLOIEMENT.md in the same folder ARE tracked (real
+# authored source, not build output).
+server/deploy_*/*server_linux_x64*
+server/deploy_*/libsqlite3.so
