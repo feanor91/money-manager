@@ -2,8 +2,9 @@
 
 Document de planification - voir ROADMAP.md. Version à jour du 10/09/2026 ;
 toutes les décisions structurantes ont été tranchées, le chiffrage fait, et
-les étapes 1 à 3 sont **en cours d'implémentation réelle** sur la branche
-`client-serveur` (voir "Statut d'avancement" ci-dessous).
+les étapes 1 à 3 sont **implémentées et réellement déployées** sur Excelsior
+(branche `client-serveur`, voir "Statut d'avancement" ci-dessous) -
+accessible publiquement à `https://bteuile.ddns.net:8444`.
 
 Une version illustrée de ce document (diagrammes, mise en page) a été
 publiée en artifact Claude - celui-ci en est la version texte, gardée dans
@@ -43,11 +44,25 @@ le repo pour ne pas la perdre.
   s'y engager - voir "Prochaine décision" ci-dessous.
 - ⏳ **Étapes 5-6** (IA côté serveur, retrait de l'accès fichier direct) :
   pas commencées.
-- 🚫 **Déploiement réel sur Excelsior** : non fait, et non faisable depuis
-  cet environnement - aucun accès SSH à Excelsior n'est disponible ici.
-  Toute la vérification ci-dessus s'est faite en local, sur une base de
-  développement jetable, jamais contre le vrai fichier Nextcloud ni un
-  vrai serveur en production.
+- ✅ **Déploiement réel sur Excelsior** : fait, par l'utilisateur lui-même
+  (SSH coupé sur le NAS, pour des raisons de sécurité - déploiement
+  entièrement manuel, sans terminal, via l'interface web DSM). Le paquet
+  de déploiement (`server/deploy_linux_x64/`, exécutable compilé en
+  croisé pour Linux x86_64 via Docker localement, `libsqlite3.so`
+  embarquée, `start.sh` avec verrou anti-doublon) a été affiné après
+  plusieurs allers-retours réels : bit d'exécution introuvable via
+  File Station (corrigé - le script se rend lui-même exécutable),
+  déclencheur "au démarrage" absent de cette install DSM (repli sur
+  tâche planifiée + répétition horaire, avant que l'utilisateur trouve
+  finalement l'option), mauvais dossier (`web/mmex-server` - **risque
+  réel d'exposer une copie de la vraie base sur internet**, sous le
+  dossier que nginx sert publiquement - corrigé), mauvais nom d'hôte de
+  proxy inversé (`mmex.bteuile.synology.me`, un domaine non utilisé -
+  le bon est `bteuile.ddns.net`, géré par nginx directement sur le port
+  8443, donc une nouvelle règle DSM sur un port différent - 8444 - ne
+  rentre pas en conflit). **Vérifié en conditions réelles** : requête
+  HTTPS publique depuis internet vers `bteuile.ddns.net:8444/auth/
+  login`, réponse JSON correcte du vrai serveur tournant sur Excelsior.
 
 ### Prochaine décision
 
