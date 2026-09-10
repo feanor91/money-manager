@@ -9,6 +9,7 @@ import '../state/pin_lock_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/local_llm_settings_card.dart';
 import '../widgets/webdav_settings_card.dart';
+import 'api_debug_screen.dart';
 import 'categories_screen.dart';
 import 'database_diagnostics_screen.dart';
 import 'help_screen.dart';
@@ -300,6 +301,22 @@ class SettingsScreen extends StatelessWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const HelpScreen()),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Preuve de bout en bout du chantier client/serveur en cours
+          // (branche `client-serveur`, voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md)
+          // - à retirer avant tout déploiement réel, ne fait rien sans un
+          // serveur de développement lancé à la main à côté.
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.dns_outlined),
+              title: const Text('Test API serveur (chantier)'),
+              subtitle: const Text('Preuve de concept du chantier client/serveur'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ApiDebugScreen()),
               ),
             ),
           ),

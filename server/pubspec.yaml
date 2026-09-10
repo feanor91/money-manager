@@ -15,6 +15,7 @@ dependencies:
     path: ../packages/money_manager_core
   shelf: ^1.4.1
   shelf_router: ^1.1.4
+  sqlite3: ^2.4.6 # utilisé directement par tool/create_dev_db.dart
 
 dev_dependencies:
   http: ^1.2.0
