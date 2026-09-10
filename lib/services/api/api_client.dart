@@ -558,6 +558,15 @@ class ApiClient {
     return (json as Map<String, dynamic>)['transId'] as int;
   }
 
+  Future<List<int>> catchUpBillDeposit(BillDeposit bill, DateTime asOf, {bool reconciled = false}) async {
+    final json = await _rpc('catchUpBillDeposit', body: {
+      'bill': bill.toJson(),
+      'asOf': asOf.toIso8601String(),
+      'reconciled': reconciled,
+    });
+    return ((json as Map<String, dynamic>)['ids'] as List).cast<int>();
+  }
+
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
   Future<void> upsertBudgetEnvelope({
     int? id,

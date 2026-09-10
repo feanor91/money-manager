@@ -421,6 +421,9 @@ class ApiSessionProvider extends ChangeNotifier {
       _requireClient()
           .recordBillOccurrence(bill, date: date, reconciled: reconciled, splitInto: splitInto);
 
+  Future<List<int>> catchUpBillDeposit(BillDeposit bill, DateTime asOf, {bool reconciled = false}) =>
+      _requireClient().catchUpBillDeposit(bill, asOf, reconciled: reconciled);
+
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
   Future<void> upsertBudgetEnvelope({
     int? id,

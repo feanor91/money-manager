@@ -527,6 +527,15 @@ Handler buildRouter({
     );
     return Response.ok(jsonEncode({'transId': transId}));
   });
+  rpcRouter.post('/catchUpBillDeposit', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final ids = repo.catchUpBillDeposit(
+      BillDeposit.fromJson(body['bill'] as Map<String, dynamic>),
+      DateTime.parse(body['asOf'] as String),
+      reconciled: body['reconciled'] as bool? ?? false,
+    );
+    return Response.ok(jsonEncode({'ids': ids}));
+  });
 
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
   rpcRouter.post('/upsertBudgetEnvelope', (Request request) async {

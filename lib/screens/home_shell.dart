@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -5,7 +7,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
+import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import '../state/api_session_provider.dart';
@@ -37,6 +42,17 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
+
+  // Tant que la connexion API automatique n'a pas fini de s'installer
+  // (réussie, échouée ou expirée), les écrans (DashboardScreen en tête,
+  // premier de l'IndexedStack) ne sont pas encore montés - voir
+  // [_autoConnectApi]. Sans cette barrière, chaque écran ferait sa toute
+  // première lecture en local (les bascules useApiForX ne passent à
+  // `true` qu'une fois la connexion établie) et plantait immédiatement
+  // si le fichier local est un simple fichier factice sans schéma MMEX
+  // (trouvé 2026-09-10 : "fake.mmb" vide -> SqliteException "no such
+  // table: ACCOUNTLIST_V1" dès l'ouverture).
+  bool _autoConnectSettled = false;
 
   // Read once at startup (see pubspec.yaml's version field, bumped
   // automatically by the release CI) - null until it resolves, so the
@@ -85,8 +101,14 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _runRecurringCatchUp());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoConnectApi());
+    // La connexion API doit être tentée AVANT que les écrans (et le
+    // rattrapage des opérations récurrentes) ne se montent - voir
+    // [_autoConnectSettled].
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _autoConnectApi();
+      if (mounted) setState(() => _autoConnectSettled = true);
+      await _runRecurringCatchUp();
+    });
     // Update check moved to app.dart's _PinGateState (2026-08-07, user
     // request) - starts as soon as the database-picker/PIN screen shows
     // instead of waiting all the way until here (post-unlock).
@@ -106,7 +128,18 @@ class _HomeShellState extends State<HomeShell> {
   Future<void> _autoConnectApi() async {
     final apiSession = context.read<ApiSessionProvider>();
     if (apiSession.isConnected) return;
-    await apiSession.login('http://192.168.1.44:8899', '3364');
+    // Délai court délibéré (le reste de l'appli, via ApiSessionProvider.
+    // login appelé manuellement depuis l'écran de connexion, n'a lui aucun
+    // délai imposé) - les écrans restent maintenant bloqués derrière
+    // [_autoConnectSettled] tant que cet appel n'a pas fini, donc un
+    // serveur injoignable (hors du réseau local, éteint...) ne doit pas
+    // faire attendre l'utilisateur plus de quelques secondes à chaque
+    // lancement avant de retomber en mode local.
+    try {
+      await apiSession.login('http://192.168.1.44:8899', '3364').timeout(const Duration(seconds: 4));
+    } on TimeoutException {
+      return;
+    }
     if (!apiSession.isConnected) return;
     // Toutes les bascules activées d'office - le but de ce test est
     // justement de vérifier que chaque écran fonctionne intégralement via
@@ -125,9 +158,13 @@ class _HomeShellState extends State<HomeShell> {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository;
     if (repo == null) return;
+    final apiSession = context.read<ApiSessionProvider>();
+    final useApi = apiSession.useApiForRecurring && apiSession.isConnected;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final due = repo.getDueBillDeposits(today);
+    final allBills = useApi ? await apiSession.getBillDeposits() : repo.getBillDeposits();
+    if (!mounted) return;
+    final due = allBills.where((b) => !b.paused && !b.nextOccurrence.isAfter(today)).toList();
     if (due.isEmpty) return;
 
     final silent = due.where((b) => b.autoExecute == RecurrenceAutoExecute.silent).toList();
@@ -135,7 +172,11 @@ class _HomeShellState extends State<HomeShell> {
 
     var addedCount = 0;
     for (final bill in silent) {
-      addedCount += repo.catchUpBillDeposit(bill, today).length;
+      if (useApi) {
+        addedCount += (await apiSession.catchUpBillDeposit(bill, today)).length;
+      } else {
+        addedCount += repo.catchUpBillDeposit(bill, today).length;
+      }
     }
 
     if (!mounted) return;
@@ -143,20 +184,28 @@ class _HomeShellState extends State<HomeShell> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('$addedCount opération(s) récurrente(s) enregistrée(s) automatiquement')),
       );
-      dbProvider.touch();
+      if (!useApi) dbProvider.touch();
     }
 
     if (notify.isNotEmpty) {
       await showDialog(
         context: context,
-        builder: (_) => _RecurringCatchUpDialog(bills: notify, asOf: today, repo: repo),
+        builder: (_) => _RecurringCatchUpDialog(
+          bills: notify,
+          asOf: today,
+          repo: repo,
+          apiSession: useApi ? apiSession : null,
+        ),
       );
-      if (mounted) dbProvider.touch();
+      if (mounted && !useApi) dbProvider.touch();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_autoConnectSettled) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     final dbProvider = context.watch<DatabaseProvider>();
     return Scaffold(
       // A Stack overlay, not a Column - the banner floating on top of the
@@ -502,8 +551,10 @@ class _RecurringCatchUpDialog extends StatefulWidget {
   final List<BillDeposit> bills;
   final DateTime asOf;
   final MmexRepository repo;
+  final ApiSessionProvider? apiSession;
 
-  const _RecurringCatchUpDialog({required this.bills, required this.asOf, required this.repo});
+  const _RecurringCatchUpDialog(
+      {required this.bills, required this.asOf, required this.repo, this.apiSession});
 
   @override
   State<_RecurringCatchUpDialog> createState() => _RecurringCatchUpDialogState();
@@ -511,18 +562,46 @@ class _RecurringCatchUpDialog extends StatefulWidget {
 
 class _RecurringCatchUpDialogState extends State<_RecurringCatchUpDialog> {
   late final Set<int> _selected;
+  CurrencyFormat? _currency;
+  Map<int, Payee>? _payees;
+  Map<int, Account>? _accounts;
 
   @override
   void initState() {
     super.initState();
     _selected = widget.bills.map((b) => b.id).toSet();
+    if (widget.apiSession != null) {
+      _loadViaApi();
+    } else {
+      _currency = widget.repo.getBaseCurrency();
+      _payees = {for (final p in widget.repo.getPayees(onlyActive: false)) p.id: p};
+      _accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
+    }
+  }
+
+  Future<void> _loadViaApi() async {
+    final session = widget.apiSession!;
+    final currency = await session.getBaseCurrency();
+    final payees = await session.getPayees(onlyActive: false);
+    final accounts = await session.getAccounts();
+    if (!mounted) return;
+    setState(() {
+      _currency = currency;
+      _payees = {for (final p in payees) p.id: p};
+      _accounts = {for (final a in accounts) a.id: a};
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final currency = widget.repo.getBaseCurrency();
-    final payees = {for (final p in widget.repo.getPayees(onlyActive: false)) p.id: p};
-    final accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
+    if (_payees == null || _accounts == null) {
+      return const AlertDialog(
+        content: SizedBox(height: 80, child: Center(child: CircularProgressIndicator())),
+      );
+    }
+    final currency = _currency;
+    final payees = _payees!;
+    final accounts = _accounts!;
 
     return AlertDialog(
       title: const Text('Opérations récurrentes à confirmer'),
@@ -562,13 +641,17 @@ class _RecurringCatchUpDialogState extends State<_RecurringCatchUpDialog> {
           child: const Text('Ignorer pour l\'instant'),
         ),
         FilledButton(
-          onPressed: () {
+          onPressed: () async {
             for (final bill in widget.bills) {
               if (_selected.contains(bill.id)) {
-                widget.repo.catchUpBillDeposit(bill, widget.asOf);
+                if (widget.apiSession != null) {
+                  await widget.apiSession!.catchUpBillDeposit(bill, widget.asOf);
+                } else {
+                  widget.repo.catchUpBillDeposit(bill, widget.asOf);
+                }
               }
             }
-            Navigator.of(context).pop();
+            if (context.mounted) Navigator.of(context).pop();
           },
           child: const Text('Enregistrer la sélection'),
         ),

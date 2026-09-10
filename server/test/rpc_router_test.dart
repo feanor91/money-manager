@@ -930,6 +930,26 @@ void main() {
       expect(repo.getTransactions(accountId: accountId).any((t) => t.id == newId), isTrue);
       expect(repo.getBillDeposits().single.nextOccurrence, DateTime(2026, 5, 1));
     });
+
+    test('POST /rpc/catchUpBillDeposit records every missed occurrence and advances the bill',
+        () async {
+      final token = tokenStore.issue();
+      final bill = repo.getBillDeposits().singleWhere((b) => b.id == billId);
+      final response = await router(post('/rpc/catchUpBillDeposit', token: token, body: {
+        'bill': bill.toJson(),
+        'asOf': '2026-06-01T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final ids = (json['ids'] as List).cast<int>();
+      expect(ids, isNotEmpty);
+      for (final id in ids) {
+        expect(repo.getTransactions(accountId: accountId).any((t) => t.id == id), isTrue);
+      }
+      expect(repo.getBillDeposits().single.nextOccurrence.isAfter(DateTime(2026, 6, 1)) ||
+          repo.getBillDeposits().single.nextOccurrence.isAtSameMomentAs(DateTime(2026, 6, 1)),
+          isTrue);
+    });
   });
 
   group('Écritures - Budget (vue enveloppes)', () {

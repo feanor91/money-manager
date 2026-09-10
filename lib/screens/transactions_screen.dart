@@ -175,6 +175,10 @@ int _compareLedgerRows(
 /// écritures (pointer/dépointer, modifier date/montant en ligne, l'éditeur
 /// complet...) continuent de passer par le dépôt local dans tous les cas.
 class _TransactionsData {
+  final List<Account> accounts;
+  final List<Account> visibleAccounts;
+  final Map<int, Account> accountsById;
+  final int? accountId;
   final CurrencyFormat? currency;
   final Map<int, Category> categories;
   final Map<int, Payee> payees;
@@ -184,6 +188,10 @@ class _TransactionsData {
   final ({int min, int max})? yearRange;
 
   _TransactionsData({
+    required this.accounts,
+    required this.visibleAccounts,
+    required this.accountsById,
+    required this.accountId,
     required this.currency,
     required this.categories,
     required this.payees,
@@ -267,12 +275,28 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   Future<_TransactionsData>? _apiFuture;
   _TransactionsData? _lastData;
-  ({int? accountId, DateTime month})? _apiFutureKey;
+  ({int? selectedAccountId, DateTime month})? _apiFutureKey;
 
-  _TransactionsData _localData(MmexRepository repo, int? accountId) {
+  /// La liste des comptes elle-même vient aussi du serveur en mode API -
+  /// même raison que le tableau de bord (voir sa doc de _localData), un
+  /// fichier local vide/factice ne doit jamais être consulté quand
+  /// l'application est connectée (2026-09-10).
+  _TransactionsData _localData(MmexRepository repo, DatabaseProvider dbProvider) {
+    final accounts = repo.getAccounts();
+    final visibleAccounts =
+        accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final accountId =
+        visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
+            ? dbProvider.selectedAccountId
+            : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
+    final accountsById = {for (final a in accounts) a.id: a};
     final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
     return _TransactionsData(
+      accounts: accounts,
+      visibleAccounts: visibleAccounts,
+      accountsById: accountsById,
+      accountId: accountId,
       currency: repo.getBaseCurrency(),
       categories: {for (final c in repo.getCategories()) c.id: c},
       payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
@@ -292,7 +316,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// mode API, voir chaque `repo.xxx` plus bas dans cette classe. Pas de
   /// rafraîchissement automatique après une modification - même nuance que
   /// les autres écrans déjà migrés.
-  Future<_TransactionsData> _loadViaApi(ApiSessionProvider session, int? accountId) async {
+  Future<_TransactionsData> _loadViaApi(ApiSessionProvider session, DatabaseProvider dbProvider) async {
+    final accounts = await session.getAccounts();
+    final visibleAccounts =
+        accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
+    final accountId =
+        visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
+            ? dbProvider.selectedAccountId
+            : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
+    final accountsById = {for (final a in accounts) a.id: a};
     final previousMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
     final nextMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
     final currency = await session.getBaseCurrency();
@@ -307,6 +339,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             to: _showFullLedger ? null : nextMonth);
     final yearRange = accountId == null ? null : await session.transactionYearRange(accountId);
     return _TransactionsData(
+      accounts: accounts,
+      visibleAccounts: visibleAccounts,
+      accountsById: accountsById,
+      accountId: accountId,
       currency: currency,
       categories: {for (final c in categories) c.id: c},
       payees: {for (final p in payees) p.id: p},
@@ -317,10 +353,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
-  void _refreshApi(ApiSessionProvider session, int? accountId) {
+  void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider) {
     setState(() {
-      _apiFutureKey = (accountId: accountId, month: _selectedMonth);
-      _apiFuture = _loadViaApi(session, accountId);
+      _apiFutureKey = (selectedAccountId: dbProvider.selectedAccountId, month: _selectedMonth);
+      _apiFuture = _loadViaApi(session, dbProvider);
     });
   }
 
@@ -329,24 +365,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final dbProvider = context.watch<DatabaseProvider>();
     final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final accounts = repo.getAccounts();
-    final visibleAccounts =
-        accounts.where((a) => !dbProvider.isAccountHidden(a.id)).toList();
-
-    // Always the same account as the dashboard's selection - falls back to
-    // the first visible account if nothing (valid) is selected yet, same
-    // rule the dashboard itself uses, so the two screens can never disagree.
-    final accountId =
-        visibleAccounts.any((a) => a.id == dbProvider.selectedAccountId)
-            ? dbProvider.selectedAccountId
-            : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
-    final accountsById = {for (final a in accounts) a.id: a};
 
     if (apiSession.useApiForTransactions) {
-      final key = (accountId: accountId, month: _selectedMonth);
+      final key = (selectedAccountId: dbProvider.selectedAccountId, month: _selectedMonth);
       if (_apiFuture == null || _apiFutureKey != key) {
         _apiFutureKey = key;
-        _apiFuture = _loadViaApi(apiSession, accountId);
+        _apiFuture = _loadViaApi(apiSession, dbProvider);
       }
       return FutureBuilder<_TransactionsData>(
         future: _apiFuture,
@@ -363,16 +387,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             }
             return const Scaffold(body: Center(child: CircularProgressIndicator()));
           }
-          return _buildScaffold(
-              context, dbProvider, repo, accountId, visibleAccounts, accountsById, _lastData!,
-              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, accountId));
+          return _buildScaffold(context, dbProvider, repo, _lastData!,
+              apiSession: apiSession, apiRefresh: () => _refreshApi(apiSession, dbProvider));
         },
       );
     }
 
     _apiFuture = null;
-    return _buildScaffold(
-        context, dbProvider, repo, accountId, visibleAccounts, accountsById, _localData(repo, accountId));
+    return _buildScaffold(context, dbProvider, repo, _localData(repo, dbProvider));
   }
 
   /// [apiRefresh] non-null seulement en mode API - ajoute le bouton de
@@ -387,13 +409,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     BuildContext context,
     DatabaseProvider dbProvider,
     MmexRepository repo,
-    int? accountId,
-    List<Account> visibleAccounts,
-    Map<int, Account> accountsById,
     _TransactionsData data, {
     ApiSessionProvider? apiSession,
     VoidCallback? apiRefresh,
   }) {
+    final accountId = data.accountId;
+    final visibleAccounts = data.visibleAccounts;
+    final accountsById = data.accountsById;
     final currency = data.currency;
     final categories = data.categories;
     final payees = data.payees;
@@ -774,12 +796,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (!context.mounted || choice == null) return;
     if (choice == 'transaction') {
       final apiSession = context.read<ApiSessionProvider>();
+      final dbProvider = context.read<DatabaseProvider>();
       await openTransactionEditor(context, defaultAccountId: accountId, apiSession: apiSession);
-      if (apiSession.useApiForTransactions) _refreshApi(apiSession, accountId);
+      if (apiSession.useApiForTransactions) _refreshApi(apiSession, dbProvider);
     } else if (choice == 'voice') {
       final apiSession = context.read<ApiSessionProvider>();
+      final dbProvider = context.read<DatabaseProvider>();
       await startVoiceEntry(context, accountId, apiSession: apiSession);
-      if (apiSession.useApiForTransactions) _refreshApi(apiSession, accountId);
+      if (apiSession.useApiForTransactions) _refreshApi(apiSession, dbProvider);
     } else {
       await _openRecurringEditor(context, defaultAccountId: accountId);
     }
