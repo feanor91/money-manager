@@ -169,10 +169,31 @@ le repo pour ne pas la perdre.
   sélection du fichier .mmb, aucune erreur dans la console, mais
   impossible d'aller plus loin sans sélectionner un vrai fichier).
 
-Les 8 écrans restants suivent le même chantier - **Tableau de bord**
-(composite, dépend de Budget/Récurrentes en interne, à migrer en
-dernier) et **Simulation** (2584 lignes) sont les plus gros morceaux qui
-restent, à démarrer consciemment vu leur taille.
+- 🚫 **Simulation (2584 lignes) - passée en revue, migration écartée pour
+  la même raison structurelle que le simulateur du Budget** : c'est un
+  écran d'édition interactive de scénarios ("what if" multi-comptes/multi-
+  années) de bout en bout - `repo.getSimScenarios`/`getSimVirtualBills`/
+  `getSimMeanReversion`/... sont appelés en synchrone à l'intérieur même
+  des fermetures qui font aussi les écritures correspondantes
+  (créer/renommer/dupliquer un scénario, ajouter/supprimer une opération
+  virtuelle, un événement ponctuel, une correction de tendance...). Il n'y
+  a pas de vue "lecture seule" séparée à extraire ici, contrairement au
+  Budget où la vue enveloppes et le simulateur étaient deux modes bien
+  distincts de l'écran. Migrer cet écran vers le mode API demanderait de
+  refaire son modèle d'interaction en profondeur, pas juste brancher des
+  lectures - hors du principe "lectures graduelles, écritures toujours
+  locales" du plan. Laissé entièrement local.
+
+Les écrans restants candidats à une vraie migration se réduisent
+essentiellement à **Tableau de bord** (composite, dépend en interne de
+Budget/Récurrentes - la vue enveloppes du Budget supportant maintenant un
+mode API, ses sous-widgets pourraient en profiter ; à passer en revue).
+Les autres fichiers de `lib/screens/` (sélecteur de fichier, écran de
+verrouillage PIN, diagnostics, aide, `home_shell` - traitement des
+opérations récurrentes en retard au démarrage) ne sont pas des candidats
+naturels : soit ils doivent rester strictement locaux par nature (sélection
+de fichier, sécurité), soit leur logique est presque entièrement une
+écriture système plutôt qu'un affichage de données à basculer.
 
 ## Où on en est aujourd'hui
 
