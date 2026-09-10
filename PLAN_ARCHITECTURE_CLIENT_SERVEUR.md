@@ -39,9 +39,8 @@ le repo pour ne pas la perdre.
   via `dart run tool/verify_api_client.dart` (`flutter test` bloque les
   vraies requêtes HTTP par construction, donc pas testable comme un
   widget test classique).
-- ⏳ **Étape 4 - Élargir écran par écran** (~12-18 sessions, le plus gros
-  morceau) : pas commencée. C'est le moment de faire un point avant de
-  s'y engager - voir "Prochaine décision" ci-dessous.
+- 🚧 **Étape 4 - Élargir écran par écran** (~12-18 sessions, le plus gros
+  morceau) : démarrée - voir le détail plus bas.
 - ⏳ **Étapes 5-6** (IA côté serveur, retrait de l'accès fichier direct) :
   pas commencées.
 - ✅ **Déploiement réel sur Excelsior** : fait, par l'utilisateur lui-même
@@ -72,14 +71,41 @@ le repo pour ne pas la perdre.
   durable - déplacer ce dossier hors de `web/` (ex. `/volume1/mmex-server/`)
   reste recommandé, à faire quand l'utilisateur aura un moment.
 
-### Prochaine décision
+- 🚧 **Étape 4 - démarrée** : premier écran réel basculé, en lecture
+  seule - **Comptes**, derrière une bascule explicite dans Paramètres
+  ("Comptes via API"), jamais activée par défaut. Les deux chemins
+  (fichier local / serveur) alimentent le même rendu ; les écritures
+  (ajouter/modifier/supprimer un compte) continuent de passer par le
+  fichier local même en mode API, conformément à la nuance déjà notée
+  plus haut sur la coupure des écritures (jamais progressive comme les
+  lectures) - limitation documentée : une modification en mode API ne
+  rafraîchit pas automatiquement la vue, un bouton de rafraîchissement
+  manuel est fourni à la place.
 
-L'étape 4 (basculer chaque écran, ~12-18 sessions) est un chantier bien
-plus long que ce qui a été fait jusqu'ici et touche potentiellement
-l'expérience réelle de l'appli (async partout, indicateurs de
-chargement) - à démarrer consciemment, pas enchaîné automatiquement.
-Rien n'empêche de continuer dès que voulu ; ce point sert juste de
-repère avant de s'engager dans la partie la plus longue du plan.
+  2 nouvelles routes serveur (`getBaseCurrency`, `accountBalance`),
+  `CurrencyFormat` gagne sa sérialisation JSON. `ApiClient` refactoré
+  pour accepter un client HTTP injectable (testable sans réseau réel via
+  `package:http/testing.dart`). Nouveau `ApiSessionProvider` : état de
+  connexion partagé par toute l'appli, comme `DatabaseProvider`/
+  `PinLockProvider`.
+
+  **Sécurité du jeton renforcée** (question posée par l'utilisateur en
+  cours de route - "le jeton va être fixe ou renouvelé régulièrement ?
+  si fixe et piraté, c'est un problème") : durée de vie par défaut
+  réduite de 30 à 7 jours, et nouvelle route `/auth/logout` pour
+  révoquer immédiatement un jeton en cas de doute plutôt que d'attendre
+  l'expiration naturelle - vérifié que le serveur rejette bien un jeton
+  révoqué (401), pas seulement que le client l'oublie en mémoire.
+
+  625 tests au total (dont 16 nouveaux), tous verts. Vérifié en
+  conditions réelles contre un vrai serveur lancé en local (toutes les
+  routes de cette étape). **Non vérifiable dans cet environnement** : le
+  clic-à-clic réel de l'écran dans un navigateur - bloqué par le
+  sélecteur de fichier natif (.mmb), même limitation déjà rencontrée
+  dans cette session pour d'autres vérifications.
+
+Les 14 écrans restants suivent le même chantier (~12-18 sessions au
+total pour l'ensemble) - à démarrer un par un, pas tous d'un coup.
 
 ## Où on en est aujourd'hui
 
