@@ -8,6 +8,7 @@ import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/sim_scenario.dart';
 import 'package:money_manager_core/models/transaction.dart';
 
 import '../services/api/api_client.dart';
@@ -98,10 +99,10 @@ class ApiSessionProvider extends ChangeNotifier {
   bool get useApiForTransactions => _useApiFor('transactions');
   set useApiForTransactions(bool value) => _setUseApiFor('transactions', value);
 
-  /// Vue "enveloppes" du Budget uniquement - le simulateur ("what if")
-  /// reste entièrement local, voir budget_screen.dart et
-  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md pour le détail de cette décision
-  /// de périmètre.
+  /// Vue "enveloppes" du Budget uniquement - le simulateur ("what if") du
+  /// Budget lui-même reste entièrement local (scénarios/montants simulés,
+  /// voir budget_screen.dart) ; l'écran Simulation séparé (long terme) a
+  /// sa propre bascule ci-dessous.
   bool get useApiForBudget => _useApiFor('budget');
   set useApiForBudget(bool value) => _setUseApiFor('budget', value);
 
@@ -110,6 +111,10 @@ class ApiSessionProvider extends ChangeNotifier {
   /// (ForecastChart) reste toujours local, voir dashboard_screen.dart.
   bool get useApiForDashboard => _useApiFor('dashboard');
   set useApiForDashboard(bool value) => _setUseApiFor('dashboard', value);
+
+  /// Écran Simulation (long terme, "what if") - voir simulation_screen.dart.
+  bool get useApiForSimulation => _useApiFor('simulation');
+  set useApiForSimulation(bool value) => _setUseApiFor('simulation', value);
 
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
@@ -484,6 +489,142 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<void> resetBudgetEnvelopes(int accountId) =>
       _requireClient().resetBudgetEnvelopes(accountId);
+
+  // ---- Simulation ("what if" scenarios de long terme) ----
+
+  Future<List<SimScenario>> getSimScenarios() => _requireClient().getSimScenarios();
+
+  Future<int> createSimScenario(String name) => _requireClient().createSimScenario(name);
+
+  Future<void> renameSimScenario(int scenarioId, String name) =>
+      _requireClient().renameSimScenario(scenarioId, name);
+
+  Future<int> duplicateSimScenario(int sourceScenarioId, String newName) =>
+      _requireClient().duplicateSimScenario(sourceScenarioId, newName);
+
+  Future<void> deleteSimScenario(int scenarioId) =>
+      _requireClient().deleteSimScenario(scenarioId);
+
+  Future<List<SimBillOverride>> getSimBillOverrides(int scenarioId) =>
+      _requireClient().getSimBillOverrides(scenarioId);
+
+  Future<void> upsertSimBillOverride(int scenarioId, int billId,
+          {DateTime? disabledFrom, double? amountOverride}) =>
+      _requireClient().upsertSimBillOverride(scenarioId, billId,
+          disabledFrom: disabledFrom, amountOverride: amountOverride);
+
+  Future<void> deleteSimBillOverride(int scenarioId, int billId) =>
+      _requireClient().deleteSimBillOverride(scenarioId, billId);
+
+  Future<List<SimVirtualBill>> getSimVirtualBills(int scenarioId) =>
+      _requireClient().getSimVirtualBills(scenarioId);
+
+  Future<int> addSimVirtualBill({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime startDate,
+    required RecurrencePeriod period,
+    int numOccurrences = -1,
+    double variancePercent = 0,
+    double annualIncreasePercent = 0,
+    DateTime? annualIncreaseAnchor,
+  }) =>
+      _requireClient().addSimVirtualBill(
+        scenarioId: scenarioId,
+        accountId: accountId,
+        label: label,
+        transCode: transCode,
+        amount: amount,
+        startDate: startDate,
+        period: period,
+        numOccurrences: numOccurrences,
+        variancePercent: variancePercent,
+        annualIncreasePercent: annualIncreasePercent,
+        annualIncreaseAnchor: annualIncreaseAnchor,
+      );
+
+  Future<void> deleteSimVirtualBill(int virtualBillId) =>
+      _requireClient().deleteSimVirtualBill(virtualBillId);
+
+  Future<List<SimOneOffEvent>> getSimOneOffEvents(int scenarioId) =>
+      _requireClient().getSimOneOffEvents(scenarioId);
+
+  Future<int> addSimOneOffEvent({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime date,
+  }) =>
+      _requireClient().addSimOneOffEvent(
+        scenarioId: scenarioId,
+        accountId: accountId,
+        label: label,
+        transCode: transCode,
+        amount: amount,
+        date: date,
+      );
+
+  Future<void> deleteSimOneOffEvent(int eventId) =>
+      _requireClient().deleteSimOneOffEvent(eventId);
+
+  Future<({bool enabled, double? equilibrium, double strength, double noisePercent})?>
+      getSimMeanReversion(int scenarioId, int accountId) =>
+          _requireClient().getSimMeanReversion(scenarioId, accountId);
+
+  Future<void> setSimMeanReversion(
+    int scenarioId,
+    int accountId, {
+    required bool enabled,
+    double? equilibrium,
+    required double strength,
+    required double noisePercent,
+  }) =>
+      _requireClient().setSimMeanReversion(scenarioId, accountId,
+          enabled: enabled, equilibrium: equilibrium, strength: strength, noisePercent: noisePercent);
+
+  Future<void> setSimMeanReversionEnabled(int scenarioId, int accountId, bool enabled) =>
+      _requireClient().setSimMeanReversionEnabled(scenarioId, accountId, enabled);
+
+  Future<void> deleteSimMeanReversion(int scenarioId, int accountId) =>
+      _requireClient().deleteSimMeanReversion(scenarioId, accountId);
+
+  Future<List<DateTime>> occurrencesForBill(BillDeposit bill, DateTime start, DateTime end) =>
+      _requireClient().occurrencesForBill(bill, start, end);
+
+  Future<double> historicalDiscretionaryMonthlyAverage(
+          {int? accountId, required DateTime anchor, required int startDay, int months = 12}) =>
+      _requireClient().historicalDiscretionaryMonthlyAverage(
+          accountId: accountId, anchor: anchor, startDay: startDay, months: months);
+
+  Future<double> historicalDiscretionaryMonthlyStdev(
+          {int? accountId, required DateTime anchor, required int startDay, int months = 12}) =>
+      _requireClient().historicalDiscretionaryMonthlyStdev(
+          accountId: accountId, anchor: anchor, startDay: startDay, months: months);
+
+  Future<double> historicalEquilibriumBalance(
+          {required int accountId, required DateTime anchor, required int startDay, int months = 12}) =>
+      _requireClient().historicalEquilibriumBalance(
+          accountId: accountId, anchor: anchor, startDay: startDay, months: months);
+
+  Future<SimulationChartResult> computeSimulationChart({
+    required int scenarioId,
+    required int accountId,
+    required DateTime anchor,
+    required int days,
+    required int startDay,
+  }) =>
+      _requireClient().computeSimulationChart(
+        scenarioId: scenarioId,
+        accountId: accountId,
+        anchor: anchor,
+        days: days,
+        startDay: startDay,
+      );
 
   ApiClient _requireClient() {
     final client = _client;

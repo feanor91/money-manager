@@ -15,9 +15,11 @@ import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/sim_scenario.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
+import '../widgets/refreshing_overlay.dart';
 
 /// How far the projection looks - see PLAN_SIMULATION_LONG_TERME.md's open
 /// "horizon nécessaire" question: rather than pick one answer, every option
@@ -66,6 +68,20 @@ const _simplePeriods = [
 /// [MmexRepository.simulatedMonthlyNet] - 100% deterministic Dart
 /// arithmetic over already-tested projection code (see
 /// test/sim_scenario_test.dart), never the AI.
+/// Données brutes de l'écran (scénarios/comptes/devise) qu'elles viennent
+/// du fichier local ou du serveur API - même principe que les autres écrans
+/// déjà migrés (voir dashboard_screen.dart). Les ajustements eux-mêmes
+/// (_AdjustmentsPanel) et la courbe (_SimulationChart) font leur propre
+/// chargement API-aware séparément, une fois qu'un scénario est
+/// sélectionné.
+class _SimulationData {
+  final List<SimScenario> scenarios;
+  final List<Account> accounts;
+  final CurrencyFormat? currency;
+
+  const _SimulationData({required this.scenarios, required this.accounts, required this.currency});
+}
+
 class SimulationScreen extends StatefulWidget {
   const SimulationScreen({super.key});
 
@@ -98,6 +114,39 @@ class _SimulationScreenState extends State<SimulationScreen> {
   /// the full view by default, the panel is one tap away when needed.
   bool _panelCollapsed = true;
 
+  Future<_SimulationData>? _apiFuture;
+  _SimulationData? _lastData;
+  int? _apiFutureKey;
+
+  _SimulationData _localData(MmexRepository repo, DatabaseProvider dbProvider) {
+    return _SimulationData(
+      scenarios: repo.getSimScenarios(),
+      accounts:
+          repo.getAccounts().where((a) => !dbProvider.isAccountHidden(a.id)).toList(),
+      currency: repo.getBaseCurrency(),
+    );
+  }
+
+  Future<_SimulationData> _loadViaApi(
+      ApiSessionProvider session, DatabaseProvider dbProvider) async {
+    final results =
+        await Future.wait([session.getSimScenarios(), session.getAccounts(), session.getBaseCurrency()]);
+    final scenarios = results[0] as List<SimScenario>;
+    final accounts = (results[1] as List<Account>)
+        .where((a) => !dbProvider.isAccountHidden(a.id))
+        .toList();
+    final currency = results[2] as CurrencyFormat?;
+    return _SimulationData(scenarios: scenarios, accounts: accounts, currency: currency);
+  }
+
+  void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider) {
+    session.bumpDataVersion();
+    setState(() {
+      _apiFutureKey = session.dataVersion;
+      _apiFuture = _loadViaApi(session, dbProvider);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -105,34 +154,53 @@ class _SimulationScreenState extends State<SimulationScreen> {
         .addPostFrameCallback((_) => _selectMostRecentScenario());
   }
 
-  void _selectMostRecentScenario() {
-    final repo = context.read<DatabaseProvider>().repository;
-    if (repo == null || !mounted) return;
-    final scenarios = repo.getSimScenarios();
+  Future<void> _selectMostRecentScenario() async {
+    final dbProvider = context.read<DatabaseProvider>();
+    final apiSession = context.read<ApiSessionProvider>();
+    final useApi = apiSession.useApiForSimulation && apiSession.isConnected;
+    final repo = dbProvider.repository;
+    if (!useApi && repo == null) return;
+    final scenarios =
+        useApi ? await apiSession.getSimScenarios() : repo!.getSimScenarios();
+    if (!mounted) return;
     if (scenarios.isNotEmpty) setState(() => _scenarioId = scenarios.first.id);
   }
 
-  void _touch() => context.read<DatabaseProvider>().touch();
+  void _touch(DatabaseProvider dbProvider) => dbProvider.touch();
 
-  Future<void> _createScenario(MmexRepository repo) async {
+  Future<void> _createScenario(MmexRepository repo, DatabaseProvider dbProvider,
+      {ApiSessionProvider? apiSession}) async {
     final name =
         await _promptText(context, title: 'Nouveau scénario', label: 'Nom');
     if (name == null || name.trim().isEmpty) return;
-    final id = repo.createSimScenario(name.trim());
-    _touch();
-    setState(() => _scenarioId = id);
+    final useApi = apiSession != null && apiSession.useApiForSimulation && apiSession.isConnected;
+    final int id;
+    if (useApi) {
+      id = await apiSession.createSimScenario(name.trim());
+      _refreshApi(apiSession, dbProvider);
+    } else {
+      id = repo.createSimScenario(name.trim());
+      _touch(dbProvider);
+    }
+    if (mounted) setState(() => _scenarioId = id);
   }
 
-  Future<void> _renameScenario(
-      MmexRepository repo, SimScenario scenario) async {
+  Future<void> _renameScenario(MmexRepository repo, DatabaseProvider dbProvider, SimScenario scenario,
+      {ApiSessionProvider? apiSession}) async {
     final name = await _promptText(context,
         title: 'Renommer le scénario',
         label: 'Nom',
         initialValue: scenario.name);
     if (name == null || name.trim().isEmpty) return;
-    repo.renameSimScenario(scenario.id, name.trim());
-    _touch();
-    setState(() {});
+    final useApi = apiSession != null && apiSession.useApiForSimulation && apiSession.isConnected;
+    if (useApi) {
+      await apiSession.renameSimScenario(scenario.id, name.trim());
+      _refreshApi(apiSession, dbProvider);
+    } else {
+      repo.renameSimScenario(scenario.id, name.trim());
+      _touch(dbProvider);
+    }
+    if (mounted) setState(() {});
   }
 
   /// "Dupliquer ce scénario" (2026-09-03 user request) - suggests
@@ -140,19 +208,27 @@ class _SimulationScreenState extends State<SimulationScreen> {
   /// as [_renameScenario]'s prompt. Selects the new scenario afterward so
   /// the user lands straight on the copy to start tweaking it.
   Future<void> _duplicateScenario(
-      MmexRepository repo, SimScenario scenario) async {
+      MmexRepository repo, DatabaseProvider dbProvider, SimScenario scenario,
+      {ApiSessionProvider? apiSession}) async {
     final name = await _promptText(context,
         title: 'Dupliquer le scénario',
         label: 'Nom du nouveau scénario',
         initialValue: '${scenario.name} (copie)');
     if (name == null || name.trim().isEmpty) return;
-    final newId = repo.duplicateSimScenario(scenario.id, name.trim());
-    _touch();
-    setState(() => _scenarioId = newId);
+    final useApi = apiSession != null && apiSession.useApiForSimulation && apiSession.isConnected;
+    final int newId;
+    if (useApi) {
+      newId = await apiSession.duplicateSimScenario(scenario.id, name.trim());
+      _refreshApi(apiSession, dbProvider);
+    } else {
+      newId = repo.duplicateSimScenario(scenario.id, name.trim());
+      _touch(dbProvider);
+    }
+    if (mounted) setState(() => _scenarioId = newId);
   }
 
-  Future<void> _deleteScenario(
-      MmexRepository repo, SimScenario scenario) async {
+  Future<void> _deleteScenario(MmexRepository repo, DatabaseProvider dbProvider, SimScenario scenario,
+      {ApiSessionProvider? apiSession}) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -172,10 +248,17 @@ class _SimulationScreenState extends State<SimulationScreen> {
       ),
     );
     if (confirmed != true) return;
-    repo.deleteSimScenario(scenario.id);
-    _touch();
+    final useApi = apiSession != null && apiSession.useApiForSimulation && apiSession.isConnected;
+    if (useApi) {
+      await apiSession.deleteSimScenario(scenario.id);
+      _refreshApi(apiSession, dbProvider);
+    } else {
+      repo.deleteSimScenario(scenario.id);
+      _touch(dbProvider);
+    }
+    if (!mounted) return;
     setState(() => _scenarioId = null);
-    _selectMostRecentScenario();
+    await _selectMostRecentScenario();
   }
 
   /// "3 comptes" / a single account's own name / "Tous les comptes" when
@@ -204,23 +287,58 @@ class _SimulationScreenState extends State<SimulationScreen> {
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository;
     if (repo == null) return const SizedBox.shrink();
 
-    final scenarios = repo.getSimScenarios();
+    if (apiSession.useApiForSimulation) {
+      if (_apiFuture == null || _apiFutureKey != apiSession.dataVersion) {
+        _apiFutureKey = apiSession.dataVersion;
+        _apiFuture = _loadViaApi(apiSession, dbProvider);
+      }
+      return FutureBuilder<_SimulationData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          // Garde les dernières données affichées pendant un
+          // rafraîchissement plutôt que de faire disparaître toute la page
+          // pour un simple spinner - même convention que les autres écrans
+          // déjà migrés (2026-09-10).
+          if (snapshot.hasData) _lastData = snapshot.data;
+          if (_lastData == null) {
+            if (snapshot.hasError) {
+              return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+            }
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildContent(context, dbProvider, repo, _lastData!,
+                apiSession: apiSession,
+                apiRefresh: () => _refreshApi(apiSession, dbProvider)),
+          );
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildContent(context, dbProvider, repo, _localData(repo, dbProvider));
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    DatabaseProvider dbProvider,
+    MmexRepository repo,
+    _SimulationData data, {
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
+  }) {
+    final scenarios = data.scenarios;
     if (_scenarioId != null && !scenarios.any((s) => s.id == _scenarioId)) {
       _scenarioId = scenarios.isEmpty ? null : scenarios.first.id;
     }
     final scenario = scenarios.where((s) => s.id == _scenarioId).firstOrNull;
-    // Same convention as the voice-entry account matcher (see CLAUDE.md) -
-    // an account the user hid elsewhere in the app (Comptes) has no place
-    // in a *new* planning tool either (2026-09-02 user report: it was
-    // showing up in every account dropdown here).
-    final accounts = repo
-        .getAccounts()
-        .where((a) => !dbProvider.isAccountHidden(a.id))
-        .toList();
-    final currency = repo.getBaseCurrency();
+    final accounts = data.accounts;
+    final currency = data.currency;
     // Checkbox-based multi-account selection (2026-09 user request: show
     // one baseline+scenario curve per checked account, side by side,
     // instead of a single account or a merged "tous les comptes" total).
@@ -269,30 +387,37 @@ class _SimulationScreenState extends State<SimulationScreen> {
             IconButton(
               tooltip: 'Renommer',
               icon: const Icon(Icons.edit_outlined),
-              onPressed: () => _renameScenario(repo, scenario),
+              onPressed: () => _renameScenario(repo, dbProvider, scenario, apiSession: apiSession),
             ),
             IconButton(
               tooltip: 'Supprimer ce scénario',
               icon: const Icon(Icons.delete_outline),
-              onPressed: () => _deleteScenario(repo, scenario),
+              onPressed: () => _deleteScenario(repo, dbProvider, scenario, apiSession: apiSession),
             ),
             IconButton(
               tooltip: 'Dupliquer ce scénario',
               icon: const Icon(Icons.copy_outlined),
-              onPressed: () => _duplicateScenario(repo, scenario),
+              onPressed: () =>
+                  _duplicateScenario(repo, dbProvider, scenario, apiSession: apiSession),
             ),
           ],
           IconButton(
             tooltip: 'Nouveau scénario',
             icon: const Icon(Icons.add_circle_outline),
-            onPressed: () => _createScenario(repo),
+            onPressed: () => _createScenario(repo, dbProvider, apiSession: apiSession),
           ),
           const SizedBox(width: 8),
           IconButton(
             tooltip: 'Rafraîchir (après avoir ajouté des opérations '
                 'récurrentes, par exemple)',
             icon: const Icon(Icons.refresh),
-            onPressed: () => setState(() => _refreshNonce++),
+            onPressed: () {
+              if (apiRefresh != null) {
+                apiRefresh();
+              } else {
+                setState(() => _refreshNonce++);
+              }
+            },
           ),
           const SizedBox(width: 8),
           TextButton.icon(
@@ -316,14 +441,15 @@ class _SimulationScreenState extends State<SimulationScreen> {
         ],
       ),
       body: scenario == null
-          ? _buildEmptyState(context, repo)
+          ? _buildEmptyState(context, repo, dbProvider, apiSession: apiSession)
           : LayoutBuilder(
               builder: (context, constraints) {
                 final wide = constraints.maxWidth >= 900;
                 final selectedAccountIds =
                     selectedAccounts.map((a) => a.id).toList();
                 final panel = _AdjustmentsPanel(
-                  key: ValueKey('${scenario.id}_$_refreshNonce'),
+                  key: ValueKey(
+                      '${scenario.id}_${_refreshNonce}_${apiSession?.dataVersion}'),
                   repo: repo,
                   scenario: scenario,
                   accountIds: selectedAccountIds,
@@ -331,14 +457,20 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   currency: currency,
                   startDay: dbProvider.forecastDay,
                   collapsed: _panelCollapsed,
+                  apiSession: apiSession,
                   onToggleCollapsed: () =>
                       setState(() => _panelCollapsed = !_panelCollapsed),
                   onChanged: () {
-                    _touch();
+                    if (apiRefresh != null) {
+                      apiRefresh();
+                    } else {
+                      _touch(dbProvider);
+                    }
                     setState(() {});
                   },
                 );
                 final chart = _SimulationChart(
+                  key: ValueKey('${scenario.id}_${apiSession?.dataVersion}'),
                   repo: repo,
                   scenarioId: scenario.id,
                   accountIds: selectedAccountIds,
@@ -346,6 +478,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   horizonMonths: _horizon.years * 12,
                   currency: currency,
                   startDay: dbProvider.forecastDay,
+                  apiSession: apiSession,
                 );
                 if (wide) {
                   return Row(
@@ -375,7 +508,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
     );
   }
 
-  Widget _buildEmptyState(BuildContext context, MmexRepository repo) {
+  Widget _buildEmptyState(BuildContext context, MmexRepository repo, DatabaseProvider dbProvider,
+      {ApiSessionProvider? apiSession}) {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -394,7 +528,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
           ),
           const SizedBox(height: 20),
           FilledButton.icon(
-            onPressed: () => _createScenario(repo),
+            onPressed: () => _createScenario(repo, dbProvider, apiSession: apiSession),
             icon: const Icon(Icons.add),
             label: const Text('Créer un scénario'),
           ),
@@ -583,6 +717,11 @@ class _AdjustmentsPanel extends StatefulWidget {
   final bool collapsed;
   final VoidCallback onToggleCollapsed;
 
+  /// Non-null ET connecté : les lectures/écritures passent par le serveur
+  /// au lieu du fichier local (voir simulation_screen.dart's own doc
+  /// comment at the top of the file).
+  final ApiSessionProvider? apiSession;
+
   const _AdjustmentsPanel({
     super.key,
     required this.repo,
@@ -594,10 +733,39 @@ class _AdjustmentsPanel extends StatefulWidget {
     required this.startDay,
     required this.collapsed,
     required this.onToggleCollapsed,
+    this.apiSession,
   });
 
   @override
   State<_AdjustmentsPanel> createState() => _AdjustmentsPanelState();
+}
+
+/// Tout ce dont [_AdjustmentsPanelState._buildContent] a besoin, préchargé
+/// en un seul lot au montage en mode API (voir [_AdjustmentsPanelState._loadPanelDataViaApi])
+/// plutôt que lu en synchrone à chaque build comme en local -
+/// [naturalEndDateByBillId] ne couvre que les factures à durée limitée (voir
+/// [_AdjustmentsPanelState._naturalEndDate]), les autres n'y figurent pas.
+class _PanelApiData {
+  final Map<int, Payee> payeesById;
+  final Map<int, Category> categoriesById;
+  final Map<int, SimBillOverride> overridesByBillId;
+  final List<BillDeposit> allRealBills;
+  final List<SimVirtualBill> allVirtualBills;
+  final List<SimOneOffEvent> allEvents;
+  final Map<int, DateTime?> naturalEndDateByBillId;
+  final Map<int, ({bool enabled, double? equilibrium, double strength, double noisePercent})>
+      meanReversionByAccountId;
+
+  const _PanelApiData({
+    required this.payeesById,
+    required this.categoriesById,
+    required this.overridesByBillId,
+    required this.allRealBills,
+    required this.allVirtualBills,
+    required this.allEvents,
+    required this.naturalEndDateByBillId,
+    required this.meanReversionByAccountId,
+  });
 }
 
 class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
@@ -617,6 +785,80 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
   VoidCallback get onChanged => widget.onChanged;
   int get startDay => widget.startDay;
 
+  bool get _useApi =>
+      widget.apiSession != null && widget.apiSession!.useApiForSimulation && widget.apiSession!.isConnected;
+
+  _PanelApiData? _apiData;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_useApi) _loadPanelDataViaApi();
+  }
+
+  /// Un seul lot de requêtes en parallèle (Future.wait) pour tout ce dont
+  /// [_buildContent] a besoin - voir [_PanelApiData]. Ce panneau est
+  /// entièrement démonté/remonté (nouvelle clé, voir simulation_screen.dart)
+  /// après chaque écriture, donc pas besoin d'invalider ce cache soi-même :
+  /// un nouveau montage relance simplement ce chargement.
+  Future<void> _loadPanelDataViaApi() async {
+    final session = widget.apiSession!;
+    final results = await Future.wait([
+      session.getPayees(onlyActive: false),
+      session.getCategories(onlyActive: false),
+      session.getSimBillOverrides(scenario.id),
+      session.getBillDeposits(),
+      session.getSimVirtualBills(scenario.id),
+      session.getSimOneOffEvents(scenario.id),
+    ]);
+    final payees = results[0] as List<Payee>;
+    final categories = results[1] as List<Category>;
+    final overrides = results[2] as List<SimBillOverride>;
+    final allRealBills = (results[3] as List<BillDeposit>).where((b) => !b.paused).toList();
+    final allVirtualBills = results[4] as List<SimVirtualBill>;
+    final allEvents = results[5] as List<SimOneOffEvent>;
+
+    final limitedBills = allRealBills
+        .where((b) => !periodUsesXParam(b.period) && b.numOccurrences > 0)
+        .toList();
+    final farFuture = DateTime(DateTime.now().year + 60);
+    final occurrenceLists = await Future.wait([
+      for (final bill in limitedBills)
+        session.occurrencesForBill(bill, bill.nextOccurrence, farFuture),
+    ]);
+    final naturalEndDateByBillId = <int, DateTime?>{};
+    for (var i = 0; i < limitedBills.length; i++) {
+      final occurrences = occurrenceLists[i];
+      naturalEndDateByBillId[limitedBills[i].id] =
+          occurrences.length < limitedBills[i].numOccurrences
+              ? null
+              : occurrences[limitedBills[i].numOccurrences - 1];
+    }
+
+    final reversionResults = await Future.wait(
+        [for (final a in accounts) session.getSimMeanReversion(scenario.id, a.id)]);
+    final meanReversionByAccountId = <int,
+        ({bool enabled, double? equilibrium, double strength, double noisePercent})>{};
+    for (var i = 0; i < accounts.length; i++) {
+      final reversion = reversionResults[i];
+      if (reversion != null) meanReversionByAccountId[accounts[i].id] = reversion;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _apiData = _PanelApiData(
+        payeesById: {for (final p in payees) p.id: p},
+        categoriesById: {for (final c in categories) c.id: c},
+        overridesByBillId: {for (final o in overrides) o.billId: o},
+        allRealBills: allRealBills,
+        allVirtualBills: allVirtualBills,
+        allEvents: allEvents,
+        naturalEndDateByBillId: naturalEndDateByBillId,
+        meanReversionByAccountId: meanReversionByAccountId,
+      );
+    });
+  }
+
   /// The date a limited-duration bill (a fixed remaining occurrence count,
   /// e.g. the last N payments left on a loan - see
   /// [BillDeposit.numOccurrences]'s own doc comment) will fire for the last
@@ -625,9 +867,12 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
   /// asked for a long enough window to contain every remaining occurrence.
   /// Null for a bill that repeats forever, or one of the 4 "dans/tous les X
   /// ..." periods where [BillDeposit.numOccurrences] means something else
-  /// entirely (an interval, not a count - see [periodUsesXParam]).
+  /// entirely (an interval, not a count - see [periodUsesXParam]). En mode
+  /// API, lit [_PanelApiData.naturalEndDateByBillId] (précalculé) plutôt
+  /// que de recalculer en direct.
   DateTime? _naturalEndDate(BillDeposit bill) {
     if (periodUsesXParam(bill.period) || bill.numOccurrences <= 0) return null;
+    if (_useApi) return _apiData?.naturalEndDateByBillId[bill.id];
     final farFuture = DateTime(DateTime.now().year + 60);
     final occurrences =
         repo.occurrencesForBill(bill, bill.nextOccurrence, farFuture);
@@ -686,21 +931,35 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
       );
     }
 
-    final payeesById = {
-      for (final p in repo.getPayees(onlyActive: false)) p.id: p
-    };
+    if (_useApi && _apiData == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     final accountsById = {for (final a in accounts) a.id: a};
-    final categoriesById = {
-      for (final c in repo.getCategories(onlyActive: false)) c.id: c
-    };
-    final overridesByBillId = {
-      for (final o in repo.getSimBillOverrides(scenario.id)) o.billId: o
-    };
-    // Every real/virtual/one-off item, unfiltered - each account's own
-    // section below picks out just its own from these.
-    final allRealBills = repo.getBillDeposits().where((b) => !b.paused).toList();
-    final allVirtualBills = repo.getSimVirtualBills(scenario.id);
-    final allEvents = repo.getSimOneOffEvents(scenario.id);
+    final Map<int, Payee> payeesById;
+    final Map<int, Category> categoriesById;
+    final Map<int, SimBillOverride> overridesByBillId;
+    final List<BillDeposit> allRealBills;
+    final List<SimVirtualBill> allVirtualBills;
+    final List<SimOneOffEvent> allEvents;
+    if (_useApi) {
+      final data = _apiData!;
+      payeesById = data.payeesById;
+      categoriesById = data.categoriesById;
+      overridesByBillId = data.overridesByBillId;
+      allRealBills = data.allRealBills;
+      allVirtualBills = data.allVirtualBills;
+      allEvents = data.allEvents;
+    } else {
+      payeesById = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+      categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
+      overridesByBillId = {for (final o in repo.getSimBillOverrides(scenario.id)) o.billId: o};
+      // Every real/virtual/one-off item, unfiltered - each account's own
+      // section below picks out just its own from these.
+      allRealBills = repo.getBillDeposits().where((b) => !b.paused).toList();
+      allVirtualBills = repo.getSimVirtualBills(scenario.id);
+      allEvents = repo.getSimOneOffEvents(scenario.id);
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -822,8 +1081,9 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
                   child: Text('Opérations virtuelles',
                       style: Theme.of(context).textTheme.labelLarge)),
               () {
-                final reversion =
-                    repo.getSimMeanReversion(scenario.id, account.id);
+                final reversion = _useApi
+                    ? _apiData!.meanReversionByAccountId[account.id]
+                    : repo.getSimMeanReversion(scenario.id, account.id);
                 return IconButton(
                   tooltip: reversion == null
                       ? 'Configurer le retour à l\'équilibre pour ce compte'
@@ -888,8 +1148,12 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
                 trailing: IconButton(
                   tooltip: 'Supprimer',
                   icon: const Icon(Icons.close, size: 18),
-                  onPressed: () {
-                    repo.deleteSimVirtualBill(v.id);
+                  onPressed: () async {
+                    if (_useApi) {
+                      await widget.apiSession!.deleteSimVirtualBill(v.id);
+                    } else {
+                      repo.deleteSimVirtualBill(v.id);
+                    }
                     onChanged();
                   },
                 ),
@@ -924,14 +1188,23 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
               naturalEndDate: _naturalEndDate(bill),
               currency: currency,
               savedOverride: overridesByBillId[bill.id],
-              onChanged: (disabledFrom, amountOverride) {
+              onChanged: (disabledFrom, amountOverride) async {
                 final hasNoOverride =
                     disabledFrom == null && amountOverride == null;
-                if (hasNoOverride) {
-                  repo.deleteSimBillOverride(scenario.id, bill.id);
+                if (_useApi) {
+                  if (hasNoOverride) {
+                    await widget.apiSession!.deleteSimBillOverride(scenario.id, bill.id);
+                  } else {
+                    await widget.apiSession!.upsertSimBillOverride(scenario.id, bill.id,
+                        disabledFrom: disabledFrom, amountOverride: amountOverride);
+                  }
                 } else {
-                  repo.upsertSimBillOverride(scenario.id, bill.id,
-                      disabledFrom: disabledFrom, amountOverride: amountOverride);
+                  if (hasNoOverride) {
+                    repo.deleteSimBillOverride(scenario.id, bill.id);
+                  } else {
+                    repo.upsertSimBillOverride(scenario.id, bill.id,
+                        disabledFrom: disabledFrom, amountOverride: amountOverride);
+                  }
                 }
                 onChanged();
               },
@@ -978,8 +1251,12 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
                 trailing: IconButton(
                   tooltip: 'Supprimer',
                   icon: const Icon(Icons.close, size: 18),
-                  onPressed: () {
-                    repo.deleteSimOneOffEvent(e.id);
+                  onPressed: () async {
+                    if (_useApi) {
+                      await widget.apiSession!.deleteSimOneOffEvent(e.id);
+                    } else {
+                      repo.deleteSimOneOffEvent(e.id);
+                    }
                     onChanged();
                   },
                 ),
@@ -1010,6 +1287,13 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
   /// [_openDiscretionaryAdjustmentDialog].
   Future<void> _openMeanReversionDialog(
       BuildContext context, int forAccountId) async {
+    final existingByAccountId = _useApi
+        ? _apiData!.meanReversionByAccountId
+        : {
+            for (final a in accounts)
+              if (repo.getSimMeanReversion(scenario.id, a.id) != null)
+                a.id: repo.getSimMeanReversion(scenario.id, a.id)!,
+          };
     final result = await showDialog<_MeanReversionResult>(
       context: context,
       builder: (context) => _MeanReversionDialog(
@@ -1018,25 +1302,37 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
         currency: currency,
         startDay: startDay,
         initialAccountId: forAccountId,
-        existingByAccountId: {
-          for (final a in accounts)
-            if (repo.getSimMeanReversion(scenario.id, a.id) != null)
-              a.id: repo.getSimMeanReversion(scenario.id, a.id)!,
-        },
+        existingByAccountId: existingByAccountId,
+        apiSession: widget.apiSession,
       ),
     );
     if (result == null) return;
-    if (result.delete) {
-      repo.deleteSimMeanReversion(scenario.id, result.accountId);
+    if (_useApi) {
+      if (result.delete) {
+        await widget.apiSession!.deleteSimMeanReversion(scenario.id, result.accountId);
+      } else {
+        await widget.apiSession!.setSimMeanReversion(
+          scenario.id,
+          result.accountId,
+          enabled: result.enabled,
+          equilibrium: result.equilibrium,
+          strength: result.strength,
+          noisePercent: result.noisePercent,
+        );
+      }
     } else {
-      repo.setSimMeanReversion(
-        scenario.id,
-        result.accountId,
-        enabled: result.enabled,
-        equilibrium: result.equilibrium,
-        strength: result.strength,
-        noisePercent: result.noisePercent,
-      );
+      if (result.delete) {
+        repo.deleteSimMeanReversion(scenario.id, result.accountId);
+      } else {
+        repo.setSimMeanReversion(
+          scenario.id,
+          result.accountId,
+          enabled: result.enabled,
+          equilibrium: result.equilibrium,
+          strength: result.strength,
+          noisePercent: result.noisePercent,
+        );
+      }
     }
     onChanged();
   }
@@ -1051,17 +1347,32 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
           initialAccountId: forAccountId),
     );
     if (result == null) return;
-    if (existing != null) repo.deleteSimVirtualBill(existing.id);
-    repo.addSimVirtualBill(
-      scenarioId: scenario.id,
-      accountId: result.accountId,
-      label: result.label,
-      transCode: result.transCode,
-      amount: result.amount,
-      startDate: result.startDate,
-      period: result.period,
-      variancePercent: result.variancePercent,
-    );
+    if (_useApi) {
+      final session = widget.apiSession!;
+      if (existing != null) await session.deleteSimVirtualBill(existing.id);
+      await session.addSimVirtualBill(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: result.label,
+        transCode: result.transCode,
+        amount: result.amount,
+        startDate: result.startDate,
+        period: result.period,
+        variancePercent: result.variancePercent,
+      );
+    } else {
+      if (existing != null) repo.deleteSimVirtualBill(existing.id);
+      repo.addSimVirtualBill(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: result.label,
+        transCode: result.transCode,
+        amount: result.amount,
+        startDate: result.startDate,
+        period: result.period,
+        variancePercent: result.variancePercent,
+      );
+    }
     onChanged();
   }
 
@@ -1074,6 +1385,8 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
 
   Future<void> _openDiscretionaryAdjustmentDialog(
       BuildContext context, int forAccountId) async {
+    final allVirtualBills =
+        _useApi ? _apiData!.allVirtualBills : repo.getSimVirtualBills(scenario.id);
     final result = await showDialog<_DiscretionaryAdjustmentResult>(
       context: context,
       builder: (context) => _DiscretionaryAdjustmentDialog(
@@ -1083,29 +1396,50 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
         initialAccountId: forAccountId,
         startDay: startDay,
         existingByAccountId: {
-          for (final v in repo.getSimVirtualBills(scenario.id))
+          for (final v in allVirtualBills)
             if (v.label == _discretionaryAdjustmentLabel) v.accountId: v,
         },
+        apiSession: widget.apiSession,
       ),
     );
     if (result == null) return;
-    final existing = repo
-        .getSimVirtualBills(scenario.id)
-        .where((v) =>
-            v.accountId == result.accountId &&
-            v.label == _discretionaryAdjustmentLabel)
-        .firstOrNull;
-    if (existing != null) repo.deleteSimVirtualBill(existing.id);
-    repo.addSimVirtualBill(
-      scenarioId: scenario.id,
-      accountId: result.accountId,
-      label: _discretionaryAdjustmentLabel,
-      transCode: result.amount >= 0 ? TransCode.deposit : TransCode.withdrawal,
-      amount: result.amount.abs(),
-      startDate: DateTime.now(),
-      period: RecurrencePeriod.monthly,
-      variancePercent: result.variancePercent,
-    );
+    if (_useApi) {
+      final session = widget.apiSession!;
+      final currentVirtualBills = await session.getSimVirtualBills(scenario.id);
+      final existing = currentVirtualBills
+          .where((v) =>
+              v.accountId == result.accountId && v.label == _discretionaryAdjustmentLabel)
+          .firstOrNull;
+      if (existing != null) await session.deleteSimVirtualBill(existing.id);
+      await session.addSimVirtualBill(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: _discretionaryAdjustmentLabel,
+        transCode: result.amount >= 0 ? TransCode.deposit : TransCode.withdrawal,
+        amount: result.amount.abs(),
+        startDate: DateTime.now(),
+        period: RecurrencePeriod.monthly,
+        variancePercent: result.variancePercent,
+      );
+    } else {
+      final existing = repo
+          .getSimVirtualBills(scenario.id)
+          .where((v) =>
+              v.accountId == result.accountId &&
+              v.label == _discretionaryAdjustmentLabel)
+          .firstOrNull;
+      if (existing != null) repo.deleteSimVirtualBill(existing.id);
+      repo.addSimVirtualBill(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: _discretionaryAdjustmentLabel,
+        transCode: result.amount >= 0 ? TransCode.deposit : TransCode.withdrawal,
+        amount: result.amount.abs(),
+        startDate: DateTime.now(),
+        period: RecurrencePeriod.monthly,
+        variancePercent: result.variancePercent,
+      );
+    }
     onChanged();
   }
 
@@ -1117,14 +1451,25 @@ class _AdjustmentsPanelState extends State<_AdjustmentsPanel> {
           accounts: accounts, initialAccountId: forAccountId),
     );
     if (result == null) return;
-    repo.addSimOneOffEvent(
-      scenarioId: scenario.id,
-      accountId: result.accountId,
-      label: result.label,
-      transCode: result.transCode,
-      amount: result.amount,
-      date: result.date,
-    );
+    if (_useApi) {
+      await widget.apiSession!.addSimOneOffEvent(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: result.label,
+        transCode: result.transCode,
+        amount: result.amount,
+        date: result.date,
+      );
+    } else {
+      repo.addSimOneOffEvent(
+        scenarioId: scenario.id,
+        accountId: result.accountId,
+        label: result.label,
+        transCode: result.transCode,
+        amount: result.amount,
+        date: result.date,
+      );
+    }
     onChanged();
   }
 }
@@ -1568,6 +1913,11 @@ class _DiscretionaryAdjustmentDialog extends StatefulWidget {
   /// suggestion.
   final Map<int, SimVirtualBill> existingByAccountId;
 
+  /// Non-null ET connecté : la moyenne suggérée passe par le serveur
+  /// (un aller-retour, voir [_loadSuggested]) au lieu du calcul local
+  /// synchrone.
+  final ApiSessionProvider? apiSession;
+
   const _DiscretionaryAdjustmentDialog({
     required this.repo,
     required this.accounts,
@@ -1575,6 +1925,7 @@ class _DiscretionaryAdjustmentDialog extends StatefulWidget {
     required this.existingByAccountId,
     required this.startDay,
     this.initialAccountId,
+    this.apiSession,
   });
 
   @override
@@ -1586,48 +1937,69 @@ class _DiscretionaryAdjustmentDialogState
     extends State<_DiscretionaryAdjustmentDialog> {
   late int _accountId = widget.initialAccountId ?? widget.accounts.first.id;
   int _historyMonths = 12;
-  late double _suggested = _computeSuggested(_accountId);
+  double _suggested = 0;
   late double _amount = _initialAmount(_accountId);
   late double _variancePercent =
       widget.existingByAccountId[_accountId]?.variancePercent ?? 10;
+  bool _loadingSuggested = true;
+
+  bool get _useApi => widget.apiSession != null && widget.apiSession!.isConnected;
 
   double _initialAmount(int accountId) {
     final existing = widget.existingByAccountId[accountId];
-    if (existing == null) return _suggested;
+    if (existing == null) return 0; // remplacé dès que _loadSuggested résout
     return existing.transCode == TransCode.deposit
         ? existing.amount
         : -existing.amount;
   }
 
-  double _computeSuggested(int accountId) =>
-      widget.repo.historicalDiscretionaryMonthlyAverage(
-        accountId: accountId,
-        anchor: DateTime.now(),
-        startDay: widget.startDay,
-        months: _historyMonths,
-      );
+  @override
+  void initState() {
+    super.initState();
+    _loadSuggested(syncAmount: !widget.existingByAccountId.containsKey(_accountId));
+  }
+
+  /// Un aller-retour serveur en mode API plutôt qu'un calcul local
+  /// synchrone - garde `_suggested`/`_amount` affichés tels quels pendant
+  /// le chargement (voir [_loadingSuggested]) plutôt que de faire
+  /// disparaître le contenu, comme pour le reste de l'écran (2026-09-10).
+  Future<void> _loadSuggested({required bool syncAmount}) async {
+    setState(() => _loadingSuggested = true);
+    final accountId = _accountId;
+    final months = _historyMonths;
+    final value = _useApi
+        ? await widget.apiSession!.historicalDiscretionaryMonthlyAverage(
+            accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months)
+        : widget.repo.historicalDiscretionaryMonthlyAverage(
+            accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months);
+    if (!mounted || accountId != _accountId || months != _historyMonths) return;
+    setState(() {
+      _suggested = value;
+      _loadingSuggested = false;
+      if (syncAmount) _amount = value;
+    });
+  }
 
   void _selectAccount(int accountId) {
+    final wasAtSuggested = _amount == _suggested;
     setState(() {
       _accountId = accountId;
-      _suggested = _computeSuggested(accountId);
       _amount = _initialAmount(accountId);
       _variancePercent =
           widget.existingByAccountId[accountId]?.variancePercent ?? 10;
     });
+    _loadSuggested(
+        syncAmount: !widget.existingByAccountId.containsKey(accountId) || wasAtSuggested);
   }
 
   void _selectHistoryMonths(int months) {
-    setState(() {
-      // Only follow the recomputed suggestion if the slider hadn't been
-      // manually moved away from it yet - once the user has tweaked the
-      // amount by hand, changing the history window shouldn't silently
-      // discard that tweak.
-      final wasAtSuggested = _amount == _suggested;
-      _historyMonths = months;
-      _suggested = _computeSuggested(_accountId);
-      if (wasAtSuggested) _amount = _suggested;
-    });
+    // Only follow the recomputed suggestion if the slider hadn't been
+    // manually moved away from it yet - once the user has tweaked the
+    // amount by hand, changing the history window shouldn't silently
+    // discard that tweak.
+    final wasAtSuggested = _amount == _suggested;
+    setState(() => _historyMonths = months);
+    _loadSuggested(syncAmount: wasAtSuggested);
   }
 
   String _formatAmount(double amount) =>
@@ -1687,24 +2059,39 @@ class _DiscretionaryAdjustmentDialogState
                 onSelectionChanged: (s) => _selectHistoryMonths(s.first),
               ),
               const SizedBox(height: 12),
-              Text.rich(
-                TextSpan(
-                  style: const TextStyle(fontSize: 12),
-                  children: [
-                    TextSpan(
-                        text: 'Sur les $_historyMonths derniers mois : '),
-                    TextSpan(
-                      text: _formatAmount(_suggested),
-                      style: TextStyle(
-                        color: _amountColor(_suggested),
-                        fontWeight: FontWeight.bold,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        style: const TextStyle(fontSize: 12),
+                        children: [
+                          TextSpan(
+                              text: 'Sur les $_historyMonths derniers mois : '),
+                          TextSpan(
+                            text: _formatAmount(_suggested),
+                            style: TextStyle(
+                              color: _amountColor(_suggested),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const TextSpan(
+                              text: ' / mois en moyenne, non expliqué par les '
+                                  'opérations récurrentes.'),
+                        ],
                       ),
                     ),
-                    const TextSpan(
-                        text: ' / mois en moyenne, non expliqué par les '
-                            'opérations récurrentes.'),
+                  ),
+                  if (_loadingSuggested) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ],
-                ),
+                ],
               ),
               const SizedBox(height: 8),
               Text.rich(
@@ -1808,6 +2195,11 @@ class _MeanReversionDialog extends StatefulWidget {
   final Map<int, ({bool enabled, double? equilibrium, double strength, double noisePercent})>
       existingByAccountId;
 
+  /// Non-null ET connecté : équilibre/écart-type suggérés passent par le
+  /// serveur (un aller-retour groupé, voir [_loadSuggestions]) au lieu du
+  /// calcul local synchrone.
+  final ApiSessionProvider? apiSession;
+
   const _MeanReversionDialog({
     required this.repo,
     required this.accounts,
@@ -1815,6 +2207,7 @@ class _MeanReversionDialog extends StatefulWidget {
     required this.startDay,
     required this.existingByAccountId,
     this.initialAccountId,
+    this.apiSession,
   });
 
   @override
@@ -1824,53 +2217,79 @@ class _MeanReversionDialog extends StatefulWidget {
 class _MeanReversionDialogState extends State<_MeanReversionDialog> {
   late int _accountId = widget.initialAccountId ?? widget.accounts.first.id;
   int _historyMonths = 12;
-  late double _suggestedEquilibrium = _computeSuggestedEquilibrium(_accountId);
+  double _suggestedEquilibrium = 0;
+  double _stdev = 0;
   late double _equilibrium = _initialEquilibrium(_accountId);
   late double _strength =
       widget.existingByAccountId[_accountId]?.strength ?? 0.5;
   late double _noisePercent =
       widget.existingByAccountId[_accountId]?.noisePercent ?? 100;
   late bool _enabled = widget.existingByAccountId[_accountId]?.enabled ?? true;
+  bool _loadingSuggestions = true;
 
-  double _computeSuggestedEquilibrium(int accountId) =>
-      widget.repo.historicalEquilibriumBalance(
-        accountId: accountId,
-        anchor: DateTime.now(),
-        startDay: widget.startDay,
-        months: _historyMonths,
-      );
-
-  double _computeStdev(int accountId) =>
-      widget.repo.historicalDiscretionaryMonthlyStdev(
-        accountId: accountId,
-        anchor: DateTime.now(),
-        startDay: widget.startDay,
-        months: _historyMonths,
-      );
+  bool get _useApi => widget.apiSession != null && widget.apiSession!.isConnected;
 
   double _initialEquilibrium(int accountId) =>
-      widget.existingByAccountId[accountId]?.equilibrium ??
-      _suggestedEquilibrium;
+      widget.existingByAccountId[accountId]?.equilibrium ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSuggestions(syncEquilibrium: !widget.existingByAccountId.containsKey(_accountId));
+  }
+
+  /// Un aller-retour groupé (équilibre + écart-type) en mode API plutôt que
+  /// deux calculs locaux synchrones - garde les valeurs affichées telles
+  /// quelles pendant le chargement (voir [_loadingSuggestions]), même
+  /// convention que [_DiscretionaryAdjustmentDialogState._loadSuggested].
+  Future<void> _loadSuggestions({required bool syncEquilibrium}) async {
+    setState(() => _loadingSuggestions = true);
+    final accountId = _accountId;
+    final months = _historyMonths;
+    final double equilibrium;
+    final double stdev;
+    if (_useApi) {
+      final results = await Future.wait([
+        widget.apiSession!.historicalEquilibriumBalance(
+            accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months),
+        widget.apiSession!.historicalDiscretionaryMonthlyStdev(
+            accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months),
+      ]);
+      equilibrium = results[0];
+      stdev = results[1];
+    } else {
+      equilibrium = widget.repo.historicalEquilibriumBalance(
+          accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months);
+      stdev = widget.repo.historicalDiscretionaryMonthlyStdev(
+          accountId: accountId, anchor: DateTime.now(), startDay: widget.startDay, months: months);
+    }
+    if (!mounted || accountId != _accountId || months != _historyMonths) return;
+    setState(() {
+      _suggestedEquilibrium = equilibrium;
+      _stdev = stdev;
+      _loadingSuggestions = false;
+      if (syncEquilibrium) _equilibrium = equilibrium;
+    });
+  }
 
   void _selectAccount(int accountId) {
+    final wasAtSuggested = _equilibrium == _suggestedEquilibrium;
     setState(() {
       _accountId = accountId;
-      _suggestedEquilibrium = _computeSuggestedEquilibrium(accountId);
       _equilibrium = _initialEquilibrium(accountId);
       _strength = widget.existingByAccountId[accountId]?.strength ?? 0.5;
       _noisePercent =
           widget.existingByAccountId[accountId]?.noisePercent ?? 100;
       _enabled = widget.existingByAccountId[accountId]?.enabled ?? true;
     });
+    _loadSuggestions(
+        syncEquilibrium: !widget.existingByAccountId.containsKey(accountId) || wasAtSuggested);
   }
 
   void _selectHistoryMonths(int months) {
-    setState(() {
-      final wasAtSuggested = _equilibrium == _suggestedEquilibrium;
-      _historyMonths = months;
-      _suggestedEquilibrium = _computeSuggestedEquilibrium(_accountId);
-      if (wasAtSuggested) _equilibrium = _suggestedEquilibrium;
-    });
+    final wasAtSuggested = _equilibrium == _suggestedEquilibrium;
+    setState(() => _historyMonths = months);
+    _loadSuggestions(syncEquilibrium: wasAtSuggested);
   }
 
   String _formatAmount(double amount) =>
@@ -1880,7 +2299,7 @@ class _MeanReversionDialogState extends State<_MeanReversionDialog> {
   Widget build(BuildContext context) {
     final range = max(500.0, _suggestedEquilibrium.abs() * 2);
     final clampedEquilibrium = _equilibrium.clamp(-range, range);
-    final stdev = _computeStdev(_accountId);
+    final stdev = _stdev;
     final noiseAmount = stdev * _noisePercent / 100;
     final hasExisting = widget.existingByAccountId.containsKey(_accountId);
     return AlertDialog(
@@ -1931,22 +2350,37 @@ class _MeanReversionDialogState extends State<_MeanReversionDialog> {
                 onSelectionChanged: (s) => _selectHistoryMonths(s.first),
               ),
               const SizedBox(height: 12),
-              Text.rich(
-                TextSpan(
-                  style: const TextStyle(fontSize: 12),
-                  children: [
-                    TextSpan(
-                        text: 'Sur les $_historyMonths derniers mois, solde '
-                            'moyen constaté au jour de prévision : '),
-                    TextSpan(
-                      text: _formatAmount(_suggestedEquilibrium),
-                      style: const TextStyle(fontWeight: FontWeight.bold),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        style: const TextStyle(fontSize: 12),
+                        children: [
+                          TextSpan(
+                              text: 'Sur les $_historyMonths derniers mois, solde '
+                                  'moyen constaté au jour de prévision : '),
+                          TextSpan(
+                            text: _formatAmount(_suggestedEquilibrium),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          TextSpan(
+                              text: ' (variation réelle typique : ±'
+                                  '${_formatAmount(stdev)}/mois).'),
+                        ],
+                      ),
                     ),
-                    TextSpan(
-                        text: ' (variation réelle typique : ±'
-                            '${_formatAmount(stdev)}/mois).'),
+                  ),
+                  if (_loadingSuggestions) ...[
+                    const SizedBox(width: 8),
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   ],
-                ),
+                ],
               ),
               const SizedBox(height: 8),
               Text.rich(
@@ -2229,7 +2663,13 @@ class _SimulationChart extends StatefulWidget {
   final CurrencyFormat? currency;
   final int startDay;
 
+  /// Non-null ET connecté : le calcul de la courbe passe par le serveur en
+  /// un seul aller-retour (voir [ApiSessionProvider.computeSimulationChart])
+  /// au lieu des ~6 appels locaux séquentiels.
+  final ApiSessionProvider? apiSession;
+
   const _SimulationChart({
+    super.key,
     required this.repo,
     required this.scenarioId,
     required this.accountIds,
@@ -2237,6 +2677,7 @@ class _SimulationChart extends StatefulWidget {
     required this.horizonMonths,
     required this.currency,
     required this.startDay,
+    this.apiSession,
   });
 
   @override
@@ -2328,6 +2769,59 @@ class _SimulationChartState extends State<_SimulationChart> {
     return series;
   }
 
+  bool get _useApi =>
+      widget.apiSession != null && widget.apiSession!.useApiForSimulation && widget.apiSession!.isConnected;
+
+  /// Un seul aller-retour par compte sélectionné (en parallèle via
+  /// Future.wait), au lieu des ~6 appels locaux séquentiels de
+  /// [_buildSeries] - voir [ApiSessionProvider.computeSimulationChart] et
+  /// sa route serveur, qui font exactement le même enchaînement.
+  Future<List<_AccountSeries>> _loadSeriesViaApi(DateTime anchor, int days) async {
+    final accountsById = {for (final a in accounts) a.id: a};
+    final results = await Future.wait([
+      for (final id in accountIds)
+        widget.apiSession!.computeSimulationChart(
+          scenarioId: scenarioId,
+          accountId: id,
+          anchor: anchor,
+          days: days,
+          startDay: startDay,
+        ),
+    ]);
+    final series = <_AccountSeries>[];
+    for (var i = 0; i < accountIds.length; i++) {
+      final id = accountIds[i];
+      final account = accountsById[id];
+      if (account == null) continue;
+      final color = _accountColors[i % _accountColors.length];
+      final result = results[i];
+      String? assumedBalanceNote;
+      final reversion = result.meanReversion;
+      if (reversion != null && !reversion.enabled) {
+        assumedBalanceNote =
+            '${account.name} : retour à l\'équilibre désactivé (réglages conservés)';
+      } else if (result.appliedDates.isNotEmpty) {
+        final equilibriumLabel =
+            currency?.format(result.equilibrium) ?? result.equilibrium.toStringAsFixed(2);
+        assumedBalanceNote = '${account.name} : retour à l\'équilibre '
+            '($equilibriumLabel) appliqué ${result.appliedDates.length} '
+            'fois sur l\'horizon affiché';
+      }
+      series.add(_AccountSeries(
+        account: account,
+        color: color,
+        baseline: _cumulative(result.baselineNet, result.startingBalance),
+        scenario: _cumulative(result.scenarioNet, result.startingBalance),
+        assumedBalanceNote: assumedBalanceNote,
+      ));
+    }
+    return series;
+  }
+
+  Future<List<_AccountSeries>>? _apiSeriesFuture;
+  List<_AccountSeries>? _lastSeries;
+  ({List<int> accountIds, int horizonMonths})? _apiSeriesKey;
+
   @override
   Widget build(BuildContext context) {
     if (accountIds.isEmpty) {
@@ -2351,6 +2845,38 @@ class _SimulationChartState extends State<_SimulationChart> {
         DateTime(today.year, today.month, today.day + i),
     ];
 
+    if (_useApi) {
+      final key = (accountIds: accountIds, horizonMonths: horizonMonths);
+      if (_apiSeriesFuture == null || _apiSeriesKey != key) {
+        _apiSeriesKey = key;
+        _apiSeriesFuture = _loadSeriesViaApi(anchor, days);
+      }
+      return FutureBuilder<List<_AccountSeries>>(
+        future: _apiSeriesFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasData) _lastSeries = snapshot.data;
+          if (_lastSeries == null) {
+            if (snapshot.hasError) {
+              return Center(child: Text('Erreur : ${snapshot.error}'));
+            }
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (_lastSeries!.isEmpty) {
+            return Center(
+              child: Text(
+                'Sélectionne au moins un compte pour voir la simulation.',
+                style: TextStyle(color: Theme.of(context).colorScheme.outline),
+              ),
+            );
+          }
+          return RefreshingOverlay(
+            refreshing: snapshot.connectionState != ConnectionState.done,
+            child: _buildChartUi(context, points, _lastSeries!),
+          );
+        },
+      );
+    }
+
     final series = _buildSeries(anchor, days);
     if (series.isEmpty) {
       return Center(
@@ -2360,7 +2886,10 @@ class _SimulationChartState extends State<_SimulationChart> {
         ),
       );
     }
+    return _buildChartUi(context, points, series);
+  }
 
+  Widget _buildChartUi(BuildContext context, List<DateTime> points, List<_AccountSeries> series) {
     final allValues = [
       if (!_hideUnchanged) for (final s in series) ...s.baseline,
       for (final s in series) ...s.scenario,

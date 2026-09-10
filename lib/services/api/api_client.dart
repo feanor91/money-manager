@@ -9,6 +9,7 @@ import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
+import 'package:money_manager_core/models/sim_scenario.dart';
 import 'package:money_manager_core/models/transaction.dart';
 
 /// Client HTTP pour le serveur API (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
@@ -18,6 +19,60 @@ import 'package:money_manager_core/models/transaction.dart';
 /// [MmexRepository] en local pour l'instant, même en mode API - voir la
 /// nuance du plan sur la bascule des écritures (coupure coordonnée, pas
 /// progressive comme les lectures).
+/// Résultat de [ApiClient.computeSimulationChart] - un compte, une fenêtre
+/// de [days] jours à partir de [anchor] - moins-un jour : voir la doc de
+/// _SimulationChartState._buildSeries dans simulation_screen.dart, dont
+/// ceci reproduit exactement l'enchaînement, côté serveur. [baselineNet]/
+/// [scenarioNet] sont un solde net par jour (clé = minuit ce jour-là) -
+/// l'appelant les transforme en courbe cumulative en partant de
+/// [startingBalance], exactement comme le faisait l'ancien code local.
+class SimulationChartResult {
+  final double startingBalance;
+  final Map<DateTime, double> baselineNet;
+  final Map<DateTime, double> scenarioNet;
+  final List<DateTime> appliedDates;
+  final double equilibrium;
+  final double stdev;
+  final ({bool enabled, double? equilibrium, double strength, double noisePercent})?
+      meanReversion;
+
+  const SimulationChartResult({
+    required this.startingBalance,
+    required this.baselineNet,
+    required this.scenarioNet,
+    required this.appliedDates,
+    required this.equilibrium,
+    required this.stdev,
+    required this.meanReversion,
+  });
+
+  factory SimulationChartResult.fromJson(Map<String, dynamic> json) {
+    Map<DateTime, double> parseNet(Object? raw) {
+      final map = raw as Map<String, dynamic>;
+      return map.map((k, v) => MapEntry(DateTime.parse(k), (v as num).toDouble()));
+    }
+
+    final meanReversionJson = json['meanReversion'] as Map<String, dynamic>?;
+    return SimulationChartResult(
+      startingBalance: (json['startingBalance'] as num).toDouble(),
+      baselineNet: parseNet(json['baselineNet']),
+      scenarioNet: parseNet(json['scenarioNet']),
+      appliedDates:
+          (json['appliedDates'] as List).map((e) => DateTime.parse(e as String)).toList(),
+      equilibrium: (json['equilibrium'] as num).toDouble(),
+      stdev: (json['stdev'] as num).toDouble(),
+      meanReversion: meanReversionJson == null
+          ? null
+          : (
+              enabled: meanReversionJson['enabled'] as bool,
+              equilibrium: (meanReversionJson['equilibrium'] as num?)?.toDouble(),
+              strength: (meanReversionJson['strength'] as num).toDouble(),
+              noisePercent: (meanReversionJson['noisePercent'] as num).toDouble(),
+            ),
+    );
+  }
+}
+
 class ApiClientException implements Exception {
   final String message;
   ApiClientException(this.message);
@@ -628,6 +683,228 @@ class ApiClient {
 
   Future<void> resetBudgetEnvelopes(int accountId) =>
       _rpc('resetBudgetEnvelopes', body: {'accountId': accountId});
+
+  // ---- Simulation ("what if" scenarios de long terme) ----
+
+  Future<List<SimScenario>> getSimScenarios() async {
+    final json = await _rpc('getSimScenarios') as List;
+    return json.map((e) => SimScenario.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<int> createSimScenario(String name) async {
+    final json = await _rpc('createSimScenario', body: {'name': name});
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> renameSimScenario(int scenarioId, String name) =>
+      _rpc('renameSimScenario', body: {'scenarioId': scenarioId, 'name': name});
+
+  Future<int> duplicateSimScenario(int sourceScenarioId, String newName) async {
+    final json = await _rpc('duplicateSimScenario',
+        body: {'sourceScenarioId': sourceScenarioId, 'newName': newName});
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> deleteSimScenario(int scenarioId) =>
+      _rpc('deleteSimScenario', body: {'scenarioId': scenarioId});
+
+  Future<List<SimBillOverride>> getSimBillOverrides(int scenarioId) async {
+    final json =
+        await _rpc('getSimBillOverrides', body: {'scenarioId': scenarioId}) as List;
+    return json.map((e) => SimBillOverride.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> upsertSimBillOverride(int scenarioId, int billId,
+          {DateTime? disabledFrom, double? amountOverride}) =>
+      _rpc('upsertSimBillOverride', body: {
+        'scenarioId': scenarioId,
+        'billId': billId,
+        if (disabledFrom != null) 'disabledFrom': disabledFrom.toIso8601String(),
+        if (amountOverride != null) 'amountOverride': amountOverride,
+      });
+
+  Future<void> deleteSimBillOverride(int scenarioId, int billId) =>
+      _rpc('deleteSimBillOverride', body: {'scenarioId': scenarioId, 'billId': billId});
+
+  Future<List<SimVirtualBill>> getSimVirtualBills(int scenarioId) async {
+    final json =
+        await _rpc('getSimVirtualBills', body: {'scenarioId': scenarioId}) as List;
+    return json.map((e) => SimVirtualBill.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<int> addSimVirtualBill({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime startDate,
+    required RecurrencePeriod period,
+    int numOccurrences = -1,
+    double variancePercent = 0,
+    double annualIncreasePercent = 0,
+    DateTime? annualIncreaseAnchor,
+  }) async {
+    final json = await _rpc('addSimVirtualBill', body: {
+      'scenarioId': scenarioId,
+      'accountId': accountId,
+      'label': label,
+      'transCode': transCodeToString(transCode),
+      'amount': amount,
+      'startDate': startDate.toIso8601String(),
+      'period': period.name,
+      'numOccurrences': numOccurrences,
+      'variancePercent': variancePercent,
+      'annualIncreasePercent': annualIncreasePercent,
+      if (annualIncreaseAnchor != null)
+        'annualIncreaseAnchor': annualIncreaseAnchor.toIso8601String(),
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> deleteSimVirtualBill(int virtualBillId) =>
+      _rpc('deleteSimVirtualBill', body: {'virtualBillId': virtualBillId});
+
+  Future<List<SimOneOffEvent>> getSimOneOffEvents(int scenarioId) async {
+    final json =
+        await _rpc('getSimOneOffEvents', body: {'scenarioId': scenarioId}) as List;
+    return json.map((e) => SimOneOffEvent.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<int> addSimOneOffEvent({
+    required int scenarioId,
+    required int accountId,
+    required String label,
+    required TransCode transCode,
+    required double amount,
+    required DateTime date,
+  }) async {
+    final json = await _rpc('addSimOneOffEvent', body: {
+      'scenarioId': scenarioId,
+      'accountId': accountId,
+      'label': label,
+      'transCode': transCodeToString(transCode),
+      'amount': amount,
+      'date': date.toIso8601String(),
+    });
+    return (json as Map<String, dynamic>)['id'] as int;
+  }
+
+  Future<void> deleteSimOneOffEvent(int eventId) =>
+      _rpc('deleteSimOneOffEvent', body: {'eventId': eventId});
+
+  Future<({bool enabled, double? equilibrium, double strength, double noisePercent})?>
+      getSimMeanReversion(int scenarioId, int accountId) async {
+    final json = await _rpc('getSimMeanReversion',
+        body: {'scenarioId': scenarioId, 'accountId': accountId});
+    if (json == null) return null;
+    final map = json as Map<String, dynamic>;
+    return (
+      enabled: map['enabled'] as bool,
+      equilibrium: (map['equilibrium'] as num?)?.toDouble(),
+      strength: (map['strength'] as num).toDouble(),
+      noisePercent: (map['noisePercent'] as num).toDouble(),
+    );
+  }
+
+  Future<void> setSimMeanReversion(
+    int scenarioId,
+    int accountId, {
+    required bool enabled,
+    double? equilibrium,
+    required double strength,
+    required double noisePercent,
+  }) =>
+      _rpc('setSimMeanReversion', body: {
+        'scenarioId': scenarioId,
+        'accountId': accountId,
+        'enabled': enabled,
+        if (equilibrium != null) 'equilibrium': equilibrium,
+        'strength': strength,
+        'noisePercent': noisePercent,
+      });
+
+  Future<void> setSimMeanReversionEnabled(int scenarioId, int accountId, bool enabled) =>
+      _rpc('setSimMeanReversionEnabled',
+          body: {'scenarioId': scenarioId, 'accountId': accountId, 'enabled': enabled});
+
+  Future<void> deleteSimMeanReversion(int scenarioId, int accountId) =>
+      _rpc('deleteSimMeanReversion', body: {'scenarioId': scenarioId, 'accountId': accountId});
+
+  Future<List<DateTime>> occurrencesForBill(
+      BillDeposit bill, DateTime start, DateTime end) async {
+    final json = await _rpc('occurrencesForBill', body: {
+      'bill': bill.toJson(),
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+    }) as List;
+    return json.map((e) => DateTime.parse(e as String)).toList();
+  }
+
+  Future<double> historicalDiscretionaryMonthlyAverage({
+    int? accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) async {
+    final json = await _rpc('historicalDiscretionaryMonthlyAverage', body: {
+      if (accountId != null) 'accountId': accountId,
+      'anchor': anchor.toIso8601String(),
+      'startDay': startDay,
+      'months': months,
+    });
+    return ((json as Map<String, dynamic>)['average'] as num).toDouble();
+  }
+
+  Future<double> historicalDiscretionaryMonthlyStdev({
+    int? accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) async {
+    final json = await _rpc('historicalDiscretionaryMonthlyStdev', body: {
+      if (accountId != null) 'accountId': accountId,
+      'anchor': anchor.toIso8601String(),
+      'startDay': startDay,
+      'months': months,
+    });
+    return ((json as Map<String, dynamic>)['stdev'] as num).toDouble();
+  }
+
+  Future<double> historicalEquilibriumBalance({
+    required int accountId,
+    required DateTime anchor,
+    required int startDay,
+    int months = 12,
+  }) async {
+    final json = await _rpc('historicalEquilibriumBalance', body: {
+      'accountId': accountId,
+      'anchor': anchor.toIso8601String(),
+      'startDay': startDay,
+      'months': months,
+    });
+    return ((json as Map<String, dynamic>)['balance'] as num).toDouble();
+  }
+
+  /// Un seul aller-retour pour toute la courbe (référence + scénario) d'un
+  /// compte - voir la même remarque sur le route serveur
+  /// (server/lib/rpc_router.dart).
+  Future<SimulationChartResult> computeSimulationChart({
+    required int scenarioId,
+    required int accountId,
+    required DateTime anchor,
+    required int days,
+    required int startDay,
+  }) async {
+    final json = await _rpc('computeSimulationChart', body: {
+      'scenarioId': scenarioId,
+      'accountId': accountId,
+      'anchor': anchor.toIso8601String(),
+      'days': days,
+      'startDay': startDay,
+    }) as Map<String, dynamic>;
+    return SimulationChartResult.fromJson(json);
+  }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {
     final token = _token;

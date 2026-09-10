@@ -152,6 +152,7 @@ class _HomeShellState extends State<HomeShell> {
     apiSession.useApiForTransactions = true;
     apiSession.useApiForBudget = true;
     apiSession.useApiForDashboard = true;
+    apiSession.useApiForSimulation = true;
   }
 
   Future<void> _runRecurringCatchUp() async {

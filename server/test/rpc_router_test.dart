@@ -1088,6 +1088,271 @@ void main() {
     });
   });
 
+  group('Simulation', () {
+    test('POST /rpc/createSimScenario then getSimScenarios returns the real scenario', () async {
+      final token = tokenStore.issue();
+      final createResponse = await router(
+          post('/rpc/createSimScenario', token: token, body: {'name': 'Retraite à 60 ans'}));
+      expect(createResponse.statusCode, 200);
+      final listResponse = await router(post('/rpc/getSimScenarios', token: token));
+      expect(listResponse.statusCode, 200);
+      final scenarios = jsonDecode(await listResponse.readAsString()) as List;
+      expect(scenarios.single['name'], 'Retraite à 60 ans');
+    });
+
+    test('POST /rpc/renameSimScenario renames the real scenario', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Départ initial');
+      final response = await router(post('/rpc/renameSimScenario',
+          token: token, body: {'scenarioId': scenarioId, 'name': 'Nouveau nom'}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimScenarios().single.name, 'Nouveau nom');
+    });
+
+    test('POST /rpc/duplicateSimScenario deep-copies the real scenario\'s adjustments', () async {
+      final token = tokenStore.issue();
+      final sourceId = repo.createSimScenario('Source');
+      repo.upsertSimBillOverride(sourceId, billId, amountOverride: 42.0);
+      final response = await router(post('/rpc/duplicateSimScenario',
+          token: token, body: {'sourceScenarioId': sourceId, 'newName': 'Copie'}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final newId = json['id'] as int;
+      expect(repo.getSimBillOverrides(newId).single.amountOverride, 42.0);
+    });
+
+    test('POST /rpc/deleteSimScenario removes the real scenario', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('À supprimer');
+      final response = await router(
+          post('/rpc/deleteSimScenario', token: token, body: {'scenarioId': scenarioId}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimScenarios(), isEmpty);
+    });
+
+    test('POST /rpc/upsertSimBillOverride then getSimBillOverrides returns the real override',
+        () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final response = await router(post('/rpc/upsertSimBillOverride', token: token, body: {
+        'scenarioId': scenarioId,
+        'billId': billId,
+        'amountOverride': 99.0,
+      }));
+      expect(response.statusCode, 200);
+      final listResponse = await router(
+          post('/rpc/getSimBillOverrides', token: token, body: {'scenarioId': scenarioId}));
+      final overrides = jsonDecode(await listResponse.readAsString()) as List;
+      expect(overrides.single['amountOverride'], 99.0);
+    });
+
+    test('POST /rpc/deleteSimBillOverride removes the real override', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      repo.upsertSimBillOverride(scenarioId, billId, amountOverride: 99.0);
+      final response = await router(post('/rpc/deleteSimBillOverride',
+          token: token, body: {'scenarioId': scenarioId, 'billId': billId}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimBillOverrides(scenarioId), isEmpty);
+    });
+
+    test('POST /rpc/addSimVirtualBill then getSimVirtualBills returns the real virtual bill',
+        () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final response = await router(post('/rpc/addSimVirtualBill', token: token, body: {
+        'scenarioId': scenarioId,
+        'accountId': accountId,
+        'label': 'Pension retraite',
+        'transCode': 'Deposit',
+        'amount': 1200.0,
+        'startDate': '2035-01-01T00:00:00.000',
+        'period': 'monthly',
+      }));
+      expect(response.statusCode, 200);
+      final listResponse = await router(
+          post('/rpc/getSimVirtualBills', token: token, body: {'scenarioId': scenarioId}));
+      final bills = jsonDecode(await listResponse.readAsString()) as List;
+      expect(bills.single['label'], 'Pension retraite');
+    });
+
+    test('POST /rpc/deleteSimVirtualBill removes the real virtual bill', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final virtualId = repo.addSimVirtualBill(
+        scenarioId: scenarioId,
+        accountId: accountId,
+        label: 'Test',
+        transCode: TransCode.deposit,
+        amount: 100,
+        startDate: DateTime(2035, 1, 1),
+        period: RecurrencePeriod.monthly,
+      );
+      final response = await router(post('/rpc/deleteSimVirtualBill',
+          token: token, body: {'virtualBillId': virtualId}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimVirtualBills(scenarioId), isEmpty);
+    });
+
+    test('POST /rpc/addSimOneOffEvent then getSimOneOffEvents returns the real event', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final response = await router(post('/rpc/addSimOneOffEvent', token: token, body: {
+        'scenarioId': scenarioId,
+        'accountId': accountId,
+        'label': 'Capital départ',
+        'transCode': 'Deposit',
+        'amount': 50000.0,
+        'date': '2035-06-01T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      final listResponse = await router(
+          post('/rpc/getSimOneOffEvents', token: token, body: {'scenarioId': scenarioId}));
+      final events = jsonDecode(await listResponse.readAsString()) as List;
+      expect(events.single['label'], 'Capital départ');
+    });
+
+    test('POST /rpc/deleteSimOneOffEvent removes the real event', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final eventId = repo.addSimOneOffEvent(
+        scenarioId: scenarioId,
+        accountId: accountId,
+        label: 'Test',
+        transCode: TransCode.deposit,
+        amount: 100,
+        date: DateTime(2035, 6, 1),
+      );
+      final response = await router(
+          post('/rpc/deleteSimOneOffEvent', token: token, body: {'eventId': eventId}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimOneOffEvents(scenarioId), isEmpty);
+    });
+
+    test('POST /rpc/setSimMeanReversion then getSimMeanReversion returns the real settings',
+        () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final response = await router(post('/rpc/setSimMeanReversion', token: token, body: {
+        'scenarioId': scenarioId,
+        'accountId': accountId,
+        'enabled': true,
+        'equilibrium': 1000.0,
+        'strength': 0.5,
+        'noisePercent': 100.0,
+      }));
+      expect(response.statusCode, 200);
+      final getResponse = await router(post('/rpc/getSimMeanReversion',
+          token: token, body: {'scenarioId': scenarioId, 'accountId': accountId}));
+      final json = jsonDecode(await getResponse.readAsString()) as Map<String, dynamic>;
+      expect(json['equilibrium'], 1000.0);
+    });
+
+    test('POST /rpc/setSimMeanReversionEnabled flips the real flag without losing the settings',
+        () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      repo.setSimMeanReversion(scenarioId, accountId,
+          enabled: true, equilibrium: 1000.0, strength: 0.5, noisePercent: 100.0);
+      final response = await router(post('/rpc/setSimMeanReversionEnabled',
+          token: token, body: {'scenarioId': scenarioId, 'accountId': accountId, 'enabled': false}));
+      expect(response.statusCode, 200);
+      final reversion = repo.getSimMeanReversion(scenarioId, accountId)!;
+      expect(reversion.enabled, isFalse);
+      expect(reversion.equilibrium, 1000.0);
+    });
+
+    test('POST /rpc/deleteSimMeanReversion removes the real settings entirely', () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      repo.setSimMeanReversion(scenarioId, accountId,
+          enabled: true, equilibrium: 1000.0, strength: 0.5, noisePercent: 100.0);
+      final response = await router(post('/rpc/deleteSimMeanReversion',
+          token: token, body: {'scenarioId': scenarioId, 'accountId': accountId}));
+      expect(response.statusCode, 200);
+      expect(repo.getSimMeanReversion(scenarioId, accountId), isNull);
+    });
+
+    test('POST /rpc/occurrencesForBill reflects the real bill from setUp', () async {
+      final token = tokenStore.issue();
+      final bill = repo.getBillDeposits().singleWhere((b) => b.id == billId);
+      final response = await router(post('/rpc/occurrencesForBill', token: token, body: {
+        'bill': bill.toJson(),
+        'start': '2026-04-01T00:00:00.000',
+        'end': '2026-07-01T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      final occurrences = jsonDecode(await response.readAsString()) as List;
+      expect(occurrences, isNotEmpty);
+    });
+
+    test('POST /rpc/historicalEquilibriumBalance reflects the real account balance', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/historicalEquilibriumBalance', token: token, body: {
+        'accountId': accountId,
+        'anchor': '2026-03-15T00:00:00.000',
+        'startDay': 1,
+        'months': 1,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['balance'], isA<double>());
+    });
+
+    test('POST /rpc/historicalDiscretionaryMonthlyAverage returns a real number', () async {
+      final token = tokenStore.issue();
+      final response =
+          await router(post('/rpc/historicalDiscretionaryMonthlyAverage', token: token, body: {
+        'accountId': accountId,
+        'anchor': '2026-03-15T00:00:00.000',
+        'startDay': 1,
+        'months': 1,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['average'], isA<double>());
+    });
+
+    test('POST /rpc/historicalDiscretionaryMonthlyStdev returns a real number', () async {
+      final token = tokenStore.issue();
+      final response =
+          await router(post('/rpc/historicalDiscretionaryMonthlyStdev', token: token, body: {
+        'accountId': accountId,
+        'anchor': '2026-03-15T00:00:00.000',
+        'startDay': 1,
+        'months': 1,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['stdev'], isA<double>());
+    });
+
+    test('POST /rpc/computeSimulationChart returns a real chart matching direct repo calls',
+        () async {
+      final token = tokenStore.issue();
+      final scenarioId = repo.createSimScenario('Test');
+      final anchor = DateTime(2026, 6, 1);
+      const days = 30;
+      const startDay = 1;
+      final response = await router(post('/rpc/computeSimulationChart', token: token, body: {
+        'scenarioId': scenarioId,
+        'accountId': accountId,
+        'anchor': anchor.toIso8601String(),
+        'days': days,
+        'startDay': startDay,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['startingBalance'], repo.accountBalance(accountId, asOf: DateTime.now()));
+      final expectedBaseline =
+          repo.recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
+      final baselineNet = json['baselineNet'] as Map<String, dynamic>;
+      expect(baselineNet.length, expectedBaseline.length);
+      expect(json['scenarioNet'], isA<Map>());
+      expect(json['appliedDates'], isA<List>());
+    });
+  });
+
   group('POST /auth/logout', () {
     test('revokes the token used to call it', () async {
       final token = tokenStore.issue();

@@ -628,6 +628,232 @@ Handler buildRouter({
     return Response.ok(jsonEncode({'ok': true}));
   });
 
+  // ---- Simulation ("what if" scenarios de long terme) ----
+  rpcRouter.post('/getSimScenarios', (Request request) async {
+    final scenarios = repo.getSimScenarios();
+    return Response.ok(jsonEncode([for (final s in scenarios) s.toJson()]));
+  });
+  rpcRouter.post('/createSimScenario', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.createSimScenario(body['name'] as String);
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/renameSimScenario', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.renameSimScenario(body['scenarioId'] as int, body['name'] as String);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/duplicateSimScenario', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.duplicateSimScenario(
+        body['sourceScenarioId'] as int, body['newName'] as String);
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/deleteSimScenario', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteSimScenario(body['scenarioId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/getSimBillOverrides', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final overrides = repo.getSimBillOverrides(body['scenarioId'] as int);
+    return Response.ok(jsonEncode([for (final o in overrides) o.toJson()]));
+  });
+  rpcRouter.post('/upsertSimBillOverride', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.upsertSimBillOverride(
+      body['scenarioId'] as int,
+      body['billId'] as int,
+      disabledFrom: body['disabledFrom'] == null
+          ? null
+          : DateTime.parse(body['disabledFrom'] as String),
+      amountOverride: (body['amountOverride'] as num?)?.toDouble(),
+    );
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteSimBillOverride', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteSimBillOverride(body['scenarioId'] as int, body['billId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/getSimVirtualBills', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final bills = repo.getSimVirtualBills(body['scenarioId'] as int);
+    return Response.ok(jsonEncode([for (final b in bills) b.toJson()]));
+  });
+  rpcRouter.post('/addSimVirtualBill', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.addSimVirtualBill(
+      scenarioId: body['scenarioId'] as int,
+      accountId: body['accountId'] as int,
+      label: body['label'] as String,
+      transCode: transCodeFromString(body['transCode'] as String),
+      amount: (body['amount'] as num).toDouble(),
+      startDate: DateTime.parse(body['startDate'] as String),
+      period: RecurrencePeriod.values.byName(body['period'] as String),
+      numOccurrences: body['numOccurrences'] as int? ?? -1,
+      variancePercent: (body['variancePercent'] as num?)?.toDouble() ?? 0,
+      annualIncreasePercent: (body['annualIncreasePercent'] as num?)?.toDouble() ?? 0,
+      annualIncreaseAnchor: body['annualIncreaseAnchor'] == null
+          ? null
+          : DateTime.parse(body['annualIncreaseAnchor'] as String),
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/deleteSimVirtualBill', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteSimVirtualBill(body['virtualBillId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/getSimOneOffEvents', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final events = repo.getSimOneOffEvents(body['scenarioId'] as int);
+    return Response.ok(jsonEncode([for (final e in events) e.toJson()]));
+  });
+  rpcRouter.post('/addSimOneOffEvent', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final id = repo.addSimOneOffEvent(
+      scenarioId: body['scenarioId'] as int,
+      accountId: body['accountId'] as int,
+      label: body['label'] as String,
+      transCode: transCodeFromString(body['transCode'] as String),
+      amount: (body['amount'] as num).toDouble(),
+      date: DateTime.parse(body['date'] as String),
+    );
+    return Response.ok(jsonEncode({'id': id}));
+  });
+  rpcRouter.post('/deleteSimOneOffEvent', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteSimOneOffEvent(body['eventId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/getSimMeanReversion', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final reversion =
+        repo.getSimMeanReversion(body['scenarioId'] as int, body['accountId'] as int);
+    return Response.ok(jsonEncode(reversion == null
+        ? null
+        : {
+            'enabled': reversion.enabled,
+            'equilibrium': reversion.equilibrium,
+            'strength': reversion.strength,
+            'noisePercent': reversion.noisePercent,
+          }));
+  });
+  rpcRouter.post('/setSimMeanReversion', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setSimMeanReversion(
+      body['scenarioId'] as int,
+      body['accountId'] as int,
+      enabled: body['enabled'] as bool,
+      equilibrium: (body['equilibrium'] as num?)?.toDouble(),
+      strength: (body['strength'] as num).toDouble(),
+      noisePercent: (body['noisePercent'] as num).toDouble(),
+    );
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/setSimMeanReversionEnabled', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.setSimMeanReversionEnabled(
+        body['scenarioId'] as int, body['accountId'] as int, body['enabled'] as bool);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/deleteSimMeanReversion', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.deleteSimMeanReversion(body['scenarioId'] as int, body['accountId'] as int);
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/occurrencesForBill', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final bill = BillDeposit.fromJson(body['bill'] as Map<String, dynamic>);
+    final occurrences = repo.occurrencesForBill(
+      bill,
+      DateTime.parse(body['start'] as String),
+      DateTime.parse(body['end'] as String),
+    );
+    return Response.ok(jsonEncode([for (final d in occurrences) d.toIso8601String()]));
+  });
+  rpcRouter.post('/historicalDiscretionaryMonthlyAverage', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final average = repo.historicalDiscretionaryMonthlyAverage(
+      accountId: body['accountId'] as int?,
+      anchor: DateTime.parse(body['anchor'] as String),
+      startDay: body['startDay'] as int,
+      months: body['months'] as int? ?? 12,
+    );
+    return Response.ok(jsonEncode({'average': average}));
+  });
+  rpcRouter.post('/historicalDiscretionaryMonthlyStdev', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final stdev = repo.historicalDiscretionaryMonthlyStdev(
+      accountId: body['accountId'] as int?,
+      anchor: DateTime.parse(body['anchor'] as String),
+      startDay: body['startDay'] as int,
+      months: body['months'] as int? ?? 12,
+    );
+    return Response.ok(jsonEncode({'stdev': stdev}));
+  });
+  rpcRouter.post('/historicalEquilibriumBalance', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final balance = repo.historicalEquilibriumBalance(
+      accountId: body['accountId'] as int,
+      anchor: DateTime.parse(body['anchor'] as String),
+      startDay: body['startDay'] as int,
+      months: body['months'] as int? ?? 12,
+    );
+    return Response.ok(jsonEncode({'balance': balance}));
+  });
+  // Un seul aller-retour pour toute la courbe (référence + scénario) d'un
+  // compte, plutôt que les ~6 appels séquentiels que ça prenait côté client
+  // (voir _SimulationChartState._buildSeries dans simulation_screen.dart) -
+  // reproduit exactement le même enchaînement, juste exécuté côté serveur.
+  rpcRouter.post('/computeSimulationChart', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final scenarioId = body['scenarioId'] as int;
+    final accountId = body['accountId'] as int;
+    final anchor = DateTime.parse(body['anchor'] as String);
+    final days = body['days'] as int;
+    final startDay = body['startDay'] as int;
+    final now = DateTime.now();
+
+    final startingBalance = repo.accountBalance(accountId, asOf: now);
+    final baselineNet = repo.recurringDailyNet(anchor: anchor, days: days, accountId: accountId);
+    final reversion = repo.getSimMeanReversion(scenarioId, accountId);
+    final equilibrium = reversion?.equilibrium ??
+        repo.historicalEquilibriumBalance(
+            accountId: accountId, anchor: now, startDay: startDay);
+    final stdev = repo.historicalDiscretionaryMonthlyStdev(
+        accountId: accountId, anchor: now, startDay: startDay);
+    final scenarioResult = repo.simulatedDailyNetWithMeanReversion(
+      scenarioId: scenarioId,
+      accountId: accountId,
+      enabled: reversion?.enabled ?? false,
+      equilibrium: equilibrium,
+      strength: reversion?.strength ?? 0.5,
+      noiseAmount: stdev * (reversion?.noisePercent ?? 100) / 100,
+      anchor: anchor,
+      days: days,
+      forecastDay: startDay,
+    );
+
+    return Response.ok(jsonEncode({
+      'startingBalance': startingBalance,
+      'baselineNet': baselineNet.map((k, v) => MapEntry(k.toIso8601String(), v)),
+      'scenarioNet': scenarioResult.net.map((k, v) => MapEntry(k.toIso8601String(), v)),
+      'appliedDates': [for (final d in scenarioResult.appliedDates) d.toIso8601String()],
+      'equilibrium': equilibrium,
+      'stdev': stdev,
+      'meanReversion': reversion == null
+          ? null
+          : {
+              'enabled': reversion.enabled,
+              'equilibrium': reversion.equilibrium,
+              'strength': reversion.strength,
+              'noisePercent': reversion.noisePercent,
+            },
+    }));
+  });
+
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));
 

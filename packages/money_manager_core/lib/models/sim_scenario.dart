@@ -1,12 +1,17 @@
+import 'package:json_annotation/json_annotation.dart';
+
 import 'bill_deposit.dart';
 import 'recurrence.dart';
 import 'transaction.dart';
+
+part 'sim_scenario.g.dart';
 
 /// A named, saveable long-term "what if" scenario (see APP_SIM_SCENARIOS) -
 /// phase 1 of PLAN_SIMULATION_LONG_TERME.md. A scenario on its own is just a
 /// name; what it actually changes lives in [SimBillOverride]/[SimVirtualBill]/
 /// [SimOneOffEvent] rows underneath it, all referencing this by
 /// [SimScenario.id] - same split as [BudgetScenario]/APP_BUDGET_SCENARIO_AMOUNTS.
+@JsonSerializable()
 class SimScenario {
   final int id;
   final String name;
@@ -53,6 +58,9 @@ class SimScenario {
       assumedFinalBalance: (row['ASSUMED_FINAL_BALANCE'] as num?)?.toDouble(),
     );
   }
+
+  factory SimScenario.fromJson(Map<String, dynamic> json) => _$SimScenarioFromJson(json);
+  Map<String, dynamic> toJson() => _$SimScenarioToJson(this);
 }
 
 /// One scenario's change to a real recurring bill (BILLSDEPOSITS_V1) -
@@ -63,6 +71,7 @@ class SimScenario {
 /// [disabledFrom] on the real bill plus a same-shaped [SimVirtualBill]
 /// starting on that date with the new amount, using the two primitives
 /// together rather than a third, more complex one.
+@JsonSerializable()
 class SimBillOverride {
   final int scenarioId;
   final int billId;
@@ -96,6 +105,9 @@ class SimBillOverride {
       amountOverride: (row['AMOUNT_OVERRIDE'] as num?)?.toDouble(),
     );
   }
+
+  factory SimBillOverride.fromJson(Map<String, dynamic> json) => _$SimBillOverrideFromJson(json);
+  Map<String, dynamic> toJson() => _$SimBillOverrideToJson(this);
 }
 
 /// A recurring operation that exists only inside a scenario, never in the
@@ -107,6 +119,7 @@ class SimBillOverride {
 /// collide with a real one there (same negative-id convention
 /// APP_BUDGET_SCENARIO_VIRTUAL_CATEGORIES already uses for virtual
 /// categories).
+@JsonSerializable()
 class SimVirtualBill {
   final int id;
   final int scenarioId;
@@ -199,10 +212,14 @@ class SimVirtualBill {
           DateTime.tryParse(row['ANNUAL_INCREASE_ANCHOR'] as String? ?? ''),
     );
   }
+
+  factory SimVirtualBill.fromJson(Map<String, dynamic> json) => _$SimVirtualBillFromJson(json);
+  Map<String, dynamic> toJson() => _$SimVirtualBillToJson(this);
 }
 
 /// A single hypothetical transaction, not a recurring one - e.g. "capital de
 /// départ à la retraite +50000€ le 01/06/2035".
+@JsonSerializable()
 class SimOneOffEvent {
   final int id;
   final int scenarioId;
@@ -234,4 +251,7 @@ class SimOneOffEvent {
       date: DateTime.tryParse(row['DATE'] as String? ?? '') ?? DateTime.now(),
     );
   }
+
+  factory SimOneOffEvent.fromJson(Map<String, dynamic> json) => _$SimOneOffEventFromJson(json);
+  Map<String, dynamic> toJson() => _$SimOneOffEventToJson(this);
 }
