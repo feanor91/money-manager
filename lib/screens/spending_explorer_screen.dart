@@ -63,6 +63,7 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
 
   List<MoneyTransaction>? _results;
   Future<_FilterOptions>? _apiOptionsFuture;
+  int? _apiOptionsFutureKey;
   _FilterOptions? _lastOptions;
   bool _applyingFilters = false;
 
@@ -315,7 +316,15 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForSpendingExplorer) {
-      _apiOptionsFuture ??= _loadOptionsViaApi(apiSession);
+      // Se relit aussi quand une écriture a eu lieu ailleurs dans l'appli
+      // (voir ApiSessionProvider.dataVersion) - cet écran est purement en
+      // lecture mais ses propres filtres (catégories/tiers/comptes) et
+      // résultats peuvent devenir périmés après une opération ajoutée/
+      // modifiée ailleurs.
+      if (_apiOptionsFuture == null || _apiOptionsFutureKey != apiSession.dataVersion) {
+        _apiOptionsFutureKey = apiSession.dataVersion;
+        _apiOptionsFuture = _loadOptionsViaApi(apiSession);
+      }
       return Scaffold(
         appBar: AppBar(title: const Text('Explorateur de dépenses (via API)')),
         body: FutureBuilder<_FilterOptions>(

@@ -75,7 +75,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   Future<_DashboardData>? _apiFuture;
   _DashboardData? _lastData;
-  ({int? selectedAccountId, int forecastDay})? _apiFutureKey;
+  ({int? selectedAccountId, int forecastDay, int dataVersion})? _apiFutureKey;
 
   /// La liste des comptes elle-même vient maintenant aussi du serveur en
   /// mode API (2026-09-10, demande explicite de l'utilisateur après un
@@ -189,6 +189,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider) {
+    // bumpDataVersion() prévient aussi tous les autres écrans (même cachés
+    // derrière l'IndexedStack) qu'une écriture vient d'avoir lieu quelque
+    // part - voir sa doc dans ApiSessionProvider.
+    session.bumpDataVersion();
     setState(() => _apiFuture = _loadViaApi(session, dbProvider));
   }
 
@@ -202,6 +206,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final key = (
         selectedAccountId: dbProvider.selectedAccountId,
         forecastDay: dbProvider.forecastDay,
+        dataVersion: apiSession.dataVersion,
       );
       if (_apiFuture == null || _apiFutureKey != key) {
         _apiFutureKey = key;

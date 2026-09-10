@@ -41,6 +41,7 @@ class _PayeesScreenState extends State<PayeesScreen> {
   String _search = '';
   Future<_PayeesData>? _apiFuture;
   _PayeesData? _lastData;
+  int? _apiFutureKey;
 
   @override
   void dispose() {
@@ -55,9 +56,6 @@ class _PayeesScreenState extends State<PayeesScreen> {
     );
   }
 
-  /// Lecture seule - voir AccountsScreen._loadViaApi pour la même nuance
-  /// (les écritures continuent de passer par le fichier local même en
-  /// mode API, pas de rafraîchissement automatique après une modification).
   Future<_PayeesData> _loadViaApi(ApiSessionProvider session) async {
     final payees = await session.getPayees(onlyActive: false);
     final counts = await Future.wait([for (final p in payees) session.payeeUsageCount(p.id)]);
@@ -66,7 +64,11 @@ class _PayeesScreenState extends State<PayeesScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session) {
-    setState(() => _apiFuture = _loadViaApi(session));
+    session.bumpDataVersion();
+    setState(() {
+      _apiFutureKey = session.dataVersion;
+      _apiFuture = _loadViaApi(session);
+    });
   }
 
   @override
@@ -76,7 +78,10 @@ class _PayeesScreenState extends State<PayeesScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForPayees) {
-      _apiFuture ??= _loadViaApi(apiSession);
+      if (_apiFuture == null || _apiFutureKey != apiSession.dataVersion) {
+        _apiFutureKey = apiSession.dataVersion;
+        _apiFuture = _loadViaApi(apiSession);
+      }
       return Scaffold(
         appBar: AppBar(
           title: const Text('Tiers (via API)'),

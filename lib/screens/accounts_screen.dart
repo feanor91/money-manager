@@ -35,6 +35,7 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   Future<_AccountsData>? _apiFuture;
   _AccountsData? _lastData;
+  int? _apiFutureKey;
 
   _AccountsData _localData(MmexRepository repo) {
     final now = DateTime.now();
@@ -46,14 +47,6 @@ class _AccountsScreenState extends State<AccountsScreen> {
     );
   }
 
-  /// Lecture seule - les écritures (ajouter/modifier/supprimer un compte,
-  /// masquer/réafficher) continuent de passer par le fichier local même
-  /// en mode API, voir [openAccountEditor]. Ça veut dire qu'une
-  /// modification faite ici ne se reflète pas automatiquement dans cette
-  /// vue tant qu'on n'a pas rafraîchi manuellement - limitation connue
-  /// d'un premier pilote en lecture seule, pas un bug (voir la nuance du
-  /// plan sur la bascule des écritures, jamais progressive comme les
-  /// lectures).
   Future<_AccountsData> _loadViaApi(ApiSessionProvider session) async {
     final results = await Future.wait([session.getAccounts(), session.getBaseCurrency()]);
     final accounts = results[0] as List<Account>;
@@ -71,7 +64,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session) {
-    setState(() => _apiFuture = _loadViaApi(session));
+    session.bumpDataVersion();
+    setState(() {
+      _apiFutureKey = session.dataVersion;
+      _apiFuture = _loadViaApi(session);
+    });
   }
 
   @override
@@ -81,7 +78,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForAccounts) {
-      _apiFuture ??= _loadViaApi(apiSession);
+      if (_apiFuture == null || _apiFutureKey != apiSession.dataVersion) {
+        _apiFutureKey = apiSession.dataVersion;
+        _apiFuture = _loadViaApi(apiSession);
+      }
       return Scaffold(
         appBar: AppBar(
           title: const Text('Comptes (via API)'),

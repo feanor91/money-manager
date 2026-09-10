@@ -36,6 +36,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   bool _showArchived = false;
   Future<_CategoriesData>? _apiFuture;
   _CategoriesData? _lastData;
+  ({bool showArchived, int dataVersion})? _apiFutureKey;
 
   @override
   void dispose() {
@@ -52,9 +53,6 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     );
   }
 
-  /// Lecture seule - voir AccountsScreen._loadViaApi pour la même nuance
-  /// (les écritures continuent de passer par le fichier local même en
-  /// mode API, pas de rafraîchissement automatique après une modification).
   Future<_CategoriesData> _loadViaApi(ApiSessionProvider session) async {
     final categories = await session.getCategories(onlyActive: !_showArchived);
     final usages = await Future.wait([for (final c in categories) session.categoryUsage(c.id)]);
@@ -73,7 +71,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session) {
-    setState(() => _apiFuture = _loadViaApi(session));
+    session.bumpDataVersion();
+    setState(() {
+      _apiFutureKey = (showArchived: _showArchived, dataVersion: session.dataVersion);
+      _apiFuture = _loadViaApi(session);
+    });
   }
 
   @override
@@ -83,7 +85,11 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForCategories) {
-      _apiFuture ??= _loadViaApi(apiSession);
+      final key = (showArchived: _showArchived, dataVersion: apiSession.dataVersion);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession);
+      }
       return Scaffold(
         appBar: AppBar(
           title: const Text('Catégories (via API)'),

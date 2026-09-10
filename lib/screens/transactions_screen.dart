@@ -276,7 +276,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   Future<_TransactionsData>? _apiFuture;
   _TransactionsData? _lastData;
-  ({int? selectedAccountId, DateTime month})? _apiFutureKey;
+  ({int? selectedAccountId, DateTime month, int dataVersion})? _apiFutureKey;
 
   /// La liste des comptes elle-même vient aussi du serveur en mode API -
   /// même raison que le tableau de bord (voir sa doc de _localData), un
@@ -368,8 +368,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session, DatabaseProvider dbProvider) {
+    session.bumpDataVersion();
     setState(() {
-      _apiFutureKey = (selectedAccountId: dbProvider.selectedAccountId, month: _selectedMonth);
+      _apiFutureKey = (
+        selectedAccountId: dbProvider.selectedAccountId,
+        month: _selectedMonth,
+        dataVersion: session.dataVersion,
+      );
       _apiFuture = _loadViaApi(session, dbProvider);
     });
   }
@@ -381,7 +386,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForTransactions) {
-      final key = (selectedAccountId: dbProvider.selectedAccountId, month: _selectedMonth);
+      final key = (
+        selectedAccountId: dbProvider.selectedAccountId,
+        month: _selectedMonth,
+        dataVersion: apiSession.dataVersion,
+      );
       if (_apiFuture == null || _apiFutureKey != key) {
         _apiFutureKey = key;
         _apiFuture = _loadViaApi(apiSession, dbProvider);

@@ -71,6 +71,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
   String _searchQuery = '';
   Future<_RecurringData>? _apiFuture;
   _RecurringData? _lastData;
+  int? _apiFutureKey;
 
   _RecurringData _localData(MmexRepository repo) {
     return _RecurringData(
@@ -115,7 +116,11 @@ class _RecurringScreenState extends State<RecurringScreen> {
   }
 
   void _refreshApi(ApiSessionProvider session) {
-    setState(() => _apiFuture = _loadViaApi(session));
+    session.bumpDataVersion();
+    setState(() {
+      _apiFutureKey = session.dataVersion;
+      _apiFuture = _loadViaApi(session);
+    });
   }
 
   @override
@@ -125,7 +130,10 @@ class _RecurringScreenState extends State<RecurringScreen> {
     final repo = dbProvider.repository!;
 
     if (apiSession.useApiForRecurring) {
-      _apiFuture ??= _loadViaApi(apiSession);
+      if (_apiFuture == null || _apiFutureKey != apiSession.dataVersion) {
+        _apiFutureKey = apiSession.dataVersion;
+        _apiFuture = _loadViaApi(apiSession);
+      }
       return FutureBuilder<_RecurringData>(
         future: _apiFuture,
         builder: (context, snapshot) {

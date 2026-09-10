@@ -52,6 +52,24 @@ class ApiSessionProvider extends ChangeNotifier {
   String? get error => _error;
   String? get serverUrl => _client?.baseUrl;
 
+  /// Compteur incrémenté à chaque écriture réussie via l'API, depuis
+  /// n'importe quel écran - chaque écran migré inclut sa valeur dans la clé
+  /// qui décide de relancer [_loadViaApi] (voir dashboard_screen.dart et
+  /// consorts). Comme [ApiSessionProvider] est déjà observé
+  /// (`context.watch`) par tous ces écrans, y compris ceux cachés derrière
+  /// l'IndexedStack de HomeShell (montés mais pas peints), l'incrémenter
+  /// force TOUS les écrans à se relire au prochain changement, pas
+  /// seulement celui où l'écriture a eu lieu - corrige le cas trouvé
+  /// 2026-09-10 : enregistrer une occurrence d'opération récurrente
+  /// laissait le grand livre affiché sur des données périmées tant qu'on
+  /// ne changeait pas de compte pour forcer une relecture.
+  int _dataVersion = 0;
+  int get dataVersion => _dataVersion;
+  void bumpDataVersion() {
+    _dataVersion++;
+    notifyListeners();
+  }
+
   bool _useApiFor(String screen) => _apiScreens.contains(screen) && isConnected;
   void _setUseApiFor(String screen, bool value) {
     if (value) {
