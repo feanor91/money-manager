@@ -1,0 +1,22 @@
+name: money_manager_server
+description: >
+  Serveur API de Money Manager - expose MmexRepository (packages/
+  money_manager_core) derrière des routes HTTP RPC. Voir
+  PLAN_ARCHITECTURE_CLIENT_SERVEUR.md pour l'architecture retenue.
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.3
+  money_manager_core:
+    path: ../packages/money_manager_core
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+
+dev_dependencies:
+  http: ^1.2.0
+  lints: ^4.0.0
+  test: ^1.25.0

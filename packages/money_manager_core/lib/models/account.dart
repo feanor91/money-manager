@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'account.g.dart';
+
+@JsonSerializable()
 class Account {
   final int id;
   final String name;
@@ -31,4 +36,12 @@ class Account {
       notes: row['NOTES'] as String?,
     );
   }
+
+  /// Sérialisation JSON pour l'API client/serveur (voir
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - générée par json_serializable
+  /// plutôt qu'écrite à la main, pour ne pas reproduire "le bug n°1" déjà
+  /// documenté dans CLAUDE.md (un champ ajouté au modèle, oublié dans un
+  /// toJson manuel, silencieusement jamais envoyé).
+  factory Account.fromJson(Map<String, dynamic> json) => _$AccountFromJson(json);
+  Map<String, dynamic> toJson() => _$AccountToJson(this);
 }
