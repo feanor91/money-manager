@@ -77,6 +77,12 @@ class ApiSessionProvider extends ChangeNotifier {
   bool get useApiForBudget => _useApiFor('budget');
   set useApiForBudget(bool value) => _setUseApiFor('budget', value);
 
+  /// Le tableau de bord lui-même, l'aperçu du budget et le graphique
+  /// dépenses/catégorie - le graphique de prévision de solde
+  /// (ForecastChart) reste toujours local, voir dashboard_screen.dart.
+  bool get useApiForDashboard => _useApiFor('dashboard');
+  set useApiForDashboard(bool value) => _setUseApiFor('dashboard', value);
+
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
     _error = null;
@@ -181,6 +187,20 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<double> expectedIncomeForBudget(int accountId) =>
       _requireClient().expectedIncomeForBudget(accountId);
+
+  Future<List<MoneyTransaction>> getTransactions({
+    int? accountId,
+    DateTime? from,
+    DateTime? to,
+    int limit = 200,
+  }) =>
+      _requireClient().getTransactions(accountId: accountId, from: from, to: to, limit: limit);
+
+  Future<double> forecastAccountBalance(int accountId, DateTime targetDate) =>
+      _requireClient().forecastAccountBalance(accountId, targetDate);
+
+  Future<DateTime?> forecastNegativeDate(int accountId, {int horizonDays = 365}) =>
+      _requireClient().forecastNegativeDate(accountId, horizonDays: horizonDays);
 
   ApiClient _requireClient() {
     final client = _client;

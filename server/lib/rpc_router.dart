@@ -213,6 +213,37 @@ Handler buildRouter({
     final expected = repo.expectedIncomeForBudget(body['accountId'] as int);
     return Response.ok(jsonEncode({'expected': expected}));
   });
+  // Tableau de bord (étape 4) - le graphique de prévision (ForecastChart)
+  // reste local pour l'instant, voir dashboard_screen.dart et
+  // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md.
+  rpcRouter.post('/getTransactions', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final fromStr = body['from'] as String?;
+    final toStr = body['to'] as String?;
+    final transactions = repo.getTransactions(
+      accountId: body['accountId'] as int?,
+      from: fromStr == null ? null : DateTime.parse(fromStr),
+      to: toStr == null ? null : DateTime.parse(toStr),
+      limit: body['limit'] as int? ?? 200,
+    );
+    return Response.ok(jsonEncode([for (final t in transactions) t.toJson()]));
+  });
+  rpcRouter.post('/forecastAccountBalance', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final balance = repo.forecastAccountBalance(
+      body['accountId'] as int,
+      DateTime.parse(body['targetDate'] as String),
+    );
+    return Response.ok(jsonEncode({'balance': balance}));
+  });
+  rpcRouter.post('/forecastNegativeDate', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final date = repo.forecastNegativeDate(
+      body['accountId'] as int,
+      horizonDays: body['horizonDays'] as int? ?? 365,
+    );
+    return Response.ok(jsonEncode(date?.toIso8601String()));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));

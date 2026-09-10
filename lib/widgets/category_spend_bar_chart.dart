@@ -1,13 +1,18 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/budget_period.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 import 'envelope_gauge.dart' show forecastColor;
@@ -105,6 +110,21 @@ class CategorySpendBarChart extends StatefulWidget {
   State<CategorySpendBarChart> createState() => _CategorySpendBarChartState();
 }
 
+/// Données brutes d'une fenêtre du graphique (étape 4, lecture seule) -
+/// voir budget_screen.dart pour le même principe appliqué à l'écran
+/// complet.
+class _ChartRawData {
+  final List<Category> categories;
+  final Map<int, double> rawSpend;
+  final Map<int, double> recurringMonthly;
+
+  const _ChartRawData({
+    required this.categories,
+    required this.rawSpend,
+    required this.recurringMonthly,
+  });
+}
+
 class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
   _WindowDuration _duration = _WindowDuration.oneMonth;
 
@@ -114,9 +134,29 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
   /// no "planned" concept for a future window here, unlike ForecastChart).
   int _offsetSteps = 0;
 
+  Future<_ChartRawData>? _apiFuture;
+  ({int? accountId, DateTime windowStart})? _apiFutureKey;
+
+  _ChartRawData _localData(MmexRepository repo, DateTime windowStart, DateTime windowEndExclusive) {
+    return _ChartRawData(
+      categories: repo.getCategories(onlyActive: false),
+      rawSpend: repo.categorySpendForPeriod(windowStart, windowEndExclusive, accountId: widget.accountId),
+      recurringMonthly: repo.categoryMonthlyRecurringTotals(accountId: widget.accountId),
+    );
+  }
+
+  Future<_ChartRawData> _loadViaApi(
+      ApiSessionProvider session, DateTime windowStart, DateTime windowEndExclusive) async {
+    final categories = await session.getCategories(onlyActive: false);
+    final rawSpend = await session.categorySpendForPeriod(windowStart, windowEndExclusive,
+        accountId: widget.accountId);
+    final recurringMonthly = await session.categoryMonthlyRecurringTotals(accountId: widget.accountId);
+    return _ChartRawData(categories: categories, rawSpend: rawSpend, recurringMonthly: recurringMonthly);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final repo = widget.repository;
+    final apiSession = context.watch<ApiSessionProvider>();
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     // Windows are "full months" anchored on the day *after* the "Jour de
@@ -139,13 +179,45 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
     final windowEndExclusive = _addDays(endBudgetWindow.end, 1);
     final windowEndInclusive = _addDays(windowEndExclusive, -1);
 
-    final categories = repo.getCategories(onlyActive: false);
-    final rawSpend = repo.categorySpendForPeriod(
-      windowStart,
-      windowEndExclusive,
-      accountId: widget.accountId,
-    );
-    final recurringMonthly = repo.categoryMonthlyRecurringTotals(accountId: widget.accountId);
+    if (apiSession.useApiForDashboard && apiSession.isConnected) {
+      final key = (accountId: widget.accountId, windowStart: windowStart);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, windowStart, windowEndExclusive);
+      }
+      return FutureBuilder<_ChartRawData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const BentoCard(
+                title: 'Dépenses par catégorie', child: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return BentoCard(
+                title: 'Dépenses par catégorie',
+                child: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildCard(
+              context, windowStart, windowEndExclusive, windowEndInclusive, snapshot.data!);
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildCard(context, windowStart, windowEndExclusive, windowEndInclusive,
+        _localData(widget.repository, windowStart, windowEndExclusive));
+  }
+
+  Widget _buildCard(
+    BuildContext context,
+    DateTime windowStart,
+    DateTime windowEndExclusive,
+    DateTime windowEndInclusive,
+    _ChartRawData data,
+  ) {
+    final categories = data.categories;
+    final rawSpend = data.rawSpend;
+    final recurringMonthly = data.recurringMonthly;
 
     final items = <_BarItem>[];
     for (final c in categories.where((c) => c.parentId == null)) {
@@ -359,25 +431,48 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
   /// templates) that add up to a tapped bar - the same rolled-up category
   /// set (see [_BarItem.categoryIds]) and window the bar's own total was
   /// computed from, so the numbers always match what's on screen.
-  void _showBarDetail(
+  Future<void> _showBarDetail(
     _BarItem item,
     bool isSpent,
     DateTime windowStart,
     DateTime windowEndExclusive,
-  ) {
-    final repo = widget.repository;
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+  ) async {
+    final apiSession = context.read<ApiSessionProvider>();
+    final useApi = apiSession.useApiForDashboard && apiSession.isConnected;
+
+    final List<Payee> rawPayees;
+    final List<Account> rawAccounts;
+    final List<Category> rawCategories;
+    final List<MoneyTransaction> rawTransactions;
+    final List<BillDeposit> rawBills;
+    if (useApi) {
+      rawPayees = await apiSession.getPayees(onlyActive: false);
+      rawAccounts = isSpent ? await apiSession.getAccounts() : const [];
+      rawCategories = isSpent ? await apiSession.getCategories(onlyActive: false) : const [];
+      rawTransactions = isSpent
+          ? await apiSession.getTransactions(
+              accountId: widget.accountId, from: windowStart, to: windowEndExclusive, limit: 1000)
+          : const [];
+      rawBills = isSpent ? const [] : await apiSession.getBillDeposits();
+    } else {
+      final repo = widget.repository;
+      rawPayees = repo.getPayees(onlyActive: false);
+      rawAccounts = isSpent ? repo.getAccounts() : const [];
+      rawCategories = isSpent ? repo.getCategories(onlyActive: false) : const [];
+      rawTransactions = isSpent
+          ? repo.getTransactions(
+              accountId: widget.accountId, from: windowStart, to: windowEndExclusive, limit: 1000)
+          : const [];
+      rawBills = isSpent ? const [] : repo.getBillDeposits();
+    }
+    if (!mounted) return;
+
+    final payees = {for (final p in rawPayees) p.id: p};
 
     if (isSpent) {
-      final accounts = {for (final a in repo.getAccounts()) a.id: a};
-      final categoriesById = {for (final c in repo.getCategories(onlyActive: false)) c.id: c};
-      final txns = repo
-          .getTransactions(
-            accountId: widget.accountId,
-            from: windowStart,
-            to: windowEndExclusive,
-            limit: 1000,
-          )
+      final accounts = {for (final a in rawAccounts) a.id: a};
+      final categoriesById = {for (final c in rawCategories) c.id: c};
+      final txns = rawTransactions
           .where((t) =>
               t.transCode == TransCode.withdrawal &&
               !t.isVoid &&
@@ -403,7 +498,7 @@ class _CategorySpendBarChartState extends State<CategorySpendBarChart> {
         },
       );
     } else {
-      final bills = repo.getBillDeposits().where((b) =>
+      final bills = rawBills.where((b) =>
           !b.paused &&
           b.transCode == TransCode.withdrawal &&
           b.categoryId != null &&

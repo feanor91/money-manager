@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/budget_period.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../theme/app_theme.dart';
 import 'bento_card.dart';
 import 'hover_tooltip.dart';
@@ -37,36 +40,120 @@ class BudgetPreviewCard extends StatefulWidget {
   State<BudgetPreviewCard> createState() => _BudgetPreviewCardState();
 }
 
+/// Données brutes d'une fenêtre du budget prévisionnel (étape 4, lecture
+/// seule - pas d'écriture sur cette carte) - voir budget_screen.dart pour
+/// le même principe appliqué à l'écran complet.
+class _PreviewRawData {
+  final List<Category> categories;
+  final List<BudgetEnvelope> envelopes;
+  final Map<int, double> recurringTotals;
+  final Map<int, double> rawSpend;
+  final Map<int, Payee> payees;
+  final List<MoneyTransaction> transactions;
+
+  const _PreviewRawData({
+    required this.categories,
+    required this.envelopes,
+    required this.recurringTotals,
+    required this.rawSpend,
+    required this.payees,
+    required this.transactions,
+  });
+}
+
 class _BudgetPreviewCardState extends State<BudgetPreviewCard> {
   DateTime _cursor = DateTime.now();
 
+  Future<_PreviewRawData>? _apiFuture;
+  ({int? accountId, DateTime windowStart})? _apiFutureKey;
+
+  _PreviewRawData _localData(MmexRepository repo, BudgetWindow window) {
+    return _PreviewRawData(
+      categories: repo.getCategories(onlyActive: false),
+      envelopes: widget.accountId == null
+          ? const <BudgetEnvelope>[]
+          : repo.getBudgetEnvelopes(widget.accountId!),
+      // includeCategorizedTransfersAsExpense: true, same convention as the
+      // full Budget screen (2026-09-05 user request) - keeps this preview's
+      // totals agreeing with it for the same account/category.
+      recurringTotals: repo.categoryMonthlyRecurringTotals(accountId: widget.accountId),
+      rawSpend: repo.categorySpendForPeriod(window.start, window.end,
+          accountId: widget.accountId, includeCategorizedTransfersAsExpense: true),
+      payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
+      transactions: repo.getTransactions(
+          accountId: widget.accountId, from: window.start, to: window.end, limit: 500),
+    );
+  }
+
+  Future<_PreviewRawData> _loadViaApi(ApiSessionProvider session, BudgetWindow window) async {
+    final categories = await session.getCategories(onlyActive: false);
+    final envelopes = widget.accountId == null
+        ? const <BudgetEnvelope>[]
+        : await session.getBudgetEnvelopes(widget.accountId!);
+    final recurringTotals = await session.categoryMonthlyRecurringTotals(accountId: widget.accountId);
+    final rawSpend = await session.categorySpendForPeriod(window.start, window.end,
+        accountId: widget.accountId, includeCategorizedTransfersAsExpense: true);
+    final payees = await session.getPayees(onlyActive: false);
+    final transactions = await session.getTransactions(
+        accountId: widget.accountId, from: window.start, to: window.end, limit: 500);
+    return _PreviewRawData(
+      categories: categories,
+      envelopes: envelopes,
+      recurringTotals: recurringTotals,
+      rawSpend: rawSpend,
+      payees: {for (final p in payees) p.id: p},
+      transactions: transactions,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final repo = widget.repository;
+    final apiSession = context.watch<ApiSessionProvider>();
     final window = budgetWindowContaining(_cursor, widget.forecastDay);
+
+    if (apiSession.useApiForDashboard && apiSession.isConnected) {
+      final key = (accountId: widget.accountId, windowStart: window.start);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, window);
+      }
+      return FutureBuilder<_PreviewRawData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const BentoCard(
+                title: 'Aperçu du budget', child: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return BentoCard(
+                title: 'Aperçu du budget', child: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildCard(context, window, snapshot.data!);
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildCard(context, window, _localData(widget.repository, window));
+  }
+
+  Widget _buildCard(BuildContext context, BudgetWindow window, _PreviewRawData data) {
     final today = DateTime.now();
     final todayDate = DateTime(today.year, today.month, today.day);
     final canGoForward = !window.end.isAfter(todayDate);
 
-    final categories = repo.getCategories(onlyActive: false);
+    final categories = data.categories;
     final categoriesById = {for (final c in categories) c.id: c};
-    final envelopes = widget.accountId == null
-        ? const <BudgetEnvelope>[]
-        : repo.getBudgetEnvelopes(widget.accountId!);
-    final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: widget.accountId);
-    // includeCategorizedTransfersAsExpense: true, same convention as the
-    // full Budget screen (2026-09-05 user request) - keeps this preview's
-    // totals agreeing with it for the same account/category.
-    final rawSpend = repo.categorySpendForPeriod(window.start, window.end,
-        accountId: widget.accountId, includeCategorizedTransfersAsExpense: true);
+    final envelopes = data.envelopes;
+    final recurringTotals = data.recurringTotals;
+    final rawSpend = data.rawSpend;
 
     // Same hover-tooltip principle as the full Budget screen's envelope
     // detail: group the period's transactions by category so a row can
     // show exactly which operations make up its total on hover.
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final payees = data.payees;
     final transactionsByCategory = <int, List<MoneyTransaction>>{};
-    for (final t in repo.getTransactions(
-        accountId: widget.accountId, from: window.start, to: window.end, limit: 500)) {
+    for (final t in data.transactions) {
       if (t.categoryId == null || t.isVoid) continue;
       // A categorized transfer only counts here when this account is its
       // source - matches rawSpend's own includeCategorizedTransfersAsExpense

@@ -206,16 +206,57 @@ le repo pour ne pas la perdre.
   lectures - hors du principe "lectures graduelles, écritures toujours
   locales" du plan. Laissé entièrement local.
 
-Les écrans restants candidats à une vraie migration se réduisent
-essentiellement à **Tableau de bord** (composite, dépend en interne de
-Budget/Récurrentes - la vue enveloppes du Budget supportant maintenant un
-mode API, ses sous-widgets pourraient en profiter ; à passer en revue).
+- ✅ **Tableau de bord - 8/~15 écrans au total maintenant.** Composite de
+  `dashboard_screen.dart` (converti de `StatelessWidget` à
+  `StatefulWidget`, même pattern `_DashboardData`/`_localData`/
+  `_loadViaApi`/`FutureBuilder` que les autres écrans) + 3 widgets
+  indépendants (`BudgetPreviewCard`, `CategorySpendBarChart`,
+  `ForecastChart`), tous les trois confirmés **entièrement en lecture**
+  (aucune écriture) avant d'y toucher, et **utilisés uniquement depuis ce
+  seul écran** (vérifié via une recherche globale avant de changer leurs
+  constructeurs). Une seule bascule partagée ("Tableau de bord via API")
+  plutôt qu'une par widget, puisqu'ils vivent tous sur le même écran.
+  - `BudgetPreviewCard` et `CategorySpendBarChart` migrés - chacun garde
+    son propre état de navigation local (curseur de mois, durée/décalage
+    de fenêtre), donc chacun a son propre `FutureBuilder` interne plutôt
+    qu'une seule requête centralisée dans l'écran parent.
+    `CategorySpendBarChart._showBarDetail` (la feuille de détail au clic
+    sur une barre) est aussi devenue asynchrone pour respecter la
+    bascule.
+  - **`ForecastChart` (947 lignes) reste entièrement local** - pas encore
+    lu ni migré, décision de périmètre volontaire pour cette passe plutôt
+    que de se précipiter sur son calcul de prévision au jour le jour
+    (`dailyNetTotals`/`recurringDailyNet`/`futureDailyNet`), le genre de
+    logique déjà signalée fragile ailleurs dans ce dépôt (voir la note
+    CLAUDE.md sur "Reste à vivre"). C'est la vue par défaut du graphique
+    du tableau de bord (l'utilisateur doit taper l'icône
+    graphique-en-barres pour voir `CategorySpendBarChart` à la place),
+    donc la bascule "Tableau de bord via API" n'affecte pas ce qui
+    s'affiche par défaut tant que ce widget n'est pas repris.
+  3 nouvelles routes en lecture (`getTransactions` - générale, réutilisée
+  par `BudgetPreviewCard`/`CategorySpendBarChart`/l'écran lui-même -,
+  `forecastAccountBalance`, `forecastNegativeDate`).
+
+  655 tests Flutter (5 nouveaux depuis Budget) + 52 tests serveur (4
+  nouveaux), tous verts. `flutter analyze` propre à chaque étape de la
+  restructuration malgré son ampleur (3 fichiers touchés en plus de
+  l'écran). **Non vérifié en direct dans un navigateur cette fois** -
+  contrairement à Budget, où l'utilisateur avait laissé une session déjà
+  connectée à son vrai fichier : après un rechargement de page, l'appli
+  redemande une confirmation d'accès au fichier via une boîte de dialogue
+  native du navigateur, hors de portée de l'outil de navigateur
+  automatisé (même famille de blocage que le sélecteur de fichier
+  initial). Couvert uniquement par les tests automatisés pour l'instant.
+
 Les autres fichiers de `lib/screens/` (sélecteur de fichier, écran de
 verrouillage PIN, diagnostics, aide, `home_shell` - traitement des
 opérations récurrentes en retard au démarrage) ne sont pas des candidats
 naturels : soit ils doivent rester strictement locaux par nature (sélection
 de fichier, sécurité), soit leur logique est presque entièrement une
-écriture système plutôt qu'un affichage de données à basculer.
+écriture système plutôt qu'un affichage de données à basculer. Le
+chantier étape 4 se réduit donc essentiellement à **ForecastChart**
+(dans Tableau de bord, ci-dessus) comme dernier morceau réellement
+candidat.
 
 ## Où on en est aujourd'hui
 

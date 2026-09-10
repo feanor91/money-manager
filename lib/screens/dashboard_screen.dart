@@ -5,8 +5,13 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/budget_period.dart' show nextForecastDay;
+import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/account_balance_card.dart';
@@ -28,14 +33,98 @@ import 'accounts_screen.dart' show openAccountEditor;
 bool get _isAndroidPlatform =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-class DashboardScreen extends StatelessWidget {
+/// Données brutes du tableau de bord (étape 4) - le graphique de
+/// prévision (ForecastChart) reste toujours local, voir
+/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md. [balances] est asOf aujourd'hui
+/// (voir la remarque sur "Solde actuel" plus bas), [forecastBalances]/
+/// [negativeDates] sont la projection au jour de prévision configuré.
+class _DashboardData {
+  final CurrencyFormat? currency;
+  final Map<int, double> balances;
+  final Map<int, double> forecastBalances;
+  final Map<int, DateTime?> negativeDates;
+  final Map<int, Category> categories;
+  final List<MoneyTransaction> recentTx;
+  final Map<int, Payee> payees;
+
+  const _DashboardData({
+    required this.currency,
+    required this.balances,
+    required this.forecastBalances,
+    required this.negativeDates,
+    required this.categories,
+    required this.recentTx,
+    required this.payees,
+  });
+}
+
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  Future<_DashboardData>? _apiFuture;
+  ({int selectedAccountId, String accountIdsKey})? _apiFutureKey;
+
+  _DashboardData _localData(MmexRepository repo, List<Account> accounts, int selectedAccountId,
+      DateTime today, DateTime forecastDate) {
+    return _DashboardData(
+      currency: repo.getBaseCurrency(),
+      // asOf: today, not the plain all-transactions total - the latter
+      // includes any transaction already recorded with a future date (e.g.
+      // a bill paid ahead of its due date), which made "Solde actuel" show
+      // an account as already overdrawn before that transaction's own date
+      // (found 2026-08-18, same bug as ForecastChart's "today" point - see
+      // its doc comment). Those entries still show up in full, on their
+      // own date, in the forecast chart/"Prév." figures below.
+      balances: {for (final a in accounts) a.id: repo.accountBalance(a.id, asOf: today)},
+      forecastBalances: {
+        for (final a in accounts) a.id: repo.forecastAccountBalance(a.id, forecastDate)
+      },
+      negativeDates: {for (final a in accounts) a.id: repo.forecastNegativeDate(a.id)},
+      categories: {for (final c in repo.getCategories()) c.id: c},
+      recentTx: repo.getTransactions(accountId: selectedAccountId, limit: 6),
+      payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
+    );
+  }
+
+  /// Lecture seule - "Nouvelle transaction", pointer une opération,
+  /// l'analyseur de dépenses et "Poser une question" continuent de passer
+  /// par le dépôt local même en mode API, voir chaque `repo.xxx` dans
+  /// [_buildScaffold].
+  Future<_DashboardData> _loadViaApi(ApiSessionProvider session, List<Account> accounts,
+      int selectedAccountId, DateTime today, DateTime forecastDate) async {
+    final currency = await session.getBaseCurrency();
+    final balances = <int, double>{};
+    final forecastBalances = <int, double>{};
+    final negativeDates = <int, DateTime?>{};
+    for (final a in accounts) {
+      balances[a.id] = await session.accountBalance(a.id, asOf: today);
+      forecastBalances[a.id] = await session.forecastAccountBalance(a.id, forecastDate);
+      negativeDates[a.id] = await session.forecastNegativeDate(a.id);
+    }
+    final categories = await session.getCategories();
+    final recentTx = await session.getTransactions(accountId: selectedAccountId, limit: 6);
+    final payees = await session.getPayees(onlyActive: false);
+    return _DashboardData(
+      currency: currency,
+      balances: balances,
+      forecastBalances: forecastBalances,
+      negativeDates: negativeDates,
+      categories: {for (final c in categories) c.id: c},
+      recentTx: recentTx,
+      payees: {for (final p in payees) p.id: p},
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final currency = repo.getBaseCurrency();
 
     final allAccountsById = {for (final a in repo.getAccounts()) a.id: a};
     final unorderedAccounts = repo
@@ -46,16 +135,6 @@ class DashboardScreen extends StatelessWidget {
         dbProvider.sortByAccountOrder(unorderedAccounts, (a) => a.id);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    // asOf: today, not the plain all-transactions total - the latter
-    // includes any transaction already recorded with a future date (e.g. a
-    // bill paid ahead of its due date), which made "Solde actuel" show an
-    // account as already overdrawn before that transaction's own date
-    // (found 2026-08-18, same bug as ForecastChart's "today" point - see
-    // its doc comment). Those entries still show up in full, on their own
-    // date, in the forecast chart/"Prév." figures below.
-    final balances = {
-      for (final a in accounts) a.id: repo.accountBalance(a.id, asOf: today)
-    };
 
     if (accounts.isEmpty) {
       final isBrandNew = allAccountsById.isEmpty;
@@ -112,22 +191,66 @@ class DashboardScreen extends StatelessWidget {
         accounts.any((a) => a.id == dbProvider.selectedAccountId)
             ? dbProvider.selectedAccountId!
             : accounts.first.id;
-    final scopedBalance = balances[selectedAccountId] ?? 0;
 
     final forecastDate = nextForecastDay(now, dbProvider.forecastDay);
     final forecastDateLabel =
         'Prév. au ${DateFormat('d MMM', 'fr_FR').format(forecastDate)}';
-    final forecastBalances = {
-      for (final a in accounts)
-        a.id: repo.forecastAccountBalance(a.id, forecastDate)
-    };
-    final negativeDates = {
-      for (final a in accounts) a.id: repo.forecastNegativeDate(a.id)
-    };
-    final categories = {for (final c in repo.getCategories()) c.id: c};
-    final recentTx =
-        repo.getTransactions(accountId: selectedAccountId, limit: 6);
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+
+    if (apiSession.useApiForDashboard && apiSession.isConnected) {
+      final key = (
+        selectedAccountId: selectedAccountId,
+        accountIdsKey: accounts.map((a) => a.id).join(','),
+      );
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, accounts, selectedAccountId, today, forecastDate);
+      }
+      return FutureBuilder<_DashboardData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildScaffold(context, dbProvider, repo, accounts, allAccountsById,
+              selectedAccountId, forecastDateLabel, snapshot.data!);
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildScaffold(
+      context,
+      dbProvider,
+      repo,
+      accounts,
+      allAccountsById,
+      selectedAccountId,
+      forecastDateLabel,
+      _localData(repo, accounts, selectedAccountId, today, forecastDate),
+    );
+  }
+
+  Widget _buildScaffold(
+    BuildContext context,
+    DatabaseProvider dbProvider,
+    MmexRepository repo,
+    List<Account> accounts,
+    Map<int, Account> allAccountsById,
+    int selectedAccountId,
+    String forecastDateLabel,
+    _DashboardData data,
+  ) {
+    final currency = data.currency;
+    final balances = data.balances;
+    final forecastBalances = data.forecastBalances;
+    final negativeDates = data.negativeDates;
+    final categories = data.categories;
+    final recentTx = data.recentTx;
+    final payees = data.payees;
+    final scopedBalance = balances[selectedAccountId] ?? 0;
 
     return Scaffold(
       floatingActionButton: FloatingActionButton(

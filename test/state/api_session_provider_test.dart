@@ -115,6 +115,13 @@ void main() {
           throwsStateError);
       expect(() => provider.expectedIncomeForBudget(1), throwsStateError);
     });
+
+    test('the Dashboard accessors throw a StateError when not connected', () {
+      final provider = ApiSessionProvider();
+      expect(() => provider.getTransactions(), throwsStateError);
+      expect(() => provider.forecastAccountBalance(1, DateTime(2026, 12, 31)), throwsStateError);
+      expect(() => provider.forecastNegativeDate(1), throwsStateError);
+    });
   });
 
   group('per-screen toggles are independent', () {
@@ -148,11 +155,13 @@ void main() {
       provider.useApiForPayees = true;
       provider.useApiForCategories = true;
       provider.useApiForBudget = true;
+      provider.useApiForDashboard = true;
       await provider.logout();
       expect(provider.useApiForAccounts, isFalse);
       expect(provider.useApiForPayees, isFalse);
       expect(provider.useApiForCategories, isFalse);
       expect(provider.useApiForBudget, isFalse);
+      expect(provider.useApiForDashboard, isFalse);
     });
   });
 }

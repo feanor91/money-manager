@@ -241,6 +241,36 @@ class ApiClient {
     return ((json as Map<String, dynamic>)['expected'] as num).toDouble();
   }
 
+  // Tableau de bord (étape 4) - le graphique de prévision (ForecastChart)
+  // reste local pour l'instant, voir dashboard_screen.dart.
+  Future<List<MoneyTransaction>> getTransactions({
+    int? accountId,
+    DateTime? from,
+    DateTime? to,
+    int limit = 200,
+  }) async {
+    final json = await _rpc('getTransactions', body: {
+      if (accountId != null) 'accountId': accountId,
+      if (from != null) 'from': from.toIso8601String(),
+      if (to != null) 'to': to.toIso8601String(),
+      'limit': limit,
+    });
+    final list = json as List;
+    return [for (final row in list) MoneyTransaction.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<double> forecastAccountBalance(int accountId, DateTime targetDate) async {
+    final json = await _rpc('forecastAccountBalance',
+        body: {'accountId': accountId, 'targetDate': targetDate.toIso8601String()});
+    return ((json as Map<String, dynamic>)['balance'] as num).toDouble();
+  }
+
+  Future<DateTime?> forecastNegativeDate(int accountId, {int horizonDays = 365}) async {
+    final json = await _rpc('forecastNegativeDate',
+        body: {'accountId': accountId, 'horizonDays': horizonDays});
+    return json == null ? null : DateTime.parse(json as String);
+  }
+
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {
     final token = _token;
     if (token == null) {

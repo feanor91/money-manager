@@ -571,4 +571,81 @@ void main() {
       expect(await client.expectedIncomeForBudget(1), 1500.0);
     });
   });
+
+  group('Tableau de bord', () {
+    test('getTransactions parses the returned transactions', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          expect(request.url.path, '/rpc/getTransactions');
+          return http.Response(
+              jsonEncode([
+                {
+                  'id': 1,
+                  'accountId': 1,
+                  'toAccountId': null,
+                  'payeeId': 1,
+                  'transCode': 'withdrawal',
+                  'amount': 42.5,
+                  'toAmount': 42.5,
+                  'status': '',
+                  'categoryId': null,
+                  'date': DateTime(2026, 3, 15).toIso8601String(),
+                  'notes': null,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final txns = await client.getTransactions(accountId: 1, limit: 6);
+      expect(txns.single.amount, 42.5);
+    });
+
+    test('forecastAccountBalance returns the projected balance', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'balance': 987.65}), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.forecastAccountBalance(1, DateTime(2026, 12, 31)), 987.65);
+    });
+
+    test('forecastNegativeDate parses a returned date', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode(DateTime(2026, 10, 3).toIso8601String()), 200);
+        }),
+      );
+      await client.login('1234');
+      final date = await client.forecastNegativeDate(1);
+      expect(date, DateTime(2026, 10, 3));
+    });
+
+    test('forecastNegativeDate returns null when none is returned', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode(null), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.forecastNegativeDate(1), isNull);
+    });
+  });
 }

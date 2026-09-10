@@ -419,6 +419,50 @@ void main() {
     });
   });
 
+  group('POST /rpc/getTransactions', () {
+    test('returns the transaction from setUp for its account', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/getTransactions', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final transactions = jsonDecode(await response.readAsString()) as List;
+      expect(transactions, hasLength(1));
+      expect(transactions.single['amount'], 42.5);
+    });
+
+    test('respects the limit', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/getTransactions', token: token, body: {'accountId': accountId, 'limit': 0}));
+      expect(response.statusCode, 200);
+      final transactions = jsonDecode(await response.readAsString()) as List;
+      expect(transactions, isEmpty);
+    });
+  });
+
+  group('POST /rpc/forecastAccountBalance', () {
+    test('returns a forecast balance for a future date', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/forecastAccountBalance', token: token, body: {
+        'accountId': accountId,
+        'targetDate': '2026-12-31T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['balance'], isNotNull);
+    });
+  });
+
+  group('POST /rpc/forecastNegativeDate', () {
+    test('returns null for an account with a comfortably positive balance', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/forecastNegativeDate', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      expect(await response.readAsString(), 'null');
+    });
+  });
+
   group('POST /auth/logout', () {
     test('revokes the token used to call it', () async {
       final token = tokenStore.issue();
