@@ -18,7 +18,10 @@ class ApiDebugScreen extends StatefulWidget {
 }
 
 class _ApiDebugScreenState extends State<ApiDebugScreen> {
-  final _urlController = TextEditingController(text: 'http://localhost:8899');
+  // Adresse locale (réseau domestique) d'Excelsior par défaut - HTTPS sur
+  // bteuile.ddns.net:8444 ne marche que depuis l'extérieur (certificat
+  // valable pour ce nom, pas pour l'IP - voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
+  final _urlController = TextEditingController(text: 'http://192.168.1.44:8899');
   final _pinController = TextEditingController();
   List<Account>? _accounts;
   String? _loadError;
