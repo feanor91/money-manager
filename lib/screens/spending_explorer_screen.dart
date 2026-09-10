@@ -13,9 +13,33 @@ import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/transaction_tile.dart';
+
+/// Bundle des options de filtre (pas des résultats - voir [_applyFilters])
+/// nécessaires pour dessiner l'écran, qu'elles viennent du fichier local ou
+/// du serveur API - étape 4 du chantier client/serveur (voir
+/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md). Cet écran est entièrement en
+/// lecture (aucune écriture nulle part), donc - contrairement à
+/// Comptes/Tiers/Catégories - la bascule API peut couvrir tout l'écran
+/// sans nuance particulière.
+class _FilterOptions {
+  final CurrencyFormat? currency;
+  final List<Category> categories;
+  final List<Payee> payees;
+  final List<Account> accounts;
+  final ({int min, int max})? yearRange;
+
+  _FilterOptions({
+    required this.currency,
+    required this.categories,
+    required this.payees,
+    required this.accounts,
+    required this.yearRange,
+  });
+}
 
 /// Cross-account spending explorer: four cascading multi-select filters
 /// (Année → Catégorie → Sous-catégorie → Tiers, each descending level
@@ -37,6 +61,8 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
   final Set<int> _selectedPayeeIds = {};
 
   List<MoneyTransaction>? _results;
+  Future<_FilterOptions>? _apiOptionsFuture;
+  bool _applyingFilters = false;
 
   List<Category> _subCategoryOptions(List<Category> allCategories) {
     final options = allCategories
@@ -153,7 +179,15 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
   /// nothing"; a straight per-parent auto-rollup regardless of sub-category
   /// picks was rejected earlier the same day for silently including
   /// siblings the user hadn't chosen).
-  void _applyFilters(MmexRepository repo, List<Category> allCategories) {
+  /// [repo] est toujours fourni (pour le mode local) ; [apiSession] non-null
+  /// seulement quand la bascule API est active pour cet écran - voir
+  /// [_FilterOptions] : lecture seule, donc pas de nuance "écritures encore
+  /// locales" ici contrairement à Comptes/Tiers/Catégories.
+  Future<void> _applyFilters(
+    MmexRepository repo,
+    ApiSessionProvider? apiSession,
+    List<Category> allCategories,
+  ) async {
     final effectiveCategoryIds = <int>{};
     for (final catId in _selectedCategoryIds) {
       final childIds = allCategories
@@ -172,15 +206,23 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     // (possible: with no category checked, every sub-category is offered).
     effectiveCategoryIds.addAll(_selectedSubCategoryIds);
 
+    final years = _selectedYears.isEmpty ? null : _selectedYears.toList();
+    final categoryIds =
+        effectiveCategoryIds.isEmpty ? null : effectiveCategoryIds.toList();
+    final payeeIds = _selectedPayeeIds.isEmpty ? null : _selectedPayeeIds.toList();
+    final accountIds =
+        _selectedAccountIds.isEmpty ? null : _selectedAccountIds.toList();
+
+    setState(() => _applyingFilters = true);
+    final results = apiSession != null
+        ? await apiSession.getTransactionsFiltered(
+            years: years, categoryIds: categoryIds, payeeIds: payeeIds, accountIds: accountIds)
+        : repo.getTransactionsFiltered(
+            years: years, categoryIds: categoryIds, payeeIds: payeeIds, accountIds: accountIds);
+    if (!mounted) return;
     setState(() {
-      _results = repo.getTransactionsFiltered(
-        years: _selectedYears.isEmpty ? null : _selectedYears.toList(),
-        categoryIds:
-            effectiveCategoryIds.isEmpty ? null : effectiveCategoryIds.toList(),
-        payeeIds: _selectedPayeeIds.isEmpty ? null : _selectedPayeeIds.toList(),
-        accountIds:
-            _selectedAccountIds.isEmpty ? null : _selectedAccountIds.toList(),
-      );
+      _results = results;
+      _applyingFilters = false;
     });
   }
 
@@ -235,20 +277,75 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
     }
   }
 
+  _FilterOptions _localOptions(MmexRepository repo) {
+    return _FilterOptions(
+      currency: repo.getBaseCurrency(),
+      categories: repo.getCategories(onlyActive: false),
+      payees: repo.getPayees(onlyActive: false),
+      accounts: repo.getAccounts(),
+      yearRange: repo.transactionYearRangeAll(),
+    );
+  }
+
+  Future<_FilterOptions> _loadOptionsViaApi(ApiSessionProvider session) async {
+    final currency = await session.getBaseCurrency();
+    final categories = await session.getCategories(onlyActive: false);
+    final payees = await session.getPayees(onlyActive: false);
+    final accounts = await session.getAccounts();
+    final yearRange = await session.transactionYearRangeAll();
+    return _FilterOptions(
+      currency: currency,
+      categories: categories,
+      payees: payees,
+      accounts: accounts,
+      yearRange: yearRange,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final currency = repo.getBaseCurrency();
-    final allCategories = repo.getCategories(onlyActive: false);
-    final allPayees = repo.getPayees(onlyActive: false);
-    final accounts = repo.getAccounts()
+
+    if (apiSession.useApiForSpendingExplorer) {
+      _apiOptionsFuture ??= _loadOptionsViaApi(apiSession);
+      return Scaffold(
+        appBar: AppBar(title: const Text('Explorateur de dépenses (via API)')),
+        body: FutureBuilder<_FilterOptions>(
+          future: _apiOptionsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Erreur : ${snapshot.error}'));
+            }
+            return _buildBody(context, repo, apiSession, snapshot.data!);
+          },
+        ),
+      );
+    }
+
+    _apiOptionsFuture = null;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Explorateur de dépenses')),
+      body: _buildBody(context, repo, null, _localOptions(repo)),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, MmexRepository repo, ApiSessionProvider? apiSession,
+      _FilterOptions options) {
+    final currency = options.currency;
+    final allCategories = options.categories;
+    final allPayees = options.payees;
+    final accounts = [...options.accounts]
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     final accountsById = {for (final a in accounts) a.id: a};
     final categoriesById = {for (final c in allCategories) c.id: c};
     final payeesById = {for (final p in allPayees) p.id: p};
 
-    final yearRange = repo.transactionYearRangeAll();
+    final yearRange = options.yearRange;
     final years = yearRange == null
         ? <int>[]
         : [for (var y = yearRange.max; y >= yearRange.min; y--) y];
@@ -260,12 +357,10 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
 
     final results = _results;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Explorateur de dépenses')),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-            16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
-        children: [
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+          16, 16, 16, 16 + MediaQuery.of(context).padding.bottom),
+      children: [
           _filterSection(
             title: 'Compte',
             icon: Icons.account_balance_outlined,
@@ -369,9 +464,16 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             children: [
               Expanded(
                 child: FilledButton.icon(
-                  icon: const Icon(Icons.filter_alt_outlined),
+                  icon: _applyingFilters
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.filter_alt_outlined),
                   label: const Text('Appliquer les filtres'),
-                  onPressed: () => _applyFilters(repo, allCategories),
+                  onPressed: _applyingFilters
+                      ? null
+                      : () => _applyFilters(repo, apiSession, allCategories),
                 ),
               ),
               const SizedBox(width: 8),
@@ -449,8 +551,7 @@ class _SpendingExplorerScreenState extends State<SpendingExplorerScreen> {
             ],
           ],
         ],
-      ),
-    );
+      );
   }
 
   Widget _filterSection({

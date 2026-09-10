@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'transaction.g.dart';
+
+@JsonEnum()
 enum TransCode { withdrawal, deposit, transfer }
 
 TransCode transCodeFromString(String code) {
@@ -22,6 +27,7 @@ String transCodeToString(TransCode code) {
   }
 }
 
+@JsonSerializable()
 class MoneyTransaction {
   final int id;
   final int accountId;
@@ -126,13 +132,21 @@ class MoneyTransaction {
       notes: row['NOTES'] as String?,
     );
   }
+
+  factory MoneyTransaction.fromJson(Map<String, dynamic> json) => _$MoneyTransactionFromJson(json);
+  Map<String, dynamic> toJson() => _$MoneyTransactionToJson(this);
 }
 
 /// A transaction paired with the running account balance immediately after
 /// it - see [MmexRepository.getTransactionsWithRunningBalance].
+@JsonSerializable()
 class TransactionWithBalance {
   final MoneyTransaction transaction;
   final double balanceAfter;
 
   const TransactionWithBalance(this.transaction, this.balanceAfter);
+
+  factory TransactionWithBalance.fromJson(Map<String, dynamic> json) =>
+      _$TransactionWithBalanceFromJson(json);
+  Map<String, dynamic> toJson() => _$TransactionWithBalanceToJson(this);
 }

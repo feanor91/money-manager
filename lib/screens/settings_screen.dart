@@ -356,6 +356,15 @@ class SettingsScreen extends StatelessWidget {
                     onChanged:
                         apiSession.isConnected ? (v) => apiSession.useApiForCategories = v : null,
                   ),
+                  SwitchListTile(
+                    title: const Text('Explorateur de dépenses via API (chantier)'),
+                    subtitle: const Text(
+                        "Tout l'écran (lecture seule) passe par le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForSpendingExplorer,
+                    onChanged: apiSession.isConnected
+                        ? (v) => apiSession.useApiForSpendingExplorer = v
+                        : null,
+                  ),
                 ],
               ),
             );

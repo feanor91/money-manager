@@ -4,6 +4,7 @@ import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 
 import '../services/api/api_client.dart';
 
@@ -58,6 +59,9 @@ class ApiSessionProvider extends ChangeNotifier {
   bool get useApiForCategories => _useApiFor('categories');
   set useApiForCategories(bool value) => _setUseApiFor('categories', value);
 
+  bool get useApiForSpendingExplorer => _useApiFor('spendingExplorer');
+  set useApiForSpendingExplorer(bool value) => _setUseApiFor('spendingExplorer', value);
+
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
     _error = null;
@@ -97,6 +101,21 @@ class ApiSessionProvider extends ChangeNotifier {
       _requireClient().getCategories(onlyActive: onlyActive);
 
   Future<CategoryUsage> categoryUsage(int categoryId) => _requireClient().categoryUsage(categoryId);
+
+  Future<List<MoneyTransaction>> getTransactionsFiltered({
+    List<int>? years,
+    List<int>? categoryIds,
+    List<int>? payeeIds,
+    List<int>? accountIds,
+  }) =>
+      _requireClient().getTransactionsFiltered(
+        years: years,
+        categoryIds: categoryIds,
+        payeeIds: payeeIds,
+        accountIds: accountIds,
+      );
+
+  Future<({int min, int max})?> transactionYearRangeAll() => _requireClient().transactionYearRangeAll();
 
   ApiClient _requireClient() {
     final client = _client;

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:money_manager/services/api/api_client.dart';
+import 'package:money_manager_core/models/transaction.dart';
 
 /// Vérifie ApiClient contre un client HTTP simulé (MockClient de
 /// package:http/testing.dart), sans réseau réel - voir
@@ -215,6 +216,73 @@ void main() {
       final usage = await client.categoryUsage(9);
       expect(usage.transactionCount, 5);
       expect(usage.canDelete, isFalse);
+    });
+  });
+
+  group('getTransactionsFiltered / transactionYearRangeAll', () {
+    test('sends only the non-null filters and parses the transactions', () async {
+      Map<String, dynamic>? sentBody;
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          sentBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+              jsonEncode([
+                {
+                  'id': 1,
+                  'accountId': 1,
+                  'toAccountId': null,
+                  'payeeId': 1,
+                  'transCode': 'withdrawal',
+                  'amount': 42.5,
+                  'toAmount': 42.5,
+                  'status': '',
+                  'categoryId': 9,
+                  'date': DateTime(2026, 3, 15).toIso8601String(),
+                  'notes': null,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final results = await client.getTransactionsFiltered(years: [2026]);
+      expect(sentBody, {'years': [2026]});
+      expect(results.single.amount, 42.5);
+      expect(results.single.transCode, TransCode.withdrawal);
+    });
+
+    test('returns the year range', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'min': 2020, 'max': 2026}), 200);
+        }),
+      );
+      await client.login('1234');
+      final range = await client.transactionYearRangeAll();
+      expect(range?.min, 2020);
+      expect(range?.max, 2026);
+    });
+
+    test('returns null when there are no transactions at all', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response('null', 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.transactionYearRangeAll(), isNull);
     });
   });
 }

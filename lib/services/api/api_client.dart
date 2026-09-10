@@ -5,6 +5,7 @@ import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
+import 'package:money_manager_core/models/transaction.dart';
 
 /// Client HTTP pour le serveur API (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
 /// Couvre les routes réellement exposées par le serveur à ce stade de
@@ -97,6 +98,29 @@ class ApiClient {
   Future<CategoryUsage> categoryUsage(int categoryId) async {
     final json = await _rpc('categoryUsage', body: {'categoryId': categoryId});
     return CategoryUsage.fromJson(json as Map<String, dynamic>);
+  }
+
+  Future<List<MoneyTransaction>> getTransactionsFiltered({
+    List<int>? years,
+    List<int>? categoryIds,
+    List<int>? payeeIds,
+    List<int>? accountIds,
+  }) async {
+    final json = await _rpc('getTransactionsFiltered', body: {
+      if (years != null) 'years': years,
+      if (categoryIds != null) 'categoryIds': categoryIds,
+      if (payeeIds != null) 'payeeIds': payeeIds,
+      if (accountIds != null) 'accountIds': accountIds,
+    });
+    final list = json as List;
+    return [for (final row in list) MoneyTransaction.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<({int min, int max})?> transactionYearRangeAll() async {
+    final json = await _rpc('transactionYearRangeAll');
+    if (json == null) return null;
+    final map = json as Map<String, dynamic>;
+    return (min: map['min'] as int, max: map['max'] as int);
   }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {

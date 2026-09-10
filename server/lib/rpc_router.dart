@@ -103,6 +103,21 @@ Router buildRouter({
     final usage = repo.categoryUsage(body['categoryId'] as int);
     return Response.ok(jsonEncode(usage.toJson()));
   });
+  rpcRouter.post('/getTransactionsFiltered', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    List<int>? intList(String key) => (body[key] as List?)?.cast<int>();
+    final transactions = repo.getTransactionsFiltered(
+      years: intList('years'),
+      categoryIds: intList('categoryIds'),
+      payeeIds: intList('payeeIds'),
+      accountIds: intList('accountIds'),
+    );
+    return Response.ok(jsonEncode([for (final t in transactions) t.toJson()]));
+  });
+  rpcRouter.post('/transactionYearRangeAll', (Request request) async {
+    final range = repo.transactionYearRangeAll();
+    return Response.ok(jsonEncode(range == null ? null : {'min': range.min, 'max': range.max}));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));

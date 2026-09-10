@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager_server/auth/pin_auth.dart';
 import 'package:money_manager_server/auth/token_store.dart';
 import 'package:money_manager_server/rpc_router.dart';
@@ -21,6 +22,14 @@ void main() {
         name: 'Compte Courant', type: 'Checking', initialBalance: 1000, currencyId: 2);
     payeeId = repo.insertPayee(name: 'Carrefour');
     categoryId = repo.insertCategory(name: 'Catégorie de test RPC'); // nom garanti absent du schéma vierge seedé
+    repo.insertTransaction(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 42.5,
+      date: DateTime(2026, 3, 15),
+      categoryId: categoryId,
+    );
     tokenStore = TokenStore();
     router = buildRouter(
       repo: repo,
@@ -90,13 +99,13 @@ void main() {
   });
 
   group('POST /rpc/accountBalance', () {
-    test('returns the real balance for a valid token', () async {
+    test('returns the real balance (initial balance minus the withdrawal from setUp)', () async {
       final token = tokenStore.issue();
       final response = await router(
           post('/rpc/accountBalance', token: token, body: {'accountId': accountId}));
       expect(response.statusCode, 200);
       final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
-      expect(json['balance'], 1000);
+      expect(json['balance'], 1000 - 42.5);
     });
 
     test('accepts an explicit asOf date', () async {
@@ -119,13 +128,13 @@ void main() {
   });
 
   group('POST /rpc/payeeUsageCount', () {
-    test('returns 0 for an unused payee', () async {
+    test('returns 1 for the payee referenced by the transaction from setUp', () async {
       final token = tokenStore.issue();
       final response =
           await router(post('/rpc/payeeUsageCount', token: token, body: {'payeeId': payeeId}));
       expect(response.statusCode, 200);
       final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
-      expect(json['count'], 0);
+      expect(json['count'], 1);
     });
   });
 
@@ -140,14 +149,55 @@ void main() {
   });
 
   group('POST /rpc/categoryUsage', () {
-    test('returns zero counts for an unused category', () async {
+    test('reflects the transaction from setUp referencing this category', () async {
       final token = tokenStore.issue();
       final response = await router(
           post('/rpc/categoryUsage', token: token, body: {'categoryId': categoryId}));
       expect(response.statusCode, 200);
       final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
-      expect(json['transactionCount'], 0);
+      expect(json['transactionCount'], 1);
       expect(json['childCategoryCount'], 0);
+    });
+  });
+
+  group('POST /rpc/getTransactionsFiltered', () {
+    test('returns matching transactions with no filters', () async {
+      final token = tokenStore.issue();
+      final response =
+          await router(post('/rpc/getTransactionsFiltered', token: token, body: const {}));
+      expect(response.statusCode, 200);
+      final transactions = jsonDecode(await response.readAsString()) as List;
+      expect(transactions, hasLength(1));
+      expect(transactions.single['amount'], 42.5);
+    });
+
+    test('an unmatched year filter returns nothing', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getTransactionsFiltered',
+          token: token, body: {'years': [2099]}));
+      expect(response.statusCode, 200);
+      final transactions = jsonDecode(await response.readAsString()) as List;
+      expect(transactions, isEmpty);
+    });
+
+    test('a matching category filter returns the transaction', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getTransactionsFiltered',
+          token: token, body: {'categoryIds': [categoryId]}));
+      expect(response.statusCode, 200);
+      final transactions = jsonDecode(await response.readAsString()) as List;
+      expect(transactions, hasLength(1));
+    });
+  });
+
+  group('POST /rpc/transactionYearRangeAll', () {
+    test('returns the min/max year across all transactions', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/transactionYearRangeAll', token: token));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['min'], 2026);
+      expect(json['max'], 2026);
     });
   });
 
