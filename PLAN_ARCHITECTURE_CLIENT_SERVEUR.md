@@ -54,15 +54,23 @@ le repo pour ne pas la perdre.
   File Station (corrigé - le script se rend lui-même exécutable),
   déclencheur "au démarrage" absent de cette install DSM (repli sur
   tâche planifiée + répétition horaire, avant que l'utilisateur trouve
-  finalement l'option), mauvais dossier (`web/mmex-server` - **risque
-  réel d'exposer une copie de la vraie base sur internet**, sous le
-  dossier que nginx sert publiquement - corrigé), mauvais nom d'hôte de
-  proxy inversé (`mmex.bteuile.synology.me`, un domaine non utilisé -
-  le bon est `bteuile.ddns.net`, géré par nginx directement sur le port
-  8443, donc une nouvelle règle DSM sur un port différent - 8444 - ne
-  rentre pas en conflit). **Vérifié en conditions réelles** : requête
-  HTTPS publique depuis internet vers `bteuile.ddns.net:8444/auth/
-  login`, réponse JSON correcte du vrai serveur tournant sur Excelsior.
+  finalement l'option), mauvais nom d'hôte de proxy inversé
+  (`mmex.bteuile.synology.me`, un domaine non utilisé - le bon est
+  `bteuile.ddns.net`, géré par nginx directement sur le port 8443, donc
+  une nouvelle règle DSM sur un port différent - 8444 - ne rentre pas en
+  conflit). **Vérifié en conditions réelles, avec les vraies données** :
+  requête HTTPS publique depuis internet vers `bteuile.ddns.net:8444`,
+  cycle complet login (code PIN réel) -> jeton -> `/rpc/getAccounts` ->
+  les 7 vrais comptes de l'utilisateur reçus correctement.
+
+  **Point resté ouvert, accepté pour l'instant par l'utilisateur** : une
+  copie de la vraie base (`MesComptes.mmb`) est actuellement placée sous
+  `/volume1/web/mmex-server/BDD/` - le dossier que nginx sert
+  publiquement (même racine que `web/mmex`, le site déployé). Un test a
+  confirmé que ce fichier précis n'est pas servi à cette URL (404), mais
+  ça reste un dossier à risque par construction, pas une garantie
+  durable - déplacer ce dossier hors de `web/` (ex. `/volume1/mmex-server/`)
+  reste recommandé, à faire quand l'utilisateur aura un moment.
 
 ### Prochaine décision
 
