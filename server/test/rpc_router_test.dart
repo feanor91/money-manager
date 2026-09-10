@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 import 'package:money_manager_server/auth/pin_auth.dart';
 import 'package:money_manager_server/auth/token_store.dart';
@@ -15,6 +16,7 @@ void main() {
   late int accountId;
   late int payeeId;
   late int categoryId;
+  late int billId;
 
   setUp(() async {
     final repo = await openBlankTestRepo();
@@ -29,6 +31,15 @@ void main() {
       amount: 42.5,
       date: DateTime(2026, 3, 15),
       categoryId: categoryId,
+    );
+    billId = repo.insertBillDeposit(
+      accountId: accountId,
+      payeeId: payeeId,
+      transCode: TransCode.withdrawal,
+      amount: 15,
+      nextOccurrence: DateTime(2026, 4, 1),
+      period: RecurrencePeriod.monthly,
+      autoExecute: RecurrenceAutoExecute.manual,
     );
     tokenStore = TokenStore();
     router = buildRouter(
@@ -128,13 +139,13 @@ void main() {
   });
 
   group('POST /rpc/payeeUsageCount', () {
-    test('returns 1 for the payee referenced by the transaction from setUp', () async {
+    test('returns 2 for the payee referenced by the transaction and bill from setUp', () async {
       final token = tokenStore.issue();
       final response =
           await router(post('/rpc/payeeUsageCount', token: token, body: {'payeeId': payeeId}));
       expect(response.statusCode, 200);
       final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
-      expect(json['count'], 1);
+      expect(json['count'], 2);
     });
   });
 
@@ -198,6 +209,48 @@ void main() {
       final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
       expect(json['min'], 2026);
       expect(json['max'], 2026);
+    });
+  });
+
+  group('POST /rpc/getBillDeposits', () {
+    test('returns the real bill deposits for a valid token', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getBillDeposits', token: token));
+      expect(response.statusCode, 200);
+      final bills = jsonDecode(await response.readAsString()) as List;
+      expect(bills, hasLength(1));
+      expect(bills.single['amount'], 15);
+      expect(bills.single['period'], 'monthly');
+    });
+  });
+
+  group('POST /rpc/billOccurrenceTotals', () {
+    test('returns an empty map when no bill has a limited duration', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/billOccurrenceTotals', token: token));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json, isEmpty);
+    });
+  });
+
+  group('POST /rpc/getBillAnnualIncrease', () {
+    test('returns null when none is configured', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/getBillAnnualIncrease', token: token, body: {'billId': billId}));
+      expect(response.statusCode, 200);
+      expect(await response.readAsString(), 'null');
+    });
+  });
+
+  group('POST /rpc/suggestedAnnualIncrease', () {
+    test('returns null with fewer than 2 matching transactions on record', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/suggestedAnnualIncrease', token: token, body: {'billId': billId}));
+      expect(response.statusCode, 200);
+      expect(await response.readAsString(), 'null');
     });
   });
 

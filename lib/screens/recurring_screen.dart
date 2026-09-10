@@ -3,12 +3,14 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
 import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/date_picker.dart';
@@ -17,6 +19,30 @@ import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+
+/// Bundle des données nécessaires pour dessiner la liste, qu'elles viennent
+/// du fichier local ou du serveur API - étape 4 du chantier client/serveur
+/// (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md). L'éditeur (ajouter/modifier/
+/// dupliquer/enregistrer une occurrence, augmentation annuelle...) continue
+/// de passer par [DatabaseProvider.repository] directement, indépendamment
+/// de cette bascule - voir [_RecurringScreenState._openEditor].
+class _RecurringData {
+  final CurrencyFormat? currency;
+  final List<BillDeposit> bills;
+  final Map<int, Account> accounts;
+  final Map<int, Category> categories;
+  final Map<int, Payee> payees;
+  final Map<int, int> occurrenceTotals;
+
+  _RecurringData({
+    required this.currency,
+    required this.bills,
+    required this.accounts,
+    required this.categories,
+    required this.payees,
+    required this.occurrenceTotals,
+  });
+}
 
 /// Adds [months] calendar months to [date], clamping to the destination
 /// month's real last day - same small helper every screen that needs it
@@ -42,20 +68,129 @@ class RecurringScreen extends StatefulWidget {
 class _RecurringScreenState extends State<RecurringScreen> {
   int? _accountFilter;
   String _searchQuery = '';
+  Future<_RecurringData>? _apiFuture;
+
+  _RecurringData _localData(MmexRepository repo) {
+    return _RecurringData(
+      currency: repo.getBaseCurrency(),
+      bills: repo.getBillDeposits(),
+      accounts: {for (final a in repo.getAccounts()) a.id: a},
+      categories: {for (final c in repo.getCategories()) c.id: c},
+      payees: {for (final p in repo.getPayees(onlyActive: false)) p.id: p},
+      occurrenceTotals: repo.billOccurrenceTotals(),
+    );
+  }
+
+  /// Lecture seule - l'éditeur (ajouter/modifier/enregistrer une
+  /// occurrence...) continue de passer par le fichier local même en mode
+  /// API, voir [_openEditor]. Pas de rafraîchissement automatique après une
+  /// modification - même nuance que les autres écrans déjà migrés.
+  Future<_RecurringData> _loadViaApi(ApiSessionProvider session) async {
+    final currency = await session.getBaseCurrency();
+    final bills = await session.getBillDeposits();
+    final accounts = await session.getAccounts();
+    final categories = await session.getCategories();
+    final payees = await session.getPayees(onlyActive: false);
+    final occurrenceTotals = await session.billOccurrenceTotals();
+    return _RecurringData(
+      currency: currency,
+      bills: bills,
+      accounts: {for (final a in accounts) a.id: a},
+      categories: {for (final c in categories) c.id: c},
+      payees: {for (final p in payees) p.id: p},
+      occurrenceTotals: occurrenceTotals,
+    );
+  }
+
+  void _refreshApi(ApiSessionProvider session) {
+    setState(() => _apiFuture = _loadViaApi(session));
+  }
 
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final currency = repo.getBaseCurrency();
-    final allBills = repo.getBillDeposits();
-    final accounts = {for (final a in repo.getAccounts()) a.id: a};
-    final visibleAccounts = accounts.values
+
+    if (apiSession.useApiForRecurring) {
+      _apiFuture ??= _loadViaApi(apiSession);
+      return FutureBuilder<_RecurringData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildScaffold(context, dbProvider, repo, snapshot.data!,
+              apiRefresh: () => _refreshApi(apiSession));
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildScaffold(context, dbProvider, repo, _localData(repo));
+  }
+
+  /// [apiRefresh] non-null seulement en mode API - ajoute le bouton de
+  /// rafraîchissement manuel dans l'AppBar (voir [_loadViaApi]). [repo] est
+  /// toujours le dépôt local, quel que soit le mode - voir [_buildBody].
+  Widget _buildScaffold(
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _RecurringData data,
+      {VoidCallback? apiRefresh}) {
+    final visibleAccounts = data.accounts.values
         .where((a) => !dbProvider.isAccountHidden(a.id))
         .toList();
-    final categories = {for (final c in repo.getCategories()) c.id: c};
-    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
-    final occurrenceTotals = repo.billOccurrenceTotals();
+    final baseTitle = apiRefresh != null ? 'Opérations récurrentes (via API)' : 'Opérations récurrentes';
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_accountFilter == null
+            ? baseTitle
+            : '$baseTitle - ${data.accounts[_accountFilter]?.name}'),
+        actions: [
+          PopupMenuButton<int?>(
+            icon: const Icon(Icons.filter_list),
+            tooltip: 'Filtrer par compte',
+            onSelected: (id) => setState(() => _accountFilter = id),
+            itemBuilder: (context) => [
+              const PopupMenuItem<int?>(value: null, child: Text('Tous les comptes')),
+              for (final a in visibleAccounts) PopupMenuItem<int?>(value: a.id, child: Text(a.name)),
+            ],
+          ),
+          if (apiRefresh != null)
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Rafraîchir',
+              onPressed: apiRefresh,
+            ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Paramètres',
+            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _openEditor(context),
+        icon: const Icon(Icons.add),
+        label: const Text('Ajouter'),
+      ),
+      body: _buildBody(context, dbProvider, repo, data),
+    );
+  }
+
+  /// [repo] est toujours le dépôt local - même en mode API, une bascule
+  /// rapide (mettre en pause) reste une écriture directe au fichier, comme
+  /// partout ailleurs dans ce chantier (voir la nuance du plan sur la
+  /// coupure des écritures, jamais progressive comme les lectures).
+  Widget _buildBody(
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _RecurringData data) {
+    final currency = data.currency;
+    final accounts = data.accounts;
+    final categories = data.categories;
+    final payees = data.payees;
+    final occurrenceTotals = data.occurrenceTotals;
 
     bool matchesBill(BillDeposit bill) {
       if (_accountFilter != null &&
@@ -78,40 +213,13 @@ class _RecurringScreenState extends State<RecurringScreen> {
     // Paused operations last, out of the way of the active schedule -
     // everything else sorted by next-occurrence date, soonest first (2026-09
     // user request, reversing the original "paused first" order).
-    final bills = allBills.where(matchesBill).toList()
+    final bills = data.bills.where(matchesBill).toList()
       ..sort((a, b) {
         if (a.paused != b.paused) return a.paused ? 1 : -1;
         return a.nextOccurrence.compareTo(b.nextOccurrence);
       });
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_accountFilter == null
-            ? 'Opérations récurrentes'
-            : 'Opérations récurrentes - ${accounts[_accountFilter]?.name}'),
-        actions: [
-          PopupMenuButton<int?>(
-            icon: const Icon(Icons.filter_list),
-            tooltip: 'Filtrer par compte',
-            onSelected: (id) => setState(() => _accountFilter = id),
-            itemBuilder: (context) => [
-              const PopupMenuItem<int?>(value: null, child: Text('Tous les comptes')),
-              for (final a in visibleAccounts) PopupMenuItem<int?>(value: a.id, child: Text(a.name)),
-            ],
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Paramètres',
-            onPressed: () => Navigator.of(context).pushNamed('/settings'),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _openEditor(context),
-        icon: const Icon(Icons.add),
-        label: const Text('Ajouter'),
-      ),
-      body: ResponsiveBody(
+    return ResponsiveBody(
         child: Column(
           children: [
             Padding(
@@ -248,8 +356,7 @@ class _RecurringScreenState extends State<RecurringScreen> {
             ),
           ],
         ),
-      ),
-    );
+      );
   }
 
   Future<void> _editAnnualIncrease(BuildContext context, BillDeposit bill) async {

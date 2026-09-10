@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
@@ -121,6 +122,36 @@ class ApiClient {
     if (json == null) return null;
     final map = json as Map<String, dynamic>;
     return (min: map['min'] as int, max: map['max'] as int);
+  }
+
+  Future<List<BillDeposit>> getBillDeposits() async {
+    final json = await _rpc('getBillDeposits');
+    final list = json as List;
+    return [for (final row in list) BillDeposit.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<Map<int, int>> billOccurrenceTotals() async {
+    final json = await _rpc('billOccurrenceTotals') as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(int.parse(k), v as int));
+  }
+
+  Future<({double percent, DateTime anchor})?> getBillAnnualIncrease(int billId) async {
+    final json = await _rpc('getBillAnnualIncrease', body: {'billId': billId});
+    if (json == null) return null;
+    final map = json as Map<String, dynamic>;
+    return (percent: (map['percent'] as num).toDouble(), anchor: DateTime.parse(map['anchor'] as String));
+  }
+
+  Future<({double percent, DateTime anchor, double yearsSpan})?> suggestedAnnualIncrease(
+      int billId) async {
+    final json = await _rpc('suggestedAnnualIncrease', body: {'billId': billId});
+    if (json == null) return null;
+    final map = json as Map<String, dynamic>;
+    return (
+      percent: (map['percent'] as num).toDouble(),
+      anchor: DateTime.parse(map['anchor'] as String),
+      yearsSpan: (map['yearsSpan'] as num).toDouble(),
+    );
   }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {

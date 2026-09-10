@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'package:money_manager/services/api/api_client.dart';
+import 'package:money_manager_core/models/recurrence.dart';
 import 'package:money_manager_core/models/transaction.dart';
 
 /// Vérifie ApiClient contre un client HTTP simulé (MockClient de
@@ -283,6 +284,91 @@ void main() {
       );
       await client.login('1234');
       expect(await client.transactionYearRangeAll(), isNull);
+    });
+  });
+
+  group('getBillDeposits / billOccurrenceTotals / annual increase', () {
+    test('parses bill deposits including the enums', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode([
+                {
+                  'id': 1,
+                  'accountId': 1,
+                  'toAccountId': null,
+                  'payeeId': 1,
+                  'transCode': 'withdrawal',
+                  'amount': 15.0,
+                  'toAmount': 15.0,
+                  'categoryId': null,
+                  'nextOccurrence': DateTime(2026, 4, 1).toIso8601String(),
+                  'period': 'monthly',
+                  'autoExecute': 'manual',
+                  'numOccurrences': -1,
+                  'notes': null,
+                  'paused': false,
+                  'variancePercent': 0.0,
+                  'annualIncreasePercent': 0.0,
+                  'annualIncreaseAnchor': null,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final bills = await client.getBillDeposits();
+      expect(bills.single.period, RecurrencePeriod.monthly);
+      expect(bills.single.autoExecute, RecurrenceAutoExecute.manual);
+    });
+
+    test('converts billOccurrenceTotals string keys back to ints', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'7': 3}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals = await client.billOccurrenceTotals();
+      expect(totals, {7: 3});
+    });
+
+    test('parses getBillAnnualIncrease when configured', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode({'percent': 2.5, 'anchor': DateTime(2026, 1, 1).toIso8601String()}), 200);
+        }),
+      );
+      await client.login('1234');
+      final increase = await client.getBillAnnualIncrease(1);
+      expect(increase?.percent, 2.5);
+    });
+
+    test('suggestedAnnualIncrease returns null with too little history', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response('null', 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.suggestedAnnualIncrease(1), isNull);
     });
   });
 }

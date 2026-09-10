@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/bill_deposit.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
@@ -62,6 +63,9 @@ class ApiSessionProvider extends ChangeNotifier {
   bool get useApiForSpendingExplorer => _useApiFor('spendingExplorer');
   set useApiForSpendingExplorer(bool value) => _setUseApiFor('spendingExplorer', value);
 
+  bool get useApiForRecurring => _useApiFor('recurring');
+  set useApiForRecurring(bool value) => _setUseApiFor('recurring', value);
+
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
     _error = null;
@@ -116,6 +120,16 @@ class ApiSessionProvider extends ChangeNotifier {
       );
 
   Future<({int min, int max})?> transactionYearRangeAll() => _requireClient().transactionYearRangeAll();
+
+  Future<List<BillDeposit>> getBillDeposits() => _requireClient().getBillDeposits();
+
+  Future<Map<int, int>> billOccurrenceTotals() => _requireClient().billOccurrenceTotals();
+
+  Future<({double percent, DateTime anchor})?> getBillAnnualIncrease(int billId) =>
+      _requireClient().getBillAnnualIncrease(billId);
+
+  Future<({double percent, DateTime anchor, double yearsSpan})?> suggestedAnnualIncrease(int billId) =>
+      _requireClient().suggestedAnnualIncrease(billId);
 
   ApiClient _requireClient() {
     final client = _client;

@@ -118,6 +118,32 @@ Router buildRouter({
     final range = repo.transactionYearRangeAll();
     return Response.ok(jsonEncode(range == null ? null : {'min': range.min, 'max': range.max}));
   });
+  rpcRouter.post('/getBillDeposits', (Request request) async {
+    final bills = repo.getBillDeposits();
+    return Response.ok(jsonEncode([for (final b in bills) b.toJson()]));
+  });
+  rpcRouter.post('/billOccurrenceTotals', (Request request) async {
+    final totals = repo.billOccurrenceTotals();
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry('$k', v))));
+  });
+  rpcRouter.post('/getBillAnnualIncrease', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final increase = repo.getBillAnnualIncrease(body['billId'] as int);
+    return Response.ok(jsonEncode(increase == null
+        ? null
+        : {'percent': increase.percent, 'anchor': increase.anchor.toIso8601String()}));
+  });
+  rpcRouter.post('/suggestedAnnualIncrease', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final suggestion = repo.suggestedAnnualIncrease(body['billId'] as int);
+    return Response.ok(jsonEncode(suggestion == null
+        ? null
+        : {
+            'percent': suggestion.percent,
+            'anchor': suggestion.anchor.toIso8601String(),
+            'yearsSpan': suggestion.yearsSpan,
+          }));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));

@@ -365,6 +365,15 @@ class SettingsScreen extends StatelessWidget {
                         ? (v) => apiSession.useApiForSpendingExplorer = v
                         : null,
                   ),
+                  SwitchListTile(
+                    title: const Text('Opérations récurrentes via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "L'écran Opérations récurrentes lit ses données depuis le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForRecurring,
+                    onChanged: apiSession.isConnected
+                        ? (v) => apiSession.useApiForRecurring = v
+                        : null,
+                  ),
                 ],
               ),
             );

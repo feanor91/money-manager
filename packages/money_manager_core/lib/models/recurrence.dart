@@ -1,5 +1,9 @@
+import 'package:json_annotation/json_annotation.dart';
+
+@JsonEnum()
 enum RecurrenceAutoExecute { manual, silent, notify }
 
+@JsonEnum()
 enum RecurrencePeriod {
   none,
   weekly,

@@ -1,7 +1,12 @@
+import 'package:json_annotation/json_annotation.dart';
+
 import 'recurrence.dart';
 import 'transaction.dart';
 
+part 'bill_deposit.g.dart';
+
 /// A recurring/scheduled transaction template (MMEX table BILLSDEPOSITS_V1).
+@JsonSerializable()
 class BillDeposit {
   final int id;
   final int accountId;
@@ -130,4 +135,7 @@ class BillDeposit {
       annualIncreaseAnchor: annualIncreaseAnchor,
     );
   }
+
+  factory BillDeposit.fromJson(Map<String, dynamic> json) => _$BillDepositFromJson(json);
+  Map<String, dynamic> toJson() => _$BillDepositToJson(this);
 }
