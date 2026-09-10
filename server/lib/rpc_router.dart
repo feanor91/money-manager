@@ -358,6 +358,40 @@ Handler buildRouter({
     final result = repo.wasReconciledBeforePause(body['transId'] as int);
     return Response.ok(jsonEncode({'result': result}));
   });
+  rpcRouter.post('/countTransactionsMatching', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final count = repo.countTransactionsMatching(
+        payeeId: body['payeeId'] as int, categoryId: body['categoryId'] as int);
+    return Response.ok(jsonEncode({'count': count}));
+  });
+  rpcRouter.post('/bulkReassignTransactionCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.bulkReassignTransactionCategory(
+      payeeId: body['payeeId'] as int,
+      oldCategoryId: body['oldCategoryId'] as int,
+      newCategoryId: body['newCategoryId'] as int,
+    );
+    return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/countTransfersMatching', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final count = repo.countTransfersMatching(
+      accountId: body['accountId'] as int,
+      toAccountId: body['toAccountId'] as int,
+      categoryId: body['categoryId'] as int,
+    );
+    return Response.ok(jsonEncode({'count': count}));
+  });
+  rpcRouter.post('/bulkReassignTransferCategory', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    repo.bulkReassignTransferCategory(
+      accountId: body['accountId'] as int,
+      toAccountId: body['toAccountId'] as int,
+      oldCategoryId: body['oldCategoryId'] as int,
+      newCategoryId: body['newCategoryId'] as int,
+    );
+    return Response.ok(jsonEncode({'ok': true}));
+  });
 
   // ---- Comptes ----
   rpcRouter.post('/insertAccount', (Request request) async {
@@ -482,6 +516,16 @@ Handler buildRouter({
     final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
     repo.ensureBillOccurrenceTotal(body['billId'] as int, body['total'] as int);
     return Response.ok(jsonEncode({'ok': true}));
+  });
+  rpcRouter.post('/recordBillOccurrence', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final transId = repo.recordBillOccurrence(
+      BillDeposit.fromJson(body['bill'] as Map<String, dynamic>),
+      date: DateTime.parse(body['date'] as String),
+      reconciled: body['reconciled'] as bool? ?? false,
+      splitInto: body['splitInto'] as int? ?? 1,
+    );
+    return Response.ok(jsonEncode({'transId': transId}));
   });
 
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----

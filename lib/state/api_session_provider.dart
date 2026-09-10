@@ -303,6 +303,32 @@ class ApiSessionProvider extends ChangeNotifier {
   Future<bool> wasReconciledBeforePause(int transId) =>
       _requireClient().wasReconciledBeforePause(transId);
 
+  Future<int> countTransactionsMatching({required int payeeId, required int categoryId}) =>
+      _requireClient().countTransactionsMatching(payeeId: payeeId, categoryId: categoryId);
+
+  Future<void> bulkReassignTransactionCategory(
+          {required int payeeId, required int oldCategoryId, required int newCategoryId}) =>
+      _requireClient().bulkReassignTransactionCategory(
+          payeeId: payeeId, oldCategoryId: oldCategoryId, newCategoryId: newCategoryId);
+
+  Future<int> countTransfersMatching(
+          {required int accountId, required int toAccountId, required int categoryId}) =>
+      _requireClient().countTransfersMatching(
+          accountId: accountId, toAccountId: toAccountId, categoryId: categoryId);
+
+  Future<void> bulkReassignTransferCategory({
+    required int accountId,
+    required int toAccountId,
+    required int oldCategoryId,
+    required int newCategoryId,
+  }) =>
+      _requireClient().bulkReassignTransferCategory(
+        accountId: accountId,
+        toAccountId: toAccountId,
+        oldCategoryId: oldCategoryId,
+        newCategoryId: newCategoryId,
+      );
+
   // ---- Comptes ----
   Future<int> insertAccount({
     required String name,
@@ -389,6 +415,11 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<void> ensureBillOccurrenceTotal(int billId, int total) =>
       _requireClient().ensureBillOccurrenceTotal(billId, total);
+
+  Future<int> recordBillOccurrence(BillDeposit bill,
+          {required DateTime date, bool reconciled = false, int splitInto = 1}) =>
+      _requireClient()
+          .recordBillOccurrence(bill, date: date, reconciled: reconciled, splitInto: splitInto);
 
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
   Future<void> upsertBudgetEnvelope({

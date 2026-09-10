@@ -413,6 +413,40 @@ class ApiClient {
     return (json as Map<String, dynamic>)['result'] as bool;
   }
 
+  Future<int> countTransactionsMatching({required int payeeId, required int categoryId}) async {
+    final json = await _rpc('countTransactionsMatching',
+        body: {'payeeId': payeeId, 'categoryId': categoryId});
+    return (json as Map<String, dynamic>)['count'] as int;
+  }
+
+  Future<void> bulkReassignTransactionCategory(
+          {required int payeeId, required int oldCategoryId, required int newCategoryId}) =>
+      _rpc('bulkReassignTransactionCategory', body: {
+        'payeeId': payeeId,
+        'oldCategoryId': oldCategoryId,
+        'newCategoryId': newCategoryId,
+      });
+
+  Future<int> countTransfersMatching(
+      {required int accountId, required int toAccountId, required int categoryId}) async {
+    final json = await _rpc('countTransfersMatching',
+        body: {'accountId': accountId, 'toAccountId': toAccountId, 'categoryId': categoryId});
+    return (json as Map<String, dynamic>)['count'] as int;
+  }
+
+  Future<void> bulkReassignTransferCategory({
+    required int accountId,
+    required int toAccountId,
+    required int oldCategoryId,
+    required int newCategoryId,
+  }) =>
+      _rpc('bulkReassignTransferCategory', body: {
+        'accountId': accountId,
+        'toAccountId': toAccountId,
+        'oldCategoryId': oldCategoryId,
+        'newCategoryId': newCategoryId,
+      });
+
   // ---- Comptes ----
   Future<int> insertAccount({
     required String name,
@@ -512,6 +546,17 @@ class ApiClient {
 
   Future<void> ensureBillOccurrenceTotal(int billId, int total) =>
       _rpc('ensureBillOccurrenceTotal', body: {'billId': billId, 'total': total});
+
+  Future<int> recordBillOccurrence(BillDeposit bill,
+      {required DateTime date, bool reconciled = false, int splitInto = 1}) async {
+    final json = await _rpc('recordBillOccurrence', body: {
+      'bill': bill.toJson(),
+      'date': date.toIso8601String(),
+      'reconciled': reconciled,
+      'splitInto': splitInto,
+    });
+    return (json as Map<String, dynamic>)['transId'] as int;
+  }
 
   // ---- Budget (vue enveloppes uniquement - le simulateur reste local) ----
   Future<void> upsertBudgetEnvelope({

@@ -501,10 +501,12 @@ const _topLevelSentinel = Category(id: -1, name: 'Aucune (catégorie mère)', ac
 
 Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category category,
     {ApiSessionProvider? apiSession}) async {
-  final topLevel = repo
-      .getCategories(onlyActive: false)
-      .where((c) => c.parentId == null && c.id != category.parentId)
-      .toList();
+  final useApi = apiSession != null && apiSession.useApiForCategories && apiSession.isConnected;
+  final allCategories =
+      useApi ? await apiSession.getCategories(onlyActive: false) : repo.getCategories(onlyActive: false);
+  if (!context.mounted) return;
+  final topLevel =
+      allCategories.where((c) => c.parentId == null && c.id != category.parentId).toList();
   final options = [_topLevelSentinel, ...topLevel];
 
   Category? target;
@@ -546,7 +548,7 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
   if (confirmed != true || target == null) return;
   final chosen = target!;
   final newParentId = chosen.id == _topLevelSentinel.id ? null : chosen.id;
-  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+  if (useApi) {
     await apiSession.moveCategory(category.id, newParentId);
   } else {
     repo.moveCategory(category.id, newParentId);
@@ -555,7 +557,10 @@ Future<void> _moveCategory(BuildContext context, MmexRepository repo, Category c
 
 Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category source,
     {ApiSessionProvider? apiSession}) async {
-  final categories = repo.getCategories(onlyActive: false);
+  final useApi = apiSession != null && apiSession.useApiForCategories && apiSession.isConnected;
+  final categories =
+      useApi ? await apiSession.getCategories(onlyActive: false) : repo.getCategories(onlyActive: false);
+  if (!context.mounted) return;
   final categoriesById = {for (final c in categories) c.id: c};
   final options = categories.where((c) => c.id != source.id).toList();
 
@@ -597,7 +602,7 @@ Future<void> _mergeCategory(BuildContext context, MmexRepository repo, Category 
     ),
   );
   if (confirmed != true || target == null) return;
-  if (apiSession != null && apiSession.useApiForCategories && apiSession.isConnected) {
+  if (useApi) {
     await apiSession.mergeCategories(fromId: source.id, toId: target!.id);
   } else {
     repo.mergeCategories(fromId: source.id, toId: target!.id);

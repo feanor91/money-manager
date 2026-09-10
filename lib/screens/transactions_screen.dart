@@ -634,12 +634,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       dbProvider.touch();
                     }
                   },
-                  onEditDate: (tx, date) {
-                    repo.updateTransaction(tx.copyWith(date: date));
-                    dbProvider.touch();
-                  },
+                  onEditDate: (tx, date) => _saveQuickDateEdit(
+                      context, repo, dbProvider, tx, date,
+                      apiSession: apiSession, apiRefresh: apiRefresh),
                   onEditAmount: (tx, amount) => _saveQuickAmountEdit(
-                      context, repo, dbProvider, tx, amount),
+                      context, repo, dbProvider, tx, amount,
+                      apiSession: apiSession, apiRefresh: apiRefresh),
                 );
               }
               return ResponsiveBody(
@@ -672,16 +672,35 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       dbProvider.touch();
                     }
                   },
-                  onEditDate: (tx, date) {
-                    repo.updateTransaction(tx.copyWith(date: date));
-                    dbProvider.touch();
-                  },
+                  onEditDate: (tx, date) => _saveQuickDateEdit(
+                      context, repo, dbProvider, tx, date,
+                      apiSession: apiSession, apiRefresh: apiRefresh),
                   onEditAmount: (tx, amount) => _saveQuickAmountEdit(
-                      context, repo, dbProvider, tx, amount),
+                      context, repo, dbProvider, tx, amount,
+                      apiSession: apiSession, apiRefresh: apiRefresh),
                 ),
               );
             }),
     );
+  }
+
+  Future<void> _saveQuickDateEdit(
+    BuildContext context,
+    MmexRepository repo,
+    DatabaseProvider dbProvider,
+    MoneyTransaction tx,
+    DateTime date, {
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
+  }) async {
+    final useApi = apiSession != null && apiSession.useApiForTransactions && apiSession.isConnected;
+    if (useApi) {
+      await apiSession.updateTransaction(tx.copyWith(date: date));
+      apiRefresh?.call();
+    } else {
+      repo.updateTransaction(tx.copyWith(date: date));
+      dbProvider.touch();
+    }
   }
 
   /// The ledger table/cards' own quick amount edit (tap the Débit/Crédit
@@ -696,17 +715,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     MmexRepository repo,
     DatabaseProvider dbProvider,
     MoneyTransaction tx,
-    double amount,
-  ) async {
-    repo.updateTransaction(tx.copyWith(amount: amount));
-    dbProvider.touch();
-    final billId = repo.billIdForTransaction(tx.id);
+    double amount, {
+    ApiSessionProvider? apiSession,
+    VoidCallback? apiRefresh,
+  }) async {
+    final useApi = apiSession != null && apiSession.useApiForTransactions && apiSession.isConnected;
+    final int? billId;
+    if (useApi) {
+      await apiSession.updateTransaction(tx.copyWith(amount: amount));
+      apiRefresh?.call();
+      billId = await apiSession.billIdForTransaction(tx.id);
+    } else {
+      repo.updateTransaction(tx.copyWith(amount: amount));
+      dbProvider.touch();
+      billId = repo.billIdForTransaction(tx.id);
+    }
     if (billId == null || !context.mounted) return;
     await offerBillAmountSync(
       context: context,
       repo: repo,
       dbProvider: dbProvider,
       change: (billId: billId, newAmount: amount),
+      apiSession: apiSession,
+      apiRefresh: apiRefresh,
     );
   }
 
@@ -2016,8 +2047,16 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 enableVoiceInput: true,
                 onCreate: (text) async {
-                  final id = widget.repo.insertCategory(name: text);
-                  context.read<DatabaseProvider>().touch();
+                  final int id;
+                  if (_useApi) {
+                    id = await widget.apiSession!.insertCategory(name: text);
+                    if (_apiCategories != null) {
+                      _apiCategories = [..._apiCategories!, Category(id: id, name: text, active: true)];
+                    }
+                  } else {
+                    id = widget.repo.insertCategory(name: text);
+                    context.read<DatabaseProvider>().touch();
+                  }
                   setState(() {});
                   return Category(id: id, name: text, active: true);
                 },
@@ -2301,49 +2340,41 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
             paused: _paused, reconciled: _reconciled);
       }
 
-      // Les deux offres de suivi ci-dessous (réassigner en masse la
-      // catégorie, synchroniser le montant d'une opération récurrente
-      // liée) restent locales uniquement pour l'instant - elles passent
-      // par le dépôt local sans savoir qu'une écriture vient de partir
-      // vers le serveur, ce qui ferait diverger les deux. Ignorées en
-      // mode API plutôt que de risquer cette incohérence (voir
-      // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
-      // 2026-09-10").
-      if (!useApi) {
-        // Only a real edit (not a brand new transaction) can have "other
-        // identical" occurrences to offer fixing too - see
-        // offerBulkCategoryReassign in _openEditor, which runs once this
-        // sheet has actually closed.
-        final oldCategoryId = widget.existing!.categoryId;
-        if (oldCategoryId != null &&
-            _categoryId != null &&
-            _categoryId != oldCategoryId) {
-          if (isTransfer && _toAccountId != null) {
-            categoryChange = (
-              payeeId: null,
-              transferAccountId: _accountId,
-              transferToAccountId: _toAccountId,
-              oldCategoryId: oldCategoryId,
-              newCategoryId: _categoryId!,
-            );
-          } else if (!isTransfer && payeeId != -1) {
-            categoryChange = (
-              payeeId: payeeId,
-              transferAccountId: null,
-              transferToAccountId: null,
-              oldCategoryId: oldCategoryId,
-              newCategoryId: _categoryId!,
-            );
-          }
+      // Only a real edit (not a brand new transaction) can have "other
+      // identical" occurrences to offer fixing too - see
+      // offerBulkCategoryReassign in _openEditor, which runs once this
+      // sheet has actually closed.
+      final oldCategoryId = widget.existing!.categoryId;
+      if (oldCategoryId != null &&
+          _categoryId != null &&
+          _categoryId != oldCategoryId) {
+        if (isTransfer && _toAccountId != null) {
+          categoryChange = (
+            payeeId: null,
+            transferAccountId: _accountId,
+            transferToAccountId: _toAccountId,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        } else if (!isTransfer && payeeId != -1) {
+          categoryChange = (
+            payeeId: payeeId,
+            transferAccountId: null,
+            transferToAccountId: null,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
         }
+      }
 
-        // Same deferred-to-after-close convention as categoryChange above -
-        // see offerBillAmountSync in _openEditor.
-        if (widget.existing!.amount != amount) {
-          final billId = widget.repo.billIdForTransaction(widget.existing!.id);
-          if (billId != null) {
-            billAmountChange = (billId: billId, newAmount: amount);
-          }
+      // Same deferred-to-after-close convention as categoryChange above -
+      // see offerBillAmountSync in _openEditor.
+      if (widget.existing!.amount != amount) {
+        final billId = useApi
+            ? await apiSession!.billIdForTransaction(widget.existing!.id)
+            : widget.repo.billIdForTransaction(widget.existing!.id);
+        if (billId != null) {
+          billAmountChange = (billId: billId, newAmount: amount);
         }
       }
     }

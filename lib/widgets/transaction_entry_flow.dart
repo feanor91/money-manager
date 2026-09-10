@@ -29,6 +29,7 @@ Future<void> openTransactionEditor(
   VoiceTransactionDraft? voicePrefill,
   MoneyTransaction? duplicateFrom,
   ApiSessionProvider? apiSession,
+  VoidCallback? apiRefresh,
 }) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
@@ -51,12 +52,15 @@ Future<void> openTransactionEditor(
   // utile), mais c'est bien le fichier local qui reste écrit à chaque fois
   // que apiSession est null ou non connecté.
   dbProvider.touch();
+  apiRefresh?.call();
   if (result?.categoryChange != null && context.mounted) {
     await offerBulkCategoryReassign(
       context: context,
       repo: repo,
       dbProvider: dbProvider,
       change: result!.categoryChange!,
+      apiSession: apiSession,
+      apiRefresh: apiRefresh,
     );
   }
   if (result?.billAmountChange != null && context.mounted) {
@@ -65,6 +69,8 @@ Future<void> openTransactionEditor(
       repo: repo,
       dbProvider: dbProvider,
       change: result!.billAmountChange!,
+      apiSession: apiSession,
+      apiRefresh: apiRefresh,
     );
   }
   // "Dupliquer" was tapped - reopen a fresh "Nouvelle transaction" sheet
@@ -77,6 +83,7 @@ Future<void> openTransactionEditor(
       defaultAccountId: defaultAccountId,
       duplicateFrom: result!.duplicateFrom,
       apiSession: apiSession,
+      apiRefresh: apiRefresh,
     );
   }
 }
@@ -86,7 +93,7 @@ Future<void> openTransactionEditor(
 /// whatever [parseVoiceTransaction] made of the transcript. Nothing is ever
 /// saved directly from speech: the user always confirms in that sheet.
 Future<void> startVoiceEntry(BuildContext context, int? accountId,
-    {ApiSessionProvider? apiSession}) async {
+    {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) async {
   final dbProvider = context.read<DatabaseProvider>();
   final repo = dbProvider.repository!;
   final useApi = apiSession != null && apiSession.isConnected;
@@ -119,5 +126,8 @@ Future<void> startVoiceEntry(BuildContext context, int? accountId,
   );
   if (!context.mounted || draft == null) return;
   await openTransactionEditor(context,
-      defaultAccountId: accountId, voicePrefill: draft, apiSession: apiSession);
+      defaultAccountId: accountId,
+      voicePrefill: draft,
+      apiSession: apiSession,
+      apiRefresh: apiRefresh);
 }

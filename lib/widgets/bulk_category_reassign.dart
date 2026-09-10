@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 
 /// A just-saved category edit on an existing transaction or recurring bill,
@@ -32,15 +33,27 @@ Future<void> offerBulkCategoryReassign({
   required MmexRepository repo,
   required DatabaseProvider dbProvider,
   required CategoryChange change,
+  ApiSessionProvider? apiSession,
+  VoidCallback? apiRefresh,
 }) async {
+  final useApi = apiSession != null && apiSession.useApiForTransactions && apiSession.isConnected;
   final isTransfer = change.transferAccountId != null;
   final count = isTransfer
-      ? repo.countTransfersMatching(
-          accountId: change.transferAccountId!,
-          toAccountId: change.transferToAccountId!,
-          categoryId: change.oldCategoryId,
-        )
-      : repo.countTransactionsMatching(payeeId: change.payeeId!, categoryId: change.oldCategoryId);
+      ? (useApi
+          ? await apiSession.countTransfersMatching(
+              accountId: change.transferAccountId!,
+              toAccountId: change.transferToAccountId!,
+              categoryId: change.oldCategoryId,
+            )
+          : repo.countTransfersMatching(
+              accountId: change.transferAccountId!,
+              toAccountId: change.transferToAccountId!,
+              categoryId: change.oldCategoryId,
+            ))
+      : (useApi
+          ? await apiSession.countTransactionsMatching(
+              payeeId: change.payeeId!, categoryId: change.oldCategoryId)
+          : repo.countTransactionsMatching(payeeId: change.payeeId!, categoryId: change.oldCategoryId));
   if (count == 0 || !context.mounted) return;
 
   final plural = count > 1 ? 's' : '';
@@ -60,19 +73,37 @@ Future<void> offerBulkCategoryReassign({
     ),
   );
   if (confirmed != true || !context.mounted) return;
-  if (isTransfer) {
-    repo.bulkReassignTransferCategory(
-      accountId: change.transferAccountId!,
-      toAccountId: change.transferToAccountId!,
-      oldCategoryId: change.oldCategoryId,
-      newCategoryId: change.newCategoryId,
-    );
+  if (useApi) {
+    if (isTransfer) {
+      await apiSession.bulkReassignTransferCategory(
+        accountId: change.transferAccountId!,
+        toAccountId: change.transferToAccountId!,
+        oldCategoryId: change.oldCategoryId,
+        newCategoryId: change.newCategoryId,
+      );
+    } else {
+      await apiSession.bulkReassignTransactionCategory(
+        payeeId: change.payeeId!,
+        oldCategoryId: change.oldCategoryId,
+        newCategoryId: change.newCategoryId,
+      );
+    }
+    apiRefresh?.call();
   } else {
-    repo.bulkReassignTransactionCategory(
-      payeeId: change.payeeId!,
-      oldCategoryId: change.oldCategoryId,
-      newCategoryId: change.newCategoryId,
-    );
+    if (isTransfer) {
+      repo.bulkReassignTransferCategory(
+        accountId: change.transferAccountId!,
+        toAccountId: change.transferToAccountId!,
+        oldCategoryId: change.oldCategoryId,
+        newCategoryId: change.newCategoryId,
+      );
+    } else {
+      repo.bulkReassignTransactionCategory(
+        payeeId: change.payeeId!,
+        oldCategoryId: change.oldCategoryId,
+        newCategoryId: change.newCategoryId,
+      );
+    }
+    dbProvider.touch();
   }
-  dbProvider.touch();
 }

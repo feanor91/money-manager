@@ -624,6 +624,97 @@ void main() {
       expect(response.statusCode, 200);
       expect(await response.readAsString(), '{"result":false}');
     });
+
+    test('POST /rpc/countTransactionsMatching counts every transaction sharing payee and category',
+        () async {
+      final token = tokenStore.issue();
+      repo.insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 12,
+        date: DateTime(2026, 3, 20),
+        categoryId: categoryId,
+      );
+      final response = await router(post('/rpc/countTransactionsMatching',
+          token: token, body: {'payeeId': payeeId, 'categoryId': categoryId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['count'], 2);
+    });
+
+    test('POST /rpc/bulkReassignTransactionCategory updates every matching transaction', () async {
+      final token = tokenStore.issue();
+      final newCategoryId = repo.insertCategory(name: 'Nouvelle catégorie RPC');
+      repo.insertTransaction(
+        accountId: accountId,
+        payeeId: payeeId,
+        transCode: TransCode.withdrawal,
+        amount: 12,
+        date: DateTime(2026, 3, 20),
+        categoryId: categoryId,
+      );
+      final response = await router(post('/rpc/bulkReassignTransactionCategory', token: token, body: {
+        'payeeId': payeeId,
+        'oldCategoryId': categoryId,
+        'newCategoryId': newCategoryId,
+      }));
+      expect(response.statusCode, 200);
+      final updated = repo.getTransactions(accountId: accountId);
+      expect(updated.every((t) => t.categoryId == newCategoryId), isTrue);
+    });
+
+    test('POST /rpc/countTransfersMatching counts transfers sharing the same account pair and category',
+        () async {
+      final token = tokenStore.issue();
+      final otherAccountId = repo.insertAccount(
+          name: 'Compte Épargne', type: 'Savings', initialBalance: 0, currencyId: 2);
+      repo.insertTransaction(
+        accountId: accountId,
+        toAccountId: otherAccountId,
+        payeeId: -1,
+        transCode: TransCode.transfer,
+        amount: 100,
+        toAmount: 100,
+        date: DateTime(2026, 3, 21),
+        categoryId: categoryId,
+      );
+      final response = await router(post('/rpc/countTransfersMatching', token: token, body: {
+        'accountId': accountId,
+        'toAccountId': otherAccountId,
+        'categoryId': categoryId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['count'], 1);
+    });
+
+    test('POST /rpc/bulkReassignTransferCategory updates every matching transfer', () async {
+      final token = tokenStore.issue();
+      final otherAccountId = repo.insertAccount(
+          name: 'Compte Épargne', type: 'Savings', initialBalance: 0, currencyId: 2);
+      final newCategoryId = repo.insertCategory(name: 'Nouvelle catégorie virement RPC');
+      repo.insertTransaction(
+        accountId: accountId,
+        toAccountId: otherAccountId,
+        payeeId: -1,
+        transCode: TransCode.transfer,
+        amount: 100,
+        toAmount: 100,
+        date: DateTime(2026, 3, 21),
+        categoryId: categoryId,
+      );
+      final response = await router(post('/rpc/bulkReassignTransferCategory', token: token, body: {
+        'accountId': accountId,
+        'toAccountId': otherAccountId,
+        'oldCategoryId': categoryId,
+        'newCategoryId': newCategoryId,
+      }));
+      expect(response.statusCode, 200);
+      final transfer =
+          repo.getTransactions(accountId: accountId).firstWhere((t) => t.transCode == TransCode.transfer);
+      expect(transfer.categoryId, newCategoryId);
+    });
   });
 
   group('Écritures - Comptes', () {
@@ -823,6 +914,21 @@ void main() {
           token: token, body: {'billId': billId, 'total': 12}));
       expect(response.statusCode, 200);
       expect(repo.billOccurrenceTotals()[billId], 12);
+    });
+
+    test('POST /rpc/recordBillOccurrence creates a real transaction and advances the bill',
+        () async {
+      final token = tokenStore.issue();
+      final bill = repo.getBillDeposits().singleWhere((b) => b.id == billId);
+      final response = await router(post('/rpc/recordBillOccurrence', token: token, body: {
+        'bill': bill.toJson(),
+        'date': '2026-04-01T00:00:00.000',
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      final newId = json['transId'] as int;
+      expect(repo.getTransactions(accountId: accountId).any((t) => t.id == newId), isTrue);
+      expect(repo.getBillDeposits().single.nextOccurrence, DateTime(2026, 5, 1));
     });
   });
 

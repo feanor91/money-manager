@@ -358,8 +358,8 @@ class _RecurringScreenState extends State<RecurringScreen> {
                                   IconButton(
                                     tooltip: 'Enregistrer cette occurrence',
                                     icon: const Icon(Icons.playlist_add_check),
-                                    onPressed: () =>
-                                        _recordOccurrence(context, bill),
+                                    onPressed: () => _recordOccurrence(context, bill,
+                                        apiSession: apiSession, apiRefresh: apiRefresh),
                                   ),
                                 ],
                               ),
@@ -378,12 +378,13 @@ class _RecurringScreenState extends State<RecurringScreen> {
       {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
+    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
     final result = await showDialog<_AnnualIncreaseResult>(
       context: context,
-      builder: (_) => _AnnualIncreaseDialog(repo: repo, bill: bill),
+      builder: (_) =>
+          _AnnualIncreaseDialog(repo: repo, bill: bill, apiSession: useApi ? apiSession : null),
     );
     if (result == null) return;
-    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
     if (useApi) {
       if (result.cleared) {
         await apiSession.clearBillAnnualIncrease(bill.id);
@@ -403,14 +404,21 @@ class _RecurringScreenState extends State<RecurringScreen> {
     }
   }
 
-  Future<void> _recordOccurrence(BuildContext context, BillDeposit bill) async {
+  Future<void> _recordOccurrence(BuildContext context, BillDeposit bill,
+      {ApiSessionProvider? apiSession, VoidCallback? apiRefresh}) async {
     final dbProvider = context.read<DatabaseProvider>();
     final repo = dbProvider.repository!;
+    final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
     await showDialog(
       context: context,
-      builder: (_) => _RecordOccurrenceDialog(bill: bill, repo: repo),
+      builder: (_) => _RecordOccurrenceDialog(
+          bill: bill, repo: repo, apiSession: useApi ? apiSession : null),
     );
-    dbProvider.touch();
+    if (useApi) {
+      apiRefresh?.call();
+    } else {
+      dbProvider.touch();
+    }
   }
 
   Future<void> _openEditor(BuildContext context,
@@ -432,17 +440,14 @@ class _RecurringScreenState extends State<RecurringScreen> {
     } else {
       dbProvider.touch();
     }
-    // Réassignation en masse de catégorie - reste locale uniquement, même
-    // nuance que TransactionEditorSheet._save (voir
-    // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
-    // 2026-09-10") : elle passerait par le dépôt local sans savoir qu'une
-    // écriture vient de partir vers le serveur.
-    if (!useApi && result?.categoryChange != null && context.mounted) {
+    if (result?.categoryChange != null && context.mounted) {
       await offerBulkCategoryReassign(
         context: context,
         repo: repo,
         dbProvider: dbProvider,
         change: result!.categoryChange!,
+        apiSession: apiSession,
+        apiRefresh: apiRefresh,
       );
     }
     // "Dupliquer" was tapped - reopen a fresh "Nouvelle opération
@@ -629,9 +634,29 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
       widget.apiSession!.useApiForRecurring &&
       widget.apiSession!.isConnected;
 
+  // Voir TransactionEditorSheet._apiAccounts/_loadPickerData - même
+  // principe pour ce formulaire.
+  List<Account>? _apiAccounts;
+  List<Category>? _apiCategories;
+  List<Payee>? _apiPayees;
+
+  Future<void> _loadPickerData() async {
+    final session = widget.apiSession!;
+    final accounts = await session.getAccounts();
+    final categories = await session.getCategories();
+    final payees = await session.getPayees(onlyActive: false);
+    if (!mounted) return;
+    setState(() {
+      _apiAccounts = accounts;
+      _apiCategories = categories;
+      _apiPayees = payees;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_useApi) _loadPickerData();
     final bill = widget.existing;
     // A duplicate only ever seeds a brand-new bill - ignored the moment
     // there's a real [existing] to edit instead, same convention as
@@ -662,23 +687,29 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    if (_useApi && _apiAccounts == null) {
+      return const Padding(
+        padding: EdgeInsets.all(40),
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
     // Same rule as the transaction editor: hide hidden accounts from
     // selection, but keep one already in use by this bill so editing an
     // existing template against a since-hidden account doesn't break.
-    final accounts = widget.repo
-        .getAccounts()
+    final rawAccounts = _useApi ? _apiAccounts! : widget.repo.getAccounts();
+    final accounts = rawAccounts
         .where((a) =>
             !dbProvider.isAccountHidden(a.id) ||
             a.id == _accountId ||
             a.id == _toAccountId)
         .toList();
-    final categories = widget.repo.getCategories();
+    final categories = _useApi ? _apiCategories! : widget.repo.getCategories();
     final categoriesById = {for (final c in categories) c.id: c};
     final sortedCategories = [...categories]..sort((a, b) =>
         categoryFullPath(a.id, categoriesById)
             .toLowerCase()
             .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
-    final payees = widget.repo.getPayees(onlyActive: false);
+    final payees = _useApi ? _apiPayees! : widget.repo.getPayees(onlyActive: false);
     final isTransfer = _transCode == TransCode.transfer;
 
     return Padding(
@@ -768,8 +799,17 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
                 onSelected: (c) => setState(() => _categoryId = c?.id),
                 enableVoiceInput: true,
                 onCreate: (text) async {
-                  final id = widget.repo.insertCategory(name: text);
-                  context.read<DatabaseProvider>().touch();
+                  final int id;
+                  if (_useApi) {
+                    id = await widget.apiSession!.insertCategory(name: text);
+                    if (_apiCategories != null) {
+                      _apiCategories = [..._apiCategories!, Category(id: id, name: text, active: true)];
+                    }
+                  } else {
+                    id = widget.repo.insertCategory(name: text);
+                    context.read<DatabaseProvider>().touch();
+                  }
+                  setState(() {});
                   return Category(id: id, name: text, active: true);
                 },
               ),
@@ -1065,30 +1105,25 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
       // The bill's category just changed - offer to also fix every real
       // ledger transaction still sitting under the old category for this
       // payee (not just future occurrences of this one bill), see
-      // offerBulkCategoryReassign in _openEditor below. Reste local
-      // uniquement, même nuance que TransactionEditorSheet._save (voir
-      // PLAN_ARCHITECTURE_CLIENT_SERVEUR.md, "Précision ajoutée le
-      // 2026-09-10").
-      if (!useApi) {
-        final oldCategoryId = widget.existing!.categoryId;
-        if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
-          if (isTransfer && _toAccountId != null) {
-            categoryChange = (
-              payeeId: null,
-              transferAccountId: _accountId,
-              transferToAccountId: _toAccountId,
-              oldCategoryId: oldCategoryId,
-              newCategoryId: _categoryId!,
-            );
-          } else if (!isTransfer && payeeId != -1) {
-            categoryChange = (
-              payeeId: payeeId,
-              transferAccountId: null,
-              transferToAccountId: null,
-              oldCategoryId: oldCategoryId,
-              newCategoryId: _categoryId!,
-            );
-          }
+      // offerBulkCategoryReassign in _openEditor below.
+      final oldCategoryId = widget.existing!.categoryId;
+      if (oldCategoryId != null && _categoryId != null && _categoryId != oldCategoryId) {
+        if (isTransfer && _toAccountId != null) {
+          categoryChange = (
+            payeeId: null,
+            transferAccountId: _accountId,
+            transferToAccountId: _toAccountId,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
+        } else if (!isTransfer && payeeId != -1) {
+          categoryChange = (
+            payeeId: payeeId,
+            transferAccountId: null,
+            transferToAccountId: null,
+            oldCategoryId: oldCategoryId,
+            newCategoryId: _categoryId!,
+          );
         }
       }
     }
@@ -1130,20 +1165,54 @@ class _AnnualIncreaseDialog extends StatefulWidget {
   final MmexRepository repo;
   final BillDeposit bill;
 
-  const _AnnualIncreaseDialog({required this.repo, required this.bill});
+  /// Non-null signifie déjà vérifié connecté (voir _editAnnualIncrease) -
+  /// la lecture (suggestion/valeur existante) passe alors par le serveur.
+  final ApiSessionProvider? apiSession;
+
+  const _AnnualIncreaseDialog({required this.repo, required this.bill, this.apiSession});
 
   @override
   State<_AnnualIncreaseDialog> createState() => _AnnualIncreaseDialogState();
 }
 
 class _AnnualIncreaseDialogState extends State<_AnnualIncreaseDialog> {
-  late final _suggestion = widget.repo.suggestedAnnualIncrease(widget.bill.id);
-  late final _existing = widget.repo.getBillAnnualIncrease(widget.bill.id);
-  late double _percent = _existing?.percent ?? _suggestion?.percent ?? 0;
-  late DateTime _anchor =
-      _existing?.anchor ?? _suggestion?.anchor ?? widget.bill.nextOccurrence;
-  late final _percentController =
-      TextEditingController(text: _percent.toStringAsFixed(1));
+  ({double percent, DateTime anchor, double yearsSpan})? _suggestion;
+  ({double percent, DateTime anchor})? _existing;
+  bool _loaded = false;
+  late double _percent;
+  late DateTime _anchor;
+  final _percentController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.apiSession != null) {
+      _loadViaApi();
+    } else {
+      _suggestion = widget.repo.suggestedAnnualIncrease(widget.bill.id);
+      _existing = widget.repo.getBillAnnualIncrease(widget.bill.id);
+      _initValues();
+      _loaded = true;
+    }
+  }
+
+  Future<void> _loadViaApi() async {
+    final suggestion = await widget.apiSession!.suggestedAnnualIncrease(widget.bill.id);
+    final existing = await widget.apiSession!.getBillAnnualIncrease(widget.bill.id);
+    if (!mounted) return;
+    setState(() {
+      _suggestion = suggestion;
+      _existing = existing;
+      _initValues();
+      _loaded = true;
+    });
+  }
+
+  void _initValues() {
+    _percent = _existing?.percent ?? _suggestion?.percent ?? 0;
+    _anchor = _existing?.anchor ?? _suggestion?.anchor ?? widget.bill.nextOccurrence;
+    _percentController.text = _percent.toStringAsFixed(1);
+  }
 
   @override
   void dispose() {
@@ -1163,6 +1232,11 @@ class _AnnualIncreaseDialogState extends State<_AnnualIncreaseDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_loaded) {
+      return const AlertDialog(
+        content: SizedBox(height: 80, child: Center(child: CircularProgressIndicator())),
+      );
+    }
     return AlertDialog(
       title: const Text('Augmentation annuelle'),
       content: SizedBox(
@@ -1179,7 +1253,7 @@ class _AnnualIncreaseDialogState extends State<_AnnualIncreaseDialog> {
               style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
             const SizedBox(height: 12),
-            if (_suggestion != null)
+            if (_suggestion case final suggestion?)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Row(
@@ -1187,8 +1261,8 @@ class _AnnualIncreaseDialogState extends State<_AnnualIncreaseDialog> {
                     Expanded(
                       child: Text(
                         'Suggestion d\'après l\'historique '
-                        '(${_suggestion.yearsSpan.toStringAsFixed(1)} ans) : '
-                        '${_suggestion.percent.toStringAsFixed(1)} %',
+                        '(${suggestion.yearsSpan.toStringAsFixed(1)} ans) : '
+                        '${suggestion.percent.toStringAsFixed(1)} %',
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
@@ -1258,7 +1332,12 @@ class _RecordOccurrenceDialog extends StatefulWidget {
   final BillDeposit bill;
   final MmexRepository repo;
 
-  const _RecordOccurrenceDialog({required this.bill, required this.repo});
+  /// Non-null signifie déjà vérifié connecté (voir _recordOccurrence) -
+  /// l'écriture (et la lecture des comptes pour l'affichage) passe alors
+  /// par le serveur.
+  final ApiSessionProvider? apiSession;
+
+  const _RecordOccurrenceDialog({required this.bill, required this.repo, this.apiSession});
 
   @override
   State<_RecordOccurrenceDialog> createState() =>
@@ -1296,12 +1375,20 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
     return span;
   }
 
+  Map<int, Account>? _apiAccounts;
+
   @override
   void initState() {
     super.initState();
     _date = widget.bill.nextOccurrence;
     _amountController =
         TextEditingController(text: widget.bill.amount.toStringAsFixed(2));
+    if (widget.apiSession != null) {
+      widget.apiSession!.getAccounts().then((accounts) {
+        if (!mounted) return;
+        setState(() => _apiAccounts = {for (final a in accounts) a.id: a});
+      });
+    }
   }
 
   @override
@@ -1313,7 +1400,13 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
   @override
   Widget build(BuildContext context) {
     final isTransfer = widget.bill.transCode == TransCode.transfer;
-    final accounts = {for (final a in widget.repo.getAccounts()) a.id: a};
+    if (widget.apiSession != null && _apiAccounts == null) {
+      return const AlertDialog(
+        content: SizedBox(height: 80, child: Center(child: CircularProgressIndicator())),
+      );
+    }
+    final accounts =
+        widget.apiSession != null ? _apiAccounts! : {for (final a in widget.repo.getAccounts()) a.id: a};
     return AlertDialog(
       title: const Text('Enregistrer l\'opération'),
       content: Form(
@@ -1402,12 +1495,18 @@ class _RecordOccurrenceDialogState extends State<_RecordOccurrenceDialog> {
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Annuler')),
         FilledButton(
-          onPressed: () {
+          onPressed: () async {
             if (!_formKey.currentState!.validate()) return;
             final amount = double.parse(_amountController.text.replaceAll(',', '.'));
-            widget.repo.recordBillOccurrence(
-                widget.bill.copyWith(amount: amount),
-                date: _date, reconciled: _reconciled, splitInto: _splitInto);
+            final bill = widget.bill.copyWith(amount: amount);
+            if (widget.apiSession != null) {
+              await widget.apiSession!.recordBillOccurrence(bill,
+                  date: _date, reconciled: _reconciled, splitInto: _splitInto);
+            } else {
+              widget.repo.recordBillOccurrence(bill,
+                  date: _date, reconciled: _reconciled, splitInto: _splitInto);
+            }
+            if (!context.mounted) return;
             Navigator.of(context).pop();
           },
           child: const Text('Enregistrer'),

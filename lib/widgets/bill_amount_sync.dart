@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../utils/list_utils.dart';
 
@@ -26,13 +27,21 @@ Future<void> offerBillAmountSync({
   required MmexRepository repo,
   required DatabaseProvider dbProvider,
   required BillAmountChange change,
+  ApiSessionProvider? apiSession,
+  VoidCallback? apiRefresh,
 }) async {
-  final bill = findById(repo.getBillDeposits(), change.billId, (b) => b.id);
+  final useApi = apiSession != null && apiSession.useApiForRecurring && apiSession.isConnected;
+  final bills = useApi ? await apiSession.getBillDeposits() : repo.getBillDeposits();
+  if (!context.mounted) return;
+  final bill = findById(bills, change.billId, (b) => b.id);
   if (bill == null || !context.mounted) return;
 
   final isTransfer = bill.transCode == TransCode.transfer;
-  final accountsById = {for (final a in repo.getAccounts()) a.id: a};
-  final payeesById = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+  final accounts = useApi ? await apiSession.getAccounts() : repo.getAccounts();
+  final payees = useApi ? await apiSession.getPayees(onlyActive: false) : repo.getPayees(onlyActive: false);
+  if (!context.mounted) return;
+  final accountsById = {for (final a in accounts) a.id: a};
+  final payeesById = {for (final p in payees) p.id: p};
   final billLabel = isTransfer
       ? '${accountsById[bill.accountId]?.name ?? '?'} → '
           '${accountsById[bill.toAccountId]?.name ?? '?'}'
@@ -53,6 +62,11 @@ Future<void> offerBillAmountSync({
     ),
   );
   if (confirmed != true || !context.mounted) return;
-  repo.updateBillDeposit(bill.copyWith(amount: change.newAmount));
-  dbProvider.touch();
+  if (useApi) {
+    await apiSession.updateBillDeposit(bill.copyWith(amount: change.newAmount));
+    apiRefresh?.call();
+  } else {
+    repo.updateBillDeposit(bill.copyWith(amount: change.newAmount));
+    dbProvider.touch();
+  }
 }
