@@ -104,8 +104,41 @@ le repo pour ne pas la perdre.
   sélecteur de fichier natif (.mmb), même limitation déjà rencontrée
   dans cette session pour d'autres vérifications.
 
-Les 14 écrans restants suivent le même chantier (~12-18 sessions au
-total pour l'ensemble) - à démarrer un par un, pas tous d'un coup.
+- 🚧 **5 écrans de plus basculés dans la foulée** (même session,
+  utilisateur : "continue avec l'étape 4 et ne t'arrête pas, migre tous
+  les écrans") : **Tiers, Catégories, Explorateur de dépenses, Opérations
+  récurrentes, Transactions** - **6 écrans sur ~15 au total maintenant**.
+  Même principe partout : bascule indépendante par écran dans Paramètres,
+  lectures seules basculées, écritures toujours locales. Cas particuliers
+  notés au passage :
+  - **Explorateur de dépenses** : le seul entièrement en lecture (aucune
+    écriture nulle part) - la bascule couvre tout l'écran sans la nuance
+    "écritures encore locales" des autres.
+  - **Catégories** : a demandé une vraie restructuration, pas juste un
+    branchement - `repo.categoryUsage()` était appelé directement pendant
+    la construction de l'arbre (un appel par catégorie affichée),
+    remplacé par une fonction déjà résolue (map pré-calculée en mode API).
+  - **Transactions** : le plus gros écran restructuré jusqu'ici
+    (`build()` faisait 474 lignes) - le rafraîchissement en mode API doit
+    tenir compte à la fois du compte sélectionné ET du mois affiché, pas
+    juste du mode, contrairement aux écrans précédents.
+  - Plusieurs types Dart record (`({int min, int max})`, `Map<int,
+    ({int index, int total})>`) ne se sérialisent pas automatiquement en
+    JSON - encodage/décodage manuel à chaque fois côté serveur et client.
+  - `MoneyTransaction`/`TransactionWithBalance`/`BillDeposit` et les énums
+    `TransCode`/`RecurrencePeriod`/`RecurrenceAutoExecute` gagnent leur
+    sérialisation JSON au passage.
+
+  643 tests au total (18 nouveaux depuis Comptes), tous verts - aucune
+  régression malgré la restructuration importante de Transactions.
+  Toujours **non vérifiable dans cet environnement** : le clic-à-clic réel
+  dans un navigateur (même blocage).
+
+Les 9 écrans restants suivent le même chantier - **Tableau de bord**
+(composite, dépend de Budget/Récurrentes en interne, à migrer en
+dernier), **Budget** (3126 lignes, le plus gros écran de l'appli) et
+**Simulation** (2584 lignes) sont les plus gros morceaux qui restent, à
+démarrer consciemment vu leur taille.
 
 ## Où on en est aujourd'hui
 
