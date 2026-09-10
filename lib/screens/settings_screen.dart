@@ -383,6 +383,15 @@ class SettingsScreen extends StatelessWidget {
                         ? (v) => apiSession.useApiForTransactions = v
                         : null,
                   ),
+                  SwitchListTile(
+                    title: const Text('Budget via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "La vue enveloppes du Budget lit ses données depuis le serveur au lieu du fichier local ; le simulateur reste toujours local"),
+                    value: apiSession.useApiForBudget,
+                    onChanged: apiSession.isConnected
+                        ? (v) => apiSession.useApiForBudget = v
+                        : null,
+                  ),
                 ],
               ),
             );

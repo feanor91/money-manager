@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
+import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
@@ -188,6 +189,56 @@ class ApiClient {
       final map = v as Map<String, dynamic>;
       return MapEntry(int.parse(k), (index: map['index'] as int, total: map['total'] as int));
     });
+  }
+
+  // Écran Budget (étape 4) - uniquement la vue "enveloppes" en lecture :
+  // le simulateur ("what if") reste entièrement local, voir
+  // budget_screen.dart et PLAN_ARCHITECTURE_CLIENT_SERVEUR.md.
+  Future<List<BudgetEnvelope>> getBudgetEnvelopes(int accountId) async {
+    final json = await _rpc('getBudgetEnvelopes', body: {'accountId': accountId});
+    final list = json as List;
+    return [for (final row in list) BudgetEnvelope.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<Map<int, double>> categoryMonthlyRecurringTotals({int? accountId}) async {
+    final json = await _rpc('categoryMonthlyRecurringTotals', body: {
+      if (accountId != null) 'accountId': accountId,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+  }
+
+  Future<Map<int, double>> categorySpendForPeriod(
+    DateTime start,
+    DateTime end, {
+    int? accountId,
+    bool includeCategorizedTransfersAsExpense = false,
+  }) async {
+    final json = await _rpc('categorySpendForPeriod', body: {
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+      'includeCategorizedTransfersAsExpense': includeCategorizedTransfersAsExpense,
+    }) as Map<String, dynamic>;
+    return json.map((k, v) => MapEntry(int.parse(k), (v as num).toDouble()));
+  }
+
+  Future<Set<int>> categoriesUsedByAccount(int accountId) async {
+    final json = await _rpc('categoriesUsedByAccount', body: {'accountId': accountId}) as List;
+    return json.cast<int>().toSet();
+  }
+
+  Future<double> incomeForPeriod(DateTime start, DateTime end, {int? accountId}) async {
+    final json = await _rpc('incomeForPeriod', body: {
+      'start': start.toIso8601String(),
+      'end': end.toIso8601String(),
+      if (accountId != null) 'accountId': accountId,
+    });
+    return ((json as Map<String, dynamic>)['income'] as num).toDouble();
+  }
+
+  Future<double> expectedIncomeForBudget(int accountId) async {
+    final json = await _rpc('expectedIncomeForBudget', body: {'accountId': accountId});
+    return ((json as Map<String, dynamic>)['expected'] as num).toDouble();
   }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {

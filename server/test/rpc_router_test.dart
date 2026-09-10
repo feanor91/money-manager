@@ -298,6 +298,114 @@ void main() {
     });
   });
 
+  group('POST /rpc/getBudgetEnvelopes', () {
+    test('returns the real envelopes for this account', () async {
+      final repo = await openBlankTestRepo();
+      // Recréé ici plutôt que via setUp() : ce groupe a besoin d'une
+      // enveloppe réelle, ce que openBlankTestRepo/setUp ne fournit pas.
+      final localAccountId = repo.insertAccount(
+          name: 'Compte Courant', type: 'Checking', initialBalance: 1000, currencyId: 2);
+      final localCategoryId = repo.insertCategory(name: 'Loisirs test enveloppe');
+      repo.upsertBudgetEnvelope(accountId: localAccountId, categoryId: localCategoryId, amount: 80);
+      final localTokenStore = TokenStore();
+      final localRouter = buildRouter(
+        repo: repo,
+        pinAuth: PinAuthenticator(pin: '1234'),
+        tokenStore: localTokenStore,
+      ).call;
+      final token = localTokenStore.issue();
+      final response = await localRouter(
+          post('/rpc/getBudgetEnvelopes', token: token, body: {'accountId': localAccountId}));
+      expect(response.statusCode, 200);
+      final envelopes = jsonDecode(await response.readAsString()) as List;
+      expect(envelopes, hasLength(1));
+      expect(envelopes.single['amount'], 80);
+      expect(envelopes.single['categoryId'], localCategoryId);
+    });
+
+    test('returns an empty list when the account has none', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/getBudgetEnvelopes', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final envelopes = jsonDecode(await response.readAsString()) as List;
+      expect(envelopes, isEmpty);
+    });
+  });
+
+  group('POST /rpc/categoryMonthlyRecurringTotals', () {
+    test('returns an empty map when no recurring bill has a category', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/categoryMonthlyRecurringTotals',
+          token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json, isEmpty);
+    });
+  });
+
+  group('POST /rpc/categorySpendForPeriod', () {
+    test('reflects the transaction from setUp within the period', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/categorySpendForPeriod', token: token, body: {
+        'start': '2026-03-01T00:00:00.000',
+        'end': '2026-04-01T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['$categoryId'], 42.5);
+    });
+
+    test('an unmatched period returns nothing', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/categorySpendForPeriod', token: token, body: {
+        'start': '2020-01-01T00:00:00.000',
+        'end': '2020-02-01T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json, isEmpty);
+    });
+  });
+
+  group('POST /rpc/categoriesUsedByAccount', () {
+    test('includes the category used by the transaction from setUp', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/categoriesUsedByAccount',
+          token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final ids = (jsonDecode(await response.readAsString()) as List).cast<int>();
+      expect(ids, contains(categoryId));
+    });
+  });
+
+  group('POST /rpc/incomeForPeriod', () {
+    test('is zero for a period with only a withdrawal', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/incomeForPeriod', token: token, body: {
+        'start': '2026-03-01T00:00:00.000',
+        'end': '2026-04-01T00:00:00.000',
+        'accountId': accountId,
+      }));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['income'], 0);
+    });
+  });
+
+  group('POST /rpc/expectedIncomeForBudget', () {
+    test('is zero with no recurring deposit and no manual override', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/expectedIncomeForBudget', token: token, body: {'accountId': accountId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['expected'], 0);
+    });
+  });
+
   group('POST /auth/logout', () {
     test('revokes the token used to call it', () async {
       final token = tokenStore.issue();

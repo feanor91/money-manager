@@ -134,11 +134,45 @@ le repo pour ne pas la perdre.
   Toujours **non vérifiable dans cet environnement** : le clic-à-clic réel
   dans un navigateur (même blocage).
 
-Les 9 écrans restants suivent le même chantier - **Tableau de bord**
+- 🚧 **Budget - 7 écrans sur ~15 au total maintenant**, migré "avec le
+  maximum de précaution" (demande explicite de l'utilisateur, après une
+  clarification sur pourquoi ce n'était pas une question de "fatigue" mais
+  bien du risque réel documenté dans CLAUDE.md sur ce calcul précis).
+  **Décision de périmètre volontaire, documentée ici plutôt que découverte
+  plus tard** : seule la vue "enveloppes" (le budget réel, persistant) est
+  basculée en lecture API. Le simulateur "what if"
+  (`_buildSimulationBody`, ~900 lignes) reste **entièrement local, quel
+  que soit l'état de la bascule** - contrairement aux autres écrans, ses
+  lectures (scénarios, montants sauvegardés, catégories virtuelles,
+  moyennes historiques...) sont interrogées de façon synchrone à
+  l'intérieur même des fermetures (closures) qui font aussi les écritures
+  (renommer/fixer/défixer un scénario, éditer un montant...) - il n'y a
+  pas de séparation lecture/écriture propre à exploiter ici sans réécrire
+  toute l'interaction, ce que "le maximum de précaution" a justement
+  écarté. La liste des catégories elle-même (`repo.getCategories`) reste
+  aussi toujours locale des deux côtés, par cohérence avec le simulateur
+  qui en a besoin de façon synchrone, et parce que l'écran Catégories a
+  déjà sa propre bascule indépendante pour cette même donnée.
+  6 nouvelles routes en lecture (`getBudgetEnvelopes`,
+  `categoryMonthlyRecurringTotals`, `categorySpendForPeriod`,
+  `categoriesUsedByAccount`, `incomeForPeriod`, `expectedIncomeForBudget`)
+  plutôt que les ~13 initialement envisagées - le reste (scénarios de
+  simulation, catégories virtuelles) n'a jamais été exposé côté serveur,
+  puisque le simulateur reste local. `BudgetEnvelope` gagne sa
+  sérialisation JSON au passage.
+
+  650 tests Flutter au total (7 nouveaux depuis Transactions - 6 côté
+  ApiClient, 1 côté ApiSessionProvider) + 46 tests côté serveur (8
+  nouveaux, un par nouvelle route), tous verts. Toujours **non vérifiable
+  dans cet environnement** : le clic-à-clic réel dans un navigateur (même
+  blocage - l'appli démarre et s'affiche normalement jusqu'à l'écran de
+  sélection du fichier .mmb, aucune erreur dans la console, mais
+  impossible d'aller plus loin sans sélectionner un vrai fichier).
+
+Les 8 écrans restants suivent le même chantier - **Tableau de bord**
 (composite, dépend de Budget/Récurrentes en interne, à migrer en
-dernier), **Budget** (3126 lignes, le plus gros écran de l'appli) et
-**Simulation** (2584 lignes) sont les plus gros morceaux qui restent, à
-démarrer consciemment vu leur taille.
+dernier) et **Simulation** (2584 lignes) sont les plus gros morceaux qui
+restent, à démarrer consciemment vu leur taille.
 
 ## Où on en est aujourd'hui
 

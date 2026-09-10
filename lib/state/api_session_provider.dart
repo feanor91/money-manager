@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/bill_deposit.dart';
+import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/payee.dart';
@@ -68,6 +69,13 @@ class ApiSessionProvider extends ChangeNotifier {
 
   bool get useApiForTransactions => _useApiFor('transactions');
   set useApiForTransactions(bool value) => _setUseApiFor('transactions', value);
+
+  /// Vue "enveloppes" du Budget uniquement - le simulateur ("what if")
+  /// reste entièrement local, voir budget_screen.dart et
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md pour le détail de cette décision
+  /// de périmètre.
+  bool get useApiForBudget => _useApiFor('budget');
+  set useApiForBudget(bool value) => _setUseApiFor('budget', value);
 
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
@@ -145,6 +153,34 @@ class ApiSessionProvider extends ChangeNotifier {
 
   Future<Map<int, ({int index, int total})>> recurringTransactionOccurrences() =>
       _requireClient().recurringTransactionOccurrences();
+
+  Future<List<BudgetEnvelope>> getBudgetEnvelopes(int accountId) =>
+      _requireClient().getBudgetEnvelopes(accountId);
+
+  Future<Map<int, double>> categoryMonthlyRecurringTotals({int? accountId}) =>
+      _requireClient().categoryMonthlyRecurringTotals(accountId: accountId);
+
+  Future<Map<int, double>> categorySpendForPeriod(
+    DateTime start,
+    DateTime end, {
+    int? accountId,
+    bool includeCategorizedTransfersAsExpense = false,
+  }) =>
+      _requireClient().categorySpendForPeriod(
+        start,
+        end,
+        accountId: accountId,
+        includeCategorizedTransfersAsExpense: includeCategorizedTransfersAsExpense,
+      );
+
+  Future<Set<int>> categoriesUsedByAccount(int accountId) =>
+      _requireClient().categoriesUsedByAccount(accountId);
+
+  Future<double> incomeForPeriod(DateTime start, DateTime end, {int? accountId}) =>
+      _requireClient().incomeForPeriod(start, end, accountId: accountId);
+
+  Future<double> expectedIncomeForBudget(int accountId) =>
+      _requireClient().expectedIncomeForBudget(accountId);
 
   ApiClient _requireClient() {
     final client = _client;

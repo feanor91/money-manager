@@ -1,3 +1,7 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'budget.g.dart';
+
 /// A per-account budget envelope: this app's own simplified budget
 /// (BudgetScreen) doesn't fit MMEX's real year/period-based budgeting
 /// model - it needs an account dimension MMEX's schema has no column for
@@ -6,6 +10,7 @@
 /// it reads as obviously not part of MMEX's own schema if the file is
 /// ever opened in real MMEX desktop). Just a constant monthly amount per
 /// (account, category) pair - no year or period concept to expose.
+@JsonSerializable()
 class BudgetEnvelope {
   final int id;
   final int accountId;
@@ -52,6 +57,13 @@ class BudgetEnvelope {
       manualOverride: (row['MANUAL_OVERRIDE'] as int? ?? 0) == 1,
     );
   }
+
+  /// Sérialisation JSON pour l'API client/serveur (voir
+  /// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md) - générée par json_serializable
+  /// plutôt qu'écrite à la main, pour ne pas reproduire "le bug n°1" déjà
+  /// documenté dans CLAUDE.md.
+  factory BudgetEnvelope.fromJson(Map<String, dynamic> json) => _$BudgetEnvelopeFromJson(json);
+  Map<String, dynamic> toJson() => _$BudgetEnvelopeToJson(this);
 }
 
 /// A named, saveable "what if" budget - see APP_BUDGET_SCENARIOS. Its

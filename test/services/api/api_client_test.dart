@@ -458,4 +458,117 @@ void main() {
       expect(occurrences[5]?.total, 6);
     });
   });
+
+  group('Budget (vue enveloppes)', () {
+    test('getBudgetEnvelopes parses the envelope list', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          expect(request.url.path, '/rpc/getBudgetEnvelopes');
+          expect(jsonDecode(request.body), {'accountId': 1});
+          return http.Response(
+              jsonEncode([
+                {
+                  'id': 1,
+                  'accountId': 1,
+                  'categoryId': 5,
+                  'amount': 80.0,
+                  'active': true,
+                  'name': null,
+                  'manualOverride': false,
+                }
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final envelopes = await client.getBudgetEnvelopes(1);
+      expect(envelopes.single.amount, 80.0);
+      expect(envelopes.single.categoryId, 5);
+    });
+
+    test('categoryMonthlyRecurringTotals converts string keys back to ints', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'5': 40.0}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals = await client.categoryMonthlyRecurringTotals(accountId: 1);
+      expect(totals[5], 40.0);
+    });
+
+    test('categorySpendForPeriod sends the period and flag, parses the totals', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          expect(request.url.path, '/rpc/categorySpendForPeriod');
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['includeCategorizedTransfersAsExpense'], true);
+          return http.Response(jsonEncode({'5': 42.5}), 200);
+        }),
+      );
+      await client.login('1234');
+      final totals = await client.categorySpendForPeriod(
+        DateTime(2026, 3, 1),
+        DateTime(2026, 4, 1),
+        accountId: 1,
+        includeCategorizedTransfersAsExpense: true,
+      );
+      expect(totals[5], 42.5);
+    });
+
+    test('categoriesUsedByAccount parses the id set', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode([5, 8]), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.categoriesUsedByAccount(1), {5, 8});
+    });
+
+    test('incomeForPeriod returns the income figure', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'income': 1200.0}), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.incomeForPeriod(DateTime(2026, 3, 1), DateTime(2026, 4, 1), accountId: 1),
+          1200.0);
+    });
+
+    test('expectedIncomeForBudget returns the expected figure', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'expected': 1500.0}), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.expectedIncomeForBudget(1), 1500.0);
+    });
+  });
 }

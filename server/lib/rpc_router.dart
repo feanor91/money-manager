@@ -169,6 +169,50 @@ Router buildRouter({
     return Response.ok(jsonEncode(occurrences
         .map((k, v) => MapEntry('$k', {'index': v.index, 'total': v.total}))));
   });
+  // Écran Budget (étape 4) - uniquement la vue "enveloppes" en lecture :
+  // le simulateur ("what if") reste entièrement local, voir
+  // budget_screen.dart et PLAN_ARCHITECTURE_CLIENT_SERVEUR.md pour le
+  // détail de cette décision de périmètre.
+  rpcRouter.post('/getBudgetEnvelopes', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final envelopes = repo.getBudgetEnvelopes(body['accountId'] as int);
+    return Response.ok(jsonEncode([for (final e in envelopes) e.toJson()]));
+  });
+  rpcRouter.post('/categoryMonthlyRecurringTotals', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.categoryMonthlyRecurringTotals(accountId: body['accountId'] as int?);
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry('$k', v))));
+  });
+  rpcRouter.post('/categorySpendForPeriod', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final totals = repo.categorySpendForPeriod(
+      DateTime.parse(body['start'] as String),
+      DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+      includeCategorizedTransfersAsExpense:
+          body['includeCategorizedTransfersAsExpense'] as bool? ?? false,
+    );
+    return Response.ok(jsonEncode(totals.map((k, v) => MapEntry('$k', v))));
+  });
+  rpcRouter.post('/categoriesUsedByAccount', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final ids = repo.categoriesUsedByAccount(body['accountId'] as int);
+    return Response.ok(jsonEncode(ids.toList()));
+  });
+  rpcRouter.post('/incomeForPeriod', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final income = repo.incomeForPeriod(
+      DateTime.parse(body['start'] as String),
+      DateTime.parse(body['end'] as String),
+      accountId: body['accountId'] as int?,
+    );
+    return Response.ok(jsonEncode({'income': income}));
+  });
+  rpcRouter.post('/expectedIncomeForBudget', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final expected = repo.expectedIncomeForBudget(body['accountId'] as int);
+    return Response.ok(jsonEncode({'expected': expected}));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));

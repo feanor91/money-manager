@@ -3,11 +3,13 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
+import 'package:money_manager_core/models/account.dart';
 import 'package:money_manager_core/models/budget.dart';
 import 'package:money_manager_core/models/budget_period.dart';
 import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
 import 'package:money_manager_core/models/transaction.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../state/purchase_simulation_provider.dart';
 import '../theme/app_theme.dart';
@@ -113,6 +115,31 @@ class _EnvelopeItem {
   }
 }
 
+/// Données brutes de la vue "enveloppes" (étape 4, uniquement cette vue -
+/// le simulateur "what if" reste entièrement local, voir
+/// PLAN_ARCHITECTURE_CLIENT_SERVEUR.md et rpc_router.dart pour le détail
+/// de cette décision de périmètre). [categories]/[categoriesById] restent
+/// hors de ce paquet, toujours chargées localement dans build() - le mode
+/// simulateur en a besoin de façon synchrone, et l'écran Catégories a déjà
+/// sa propre bascule API indépendante.
+class _BudgetData {
+  final List<BudgetEnvelope> envelopes;
+  final Map<int, double> recurringTotals;
+  final Map<int, double> rawSpend;
+  final Set<int> usedCategoryIds;
+  final double income;
+  final double expectedIncome;
+
+  const _BudgetData({
+    required this.envelopes,
+    required this.recurringTotals,
+    required this.rawSpend,
+    required this.usedCategoryIds,
+    required this.income,
+    required this.expectedIncome,
+  });
+}
+
 class BudgetScreen extends StatefulWidget {
   const BudgetScreen({super.key});
 
@@ -135,6 +162,55 @@ class _BudgetScreenState extends State<BudgetScreen> {
   /// local view preference only (not saved anywhere), same spirit as
   /// [_selectedCategoryId].
   final Set<int> _expandedScenarioCategoryIds = {};
+
+  Future<_BudgetData>? _apiFuture;
+  ({int accountId, DateTime windowStart})? _apiFutureKey;
+
+  _BudgetData _localData(MmexRepository repo, int accountId, BudgetWindow window) {
+    final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: accountId);
+    return _BudgetData(
+      envelopes: repo.getBudgetEnvelopes(accountId),
+      recurringTotals: recurringTotals,
+      // includeCategorizedTransfersAsExpense: true (2026-09-05 user request) -
+      // voir la même remarque dans _localData/build ci-dessus avant la
+      // restructuration API.
+      rawSpend: repo.categorySpendForPeriod(window.start, window.end,
+          accountId: accountId, includeCategorizedTransfersAsExpense: true),
+      usedCategoryIds: {...repo.categoriesUsedByAccount(accountId), ...recurringTotals.keys},
+      income: repo.incomeForPeriod(window.start, window.end, accountId: accountId),
+      expectedIncome: repo.expectedIncomeForBudget(accountId),
+    );
+  }
+
+  /// Lecture seule - la modification d'une enveloppe, la suggestion
+  /// automatique, la réinitialisation du budget et tout le simulateur
+  /// continuent de passer par le dépôt local même en mode API, voir chaque
+  /// `repo.xxx` plus bas dans cette classe.
+  Future<_BudgetData> _loadViaApi(
+      ApiSessionProvider session, int accountId, BudgetWindow window) async {
+    final recurringTotals = await session.categoryMonthlyRecurringTotals(accountId: accountId);
+    final rawSpend = await session.categorySpendForPeriod(window.start, window.end,
+        accountId: accountId, includeCategorizedTransfersAsExpense: true);
+    final usedByAccount = await session.categoriesUsedByAccount(accountId);
+    final envelopes = await session.getBudgetEnvelopes(accountId);
+    final income = await session.incomeForPeriod(window.start, window.end, accountId: accountId);
+    final expectedIncome = await session.expectedIncomeForBudget(accountId);
+    return _BudgetData(
+      envelopes: envelopes,
+      recurringTotals: recurringTotals,
+      rawSpend: rawSpend,
+      usedCategoryIds: {...usedByAccount, ...recurringTotals.keys},
+      income: income,
+      expectedIncome: expectedIncome,
+    );
+  }
+
+  void _refreshApi(ApiSessionProvider session, int accountId, BudgetWindow window) {
+    setState(() {
+      _apiFutureKey = (accountId: accountId, windowStart: window.start);
+      _apiFuture = _loadViaApi(session, accountId, window);
+    });
+  }
 
   /// Opens a category's full detail (breakdown, sub-categories, recent
   /// transactions, and the inline name/amount editor) as a bottom sheet -
@@ -249,6 +325,7 @@ class _BudgetScreenState extends State<BudgetScreen> {
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
     final sim = context.watch<PurchaseSimulationProvider>();
     final currency = repo.getBaseCurrency();
@@ -266,6 +343,101 @@ class _BudgetScreenState extends State<BudgetScreen> {
         : (visibleAccounts.isEmpty ? null : visibleAccounts.first.id);
 
     final window = budgetWindowContaining(_cursor, startDay);
+
+    // Toujours locales, y compris en mode API : le simulateur ("what if",
+    // voir _buildSimulationBody) en a besoin de façon synchrone, et l'écran
+    // Catégories a déjà sa propre bascule API indépendante pour cette même
+    // liste.
+    final categories = repo.getCategories(onlyActive: false);
+    final categoriesById = {for (final c in categories) c.id: c};
+    final activeCategories = categories.where((c) => c.active).toList();
+
+    if (apiSession.useApiForBudget && accountId != null) {
+      final key = (accountId: accountId, windowStart: window.start);
+      if (_apiFuture == null || _apiFutureKey != key) {
+        _apiFutureKey = key;
+        _apiFuture = _loadViaApi(apiSession, accountId, window);
+      }
+      return FutureBuilder<_BudgetData>(
+        future: _apiFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+          }
+          if (snapshot.hasError) {
+            return Scaffold(body: Center(child: Text('Erreur : ${snapshot.error}')));
+          }
+          return _buildScaffold(
+            context: context,
+            dbProvider: dbProvider,
+            repo: repo,
+            sim: sim,
+            currency: currency,
+            startDay: startDay,
+            accountsById: accountsById,
+            visibleAccounts: visibleAccounts,
+            accountId: accountId,
+            window: window,
+            categories: categories,
+            categoriesById: categoriesById,
+            activeCategories: activeCategories,
+            data: snapshot.data!,
+            apiRefresh: () => _refreshApi(apiSession, accountId, window),
+          );
+        },
+      );
+    }
+
+    _apiFuture = null;
+    return _buildScaffold(
+      context: context,
+      dbProvider: dbProvider,
+      repo: repo,
+      sim: sim,
+      currency: currency,
+      startDay: startDay,
+      accountsById: accountsById,
+      visibleAccounts: visibleAccounts,
+      accountId: accountId,
+      window: window,
+      categories: categories,
+      categoriesById: categoriesById,
+      activeCategories: activeCategories,
+      data: accountId == null
+          ? const _BudgetData(
+              envelopes: [],
+              recurringTotals: {},
+              rawSpend: {},
+              usedCategoryIds: {},
+              income: 0,
+              expectedIncome: 0,
+            )
+          : _localData(repo, accountId, window),
+    );
+  }
+
+  /// [apiRefresh] non-null seulement en mode API - ajoute le bouton de
+  /// rafraîchissement manuel dans l'AppBar (voir [_loadViaApi]). [repo] est
+  /// toujours le dépôt local, quel que soit le mode - l'ajout/édition
+  /// d'enveloppe, les suggestions automatiques, la réinitialisation et tout
+  /// le simulateur continuent de passer par lui.
+  Widget _buildScaffold({
+    required BuildContext context,
+    required DatabaseProvider dbProvider,
+    required MmexRepository repo,
+    required PurchaseSimulationProvider sim,
+    required CurrencyFormat? currency,
+    required int startDay,
+    required Map<int, Account> accountsById,
+    required List<Account> visibleAccounts,
+    required int? accountId,
+    required BudgetWindow window,
+    required List<Category> categories,
+    required Map<int, Category> categoriesById,
+    required List<Category> activeCategories,
+    required _BudgetData data,
+    VoidCallback? apiRefresh,
+  }) {
     final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
     // Only let the user browse forward through windows that have already
     // closed - there's nothing real to show yet for one still in progress
@@ -273,24 +445,10 @@ class _BudgetScreenState extends State<BudgetScreen> {
     final canGoForward = window.end.isBefore(today) || window.end.isAtSameMomentAs(today);
     final isOngoingWindow = !canGoForward;
 
-    final categories = repo.getCategories(onlyActive: false);
-    final categoriesById = {for (final c in categories) c.id: c};
-    final activeCategories = categories.where((c) => c.active).toList();
-
-    final envelopes = accountId == null ? const <BudgetEnvelope>[] : repo.getBudgetEnvelopes(accountId);
-    final recurringTotals = repo.categoryMonthlyRecurringTotals(accountId: accountId);
-    // includeCategorizedTransfersAsExpense: true (2026-09-05 user request) -
-    // a categorized transfer *out* of this account is a real expense for
-    // its budget, even though MMEX itself never calls it a "Withdrawal".
-    final rawSpend = repo.categorySpendForPeriod(window.start, window.end,
-        accountId: accountId, includeCategorizedTransfersAsExpense: true);
-    // Every category id genuinely relevant to this account (ever used on
-    // a real transaction here, or with an active recurring bill) - keeps
-    // the "budget a subcategory" picker from listing subcategories that
-    // only ever appear on a different account.
-    final usedCategoryIds = accountId == null
-        ? const <int>{}
-        : {...repo.categoriesUsedByAccount(accountId), ...recurringTotals.keys};
+    final envelopes = data.envelopes;
+    final recurringTotals = data.recurringTotals;
+    final rawSpend = data.rawSpend;
+    final usedCategoryIds = data.usedCategoryIds;
 
     double simulatedExtraFor(int categoryId) {
       if (sim.amount == null || sim.categoryId != categoryId) return 0;
@@ -415,11 +573,11 @@ class _BudgetScreenState extends State<BudgetScreen> {
     // still-active recurring deposits (salary, etc.) - always shown as
     // the very first gauge, not tied to any envelope, so the budget
     // screen doesn't read as purely about spending.
-    final income = accountId == null ? 0.0 : repo.incomeForPeriod(window.start, window.end, accountId: accountId);
+    final income = data.income;
     // expectedIncomeForBudget prefers a manual override (2026-09-05 user
     // request) over the automatic recurring-bill total, when one is set -
     // see MmexRepository.expectedIncomeForBudget's own doc comment.
-    final expectedIncome = accountId == null ? 0.0 : repo.expectedIncomeForBudget(accountId);
+    final expectedIncome = data.expectedIncome;
 
     // "Reste à vivre" = revenu budgété - dépenses budgétées (2026-09-05
     // user request, reversing the previous "real forecasted account
@@ -459,10 +617,19 @@ class _BudgetScreenState extends State<BudgetScreen> {
               onDone: () => dbProvider.touch(),
             );
 
+    final titleSuffix = apiRefresh != null ? ' (via API)' : '';
     return Scaffold(
       appBar: AppBar(
-        title: Text(accountId == null ? 'Budget' : 'Budget - ${accountsById[accountId]!.name}'),
+        title: Text(accountId == null
+            ? 'Budget'
+            : 'Budget - ${accountsById[accountId]!.name}$titleSuffix'),
         actions: [
+          if (apiRefresh != null)
+            IconButton(
+              tooltip: 'Rafraîchir',
+              icon: const Icon(Icons.refresh),
+              onPressed: apiRefresh,
+            ),
           IconButton(
             tooltip: _simulationMode ? 'Retour au budget' : 'Simulation de budget',
             icon: Icon(_simulationMode ? Icons.pie_chart_outline : Icons.calculate_outlined),

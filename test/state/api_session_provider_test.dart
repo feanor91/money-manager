@@ -103,6 +103,18 @@ void main() {
       expect(() => provider.getCategories(), throwsStateError);
       expect(() => provider.categoryUsage(1), throwsStateError);
     });
+
+    test('the Budget accessors throw a StateError when not connected', () {
+      final provider = ApiSessionProvider();
+      expect(() => provider.getBudgetEnvelopes(1), throwsStateError);
+      expect(() => provider.categoryMonthlyRecurringTotals(), throwsStateError);
+      expect(() => provider.categorySpendForPeriod(DateTime(2026, 3, 1), DateTime(2026, 4, 1)),
+          throwsStateError);
+      expect(() => provider.categoriesUsedByAccount(1), throwsStateError);
+      expect(() => provider.incomeForPeriod(DateTime(2026, 3, 1), DateTime(2026, 4, 1)),
+          throwsStateError);
+      expect(() => provider.expectedIncomeForBudget(1), throwsStateError);
+    });
   });
 
   group('per-screen toggles are independent', () {
@@ -135,10 +147,12 @@ void main() {
       provider.useApiForAccounts = true;
       provider.useApiForPayees = true;
       provider.useApiForCategories = true;
+      provider.useApiForBudget = true;
       await provider.logout();
       expect(provider.useApiForAccounts, isFalse);
       expect(provider.useApiForPayees, isFalse);
       expect(provider.useApiForCategories, isFalse);
+      expect(provider.useApiForBudget, isFalse);
     });
   });
 }
