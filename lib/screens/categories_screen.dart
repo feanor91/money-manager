@@ -3,9 +3,24 @@ import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/category.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+
+/// Bundle des données nécessaires pour dessiner l'écran, qu'elles viennent
+/// du fichier local ou du serveur API - étape 4 du chantier client/serveur
+/// (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md), même principe que
+/// AccountsScreen. [usageOf] est une fonction plutôt qu'un accès direct -
+/// synchrone (appel direct à `repo.categoryUsage`) en local, déjà résolue
+/// à l'avance (une map) en mode API, puisqu'on ne peut pas faire un appel
+/// réseau à chaque item construit dans la liste.
+class _CategoriesData {
+  final List<Category> categories;
+  final CategoryUsage Function(int categoryId) usageOf;
+
+  _CategoriesData({required this.categories, required this.usageOf});
+}
 
 class CategoriesScreen extends StatefulWidget {
   const CategoriesScreen({super.key});
@@ -18,6 +33,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   final _searchController = TextEditingController();
   String _search = '';
   bool _showArchived = false;
+  Future<_CategoriesData>? _apiFuture;
 
   @override
   void dispose() {
@@ -25,13 +41,99 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     super.dispose();
   }
 
+  _CategoriesData _localData(MmexRepository repo) {
+    // When showing archived too, onlyActive:false returns everything so
+    // archived categories can still be found and reactivated from here.
+    return _CategoriesData(
+      categories: repo.getCategories(onlyActive: !_showArchived),
+      usageOf: repo.categoryUsage,
+    );
+  }
+
+  /// Lecture seule - voir AccountsScreen._loadViaApi pour la même nuance
+  /// (les écritures continuent de passer par le fichier local même en
+  /// mode API, pas de rafraîchissement automatique après une modification).
+  Future<_CategoriesData> _loadViaApi(ApiSessionProvider session) async {
+    final categories = await session.getCategories(onlyActive: !_showArchived);
+    final usages = await Future.wait([for (final c in categories) session.categoryUsage(c.id)]);
+    final usageById = {for (var i = 0; i < categories.length; i++) categories[i].id: usages[i]};
+    return _CategoriesData(
+      categories: categories,
+      usageOf: (id) =>
+          usageById[id] ??
+          const CategoryUsage(
+              childCategoryCount: 0,
+              transactionCount: 0,
+              recurringCount: 0,
+              budgetEntryCount: 0,
+              payeeDefaultCount: 0),
+    );
+  }
+
+  void _refreshApi(ApiSessionProvider session) {
+    setState(() => _apiFuture = _loadViaApi(session));
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    // When showing archived too, onlyActive:false returns everything so
-    // archived categories can still be found and reactivated from here.
-    final all = repo.getCategories(onlyActive: !_showArchived);
+
+    if (apiSession.useApiForCategories) {
+      _apiFuture ??= _loadViaApi(apiSession);
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Catégories (via API)'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Rafraîchir',
+              onPressed: () => _refreshApi(apiSession),
+            ),
+          ],
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () async {
+            await _addCategory(context, repo, parentId: null);
+            dbProvider.touch();
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Nouvelle catégorie'),
+        ),
+        body: FutureBuilder<_CategoriesData>(
+          future: _apiFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Erreur : ${snapshot.error}'));
+            }
+            return _buildBody(context, dbProvider, repo, snapshot.data!);
+          },
+        ),
+      );
+    }
+
+    _apiFuture = null;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Catégories')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () async {
+          await _addCategory(context, repo, parentId: null);
+          dbProvider.touch();
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('Nouvelle catégorie'),
+      ),
+      body: _buildBody(context, dbProvider, repo, _localData(repo)),
+    );
+  }
+
+  Widget _buildBody(
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _CategoriesData data) {
+    final all = data.categories;
     final byParent = <int?, List<Category>>{};
     for (final c in all) {
       byParent.putIfAbsent(c.parentId, () => []).add(c);
@@ -47,73 +149,63 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             return matches(p) || children.any(matches);
           }).toList();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Catégories')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await _addCategory(context, repo, parentId: null);
-          dbProvider.touch();
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Nouvelle catégorie'),
-      ),
-      body: ResponsiveBody(
-        maxWidth: 800,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        hintText: 'Rechercher une catégorie',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (v) => setState(() => _search = v),
+    return ResponsiveBody(
+      maxWidth: 800,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'Rechercher une catégorie',
+                      isDense: true,
+                      border: OutlineInputBorder(),
                     ),
+                    onChanged: (v) => setState(() => _search = v),
                   ),
-                  const SizedBox(width: 12),
-                  Tooltip(
-                    message: 'Afficher les catégories archivées',
-                    child: FilterChip(
-                      label: const Text('Archivées'),
-                      selected: _showArchived,
-                      onSelected: (v) => setState(() => _showArchived = v),
-                    ),
+                ),
+                const SizedBox(width: 12),
+                Tooltip(
+                  message: 'Afficher les catégories archivées',
+                  child: FilterChip(
+                    label: const Text('Archivées'),
+                    selected: _showArchived,
+                    onSelected: (v) => setState(() => _showArchived = v),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-            Expanded(
-              child: visibleParents.isEmpty
-                  ? const Center(child: Text('Aucune catégorie'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 96),
-                      itemCount: visibleParents.length,
-                      itemBuilder: (context, index) {
-                        final parent = visibleParents[index];
-                        final allChildren = byParent[parent.id] ?? const <Category>[];
-                        final children = query.isEmpty || matches(parent)
-                            ? allChildren
-                            : allChildren.where(matches).toList();
-                        return _CategoryGroup(
-                          key: ValueKey(parent.id),
-                          parent: parent,
-                          children: children,
-                          repo: repo,
-                          initiallyExpanded: query.isNotEmpty,
-                          onChanged: () => dbProvider.touch(),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+          ),
+          Expanded(
+            child: visibleParents.isEmpty
+                ? const Center(child: Text('Aucune catégorie'))
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(8, 8, 8, 96),
+                    itemCount: visibleParents.length,
+                    itemBuilder: (context, index) {
+                      final parent = visibleParents[index];
+                      final allChildren = byParent[parent.id] ?? const <Category>[];
+                      final children = query.isEmpty || matches(parent)
+                          ? allChildren
+                          : allChildren.where(matches).toList();
+                      return _CategoryGroup(
+                        key: ValueKey(parent.id),
+                        parent: parent,
+                        children: children,
+                        repo: repo,
+                        usageOf: data.usageOf,
+                        initiallyExpanded: query.isNotEmpty,
+                        onChanged: () => dbProvider.touch(),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -123,6 +215,7 @@ class _CategoryGroup extends StatelessWidget {
   final Category parent;
   final List<Category> children;
   final MmexRepository repo;
+  final CategoryUsage Function(int categoryId) usageOf;
   final bool initiallyExpanded;
   final VoidCallback onChanged;
 
@@ -131,13 +224,14 @@ class _CategoryGroup extends StatelessWidget {
     required this.parent,
     required this.children,
     required this.repo,
+    required this.usageOf,
     required this.initiallyExpanded,
     required this.onChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    final usage = repo.categoryUsage(parent.id);
+    final usage = usageOf(parent.id);
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       clipBehavior: Clip.antiAlias,
@@ -164,10 +258,10 @@ class _CategoryGroup extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 16),
                 child: ListTile(
-                  title: _CategoryTitle(category: child, usage: repo.categoryUsage(child.id)),
+                  title: _CategoryTitle(category: child, usage: usageOf(child.id)),
                   trailing: _CategoryMenu(
                     category: child,
-                    usage: repo.categoryUsage(child.id),
+                    usage: usageOf(child.id),
                     repo: repo,
                     onChanged: onChanged,
                     allowAddChild: false,

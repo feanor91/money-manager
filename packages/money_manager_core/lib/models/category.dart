@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'category.g.dart';
+
+@JsonSerializable()
 class Category {
   final int id;
   final String name;
@@ -20,10 +25,14 @@ class Category {
       parentId: (parent == null || parent == -1) ? null : parent,
     );
   }
+
+  factory Category.fromJson(Map<String, dynamic> json) => _$CategoryFromJson(json);
+  Map<String, dynamic> toJson() => _$CategoryToJson(this);
 }
 
 /// What still references a category - see [MmexRepository.categoryUsage].
 /// A category can be safely hard-deleted only when every count here is 0.
+@JsonSerializable()
 class CategoryUsage {
   final int childCategoryCount;
   final int transactionCount;
@@ -38,6 +47,9 @@ class CategoryUsage {
     required this.budgetEntryCount,
     required this.payeeDefaultCount,
   });
+
+  factory CategoryUsage.fromJson(Map<String, dynamic> json) => _$CategoryUsageFromJson(json);
+  Map<String, dynamic> toJson() => _$CategoryUsageToJson(this);
 
   bool get canDelete =>
       childCategoryCount == 0 &&

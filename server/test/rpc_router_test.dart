@@ -12,11 +12,15 @@ void main() {
   late Handler router;
   late TokenStore tokenStore;
   late int accountId;
+  late int payeeId;
+  late int categoryId;
 
   setUp(() async {
     final repo = await openBlankTestRepo();
     accountId = repo.insertAccount(
         name: 'Compte Courant', type: 'Checking', initialBalance: 1000, currencyId: 2);
+    payeeId = repo.insertPayee(name: 'Carrefour');
+    categoryId = repo.insertCategory(name: 'Catégorie de test RPC'); // nom garanti absent du schéma vierge seedé
     tokenStore = TokenStore();
     router = buildRouter(
       repo: repo,
@@ -100,6 +104,50 @@ void main() {
       final response = await router(post('/rpc/accountBalance',
           token: token, body: {'accountId': accountId, 'asOf': '2020-01-01T00:00:00.000'}));
       expect(response.statusCode, 200);
+    });
+  });
+
+  group('POST /rpc/getPayees', () {
+    test('returns the real payees for a valid token', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getPayees', token: token));
+      expect(response.statusCode, 200);
+      final payees = jsonDecode(await response.readAsString()) as List;
+      expect(payees, hasLength(1));
+      expect(payees.single['name'], 'Carrefour');
+    });
+  });
+
+  group('POST /rpc/payeeUsageCount', () {
+    test('returns 0 for an unused payee', () async {
+      final token = tokenStore.issue();
+      final response =
+          await router(post('/rpc/payeeUsageCount', token: token, body: {'payeeId': payeeId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['count'], 0);
+    });
+  });
+
+  group('POST /rpc/getCategories', () {
+    test('returns the real categories for a valid token', () async {
+      final token = tokenStore.issue();
+      final response = await router(post('/rpc/getCategories', token: token));
+      expect(response.statusCode, 200);
+      final categories = jsonDecode(await response.readAsString()) as List;
+      expect(categories.any((c) => c['name'] == 'Catégorie de test RPC'), isTrue);
+    });
+  });
+
+  group('POST /rpc/categoryUsage', () {
+    test('returns zero counts for an unused category', () async {
+      final token = tokenStore.issue();
+      final response = await router(
+          post('/rpc/categoryUsage', token: token, body: {'categoryId': categoryId}));
+      expect(response.statusCode, 200);
+      final json = jsonDecode(await response.readAsString()) as Map<String, dynamic>;
+      expect(json['transactionCount'], 0);
+      expect(json['childCategoryCount'], 0);
     });
   });
 

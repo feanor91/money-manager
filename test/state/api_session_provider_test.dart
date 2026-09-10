@@ -95,5 +95,50 @@ void main() {
       final provider = ApiSessionProvider();
       expect(() => provider.accountBalance(1), throwsStateError);
     });
+
+    test('getPayees/payeeUsageCount/getCategories/categoryUsage throw when not connected', () {
+      final provider = ApiSessionProvider();
+      expect(() => provider.getPayees(), throwsStateError);
+      expect(() => provider.payeeUsageCount(1), throwsStateError);
+      expect(() => provider.getCategories(), throwsStateError);
+      expect(() => provider.categoryUsage(1), throwsStateError);
+    });
+  });
+
+  group('per-screen toggles are independent', () {
+    test('each screen toggle can be set without affecting the others', () async {
+      final provider = ApiSessionProvider(
+        httpClient: MockClient((request) async => http.Response(jsonEncode({'token': 'abc'}), 200)),
+      );
+      await provider.login('http://test', '1234');
+      provider.useApiForAccounts = true;
+      expect(provider.useApiForAccounts, isTrue);
+      expect(provider.useApiForPayees, isFalse);
+      expect(provider.useApiForCategories, isFalse);
+
+      provider.useApiForCategories = true;
+      expect(provider.useApiForAccounts, isTrue);
+      expect(provider.useApiForPayees, isFalse);
+      expect(provider.useApiForCategories, isTrue);
+    });
+
+    test('logout clears every per-screen toggle', () async {
+      final provider = ApiSessionProvider(
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response('', 200);
+        }),
+      );
+      await provider.login('http://test', '1234');
+      provider.useApiForAccounts = true;
+      provider.useApiForPayees = true;
+      provider.useApiForCategories = true;
+      await provider.logout();
+      expect(provider.useApiForAccounts, isFalse);
+      expect(provider.useApiForPayees, isFalse);
+      expect(provider.useApiForCategories, isFalse);
+    });
   });
 }

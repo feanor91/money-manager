@@ -1,7 +1,9 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide Category;
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 
 import '../services/api/api_client.dart';
 
@@ -19,7 +21,13 @@ class ApiSessionProvider extends ChangeNotifier {
   ApiClient? _client;
   String? _error;
   bool _busy = false;
-  bool _useApiForAccounts = false;
+
+  /// Bascules de lecture par écran (étape 4) - un nom d'écran par entrée
+  /// ('accounts', 'payees', 'categories', ...), en mémoire seulement pour
+  /// l'instant (pas persistées entre deux lancements de l'appli). Vidées
+  /// à la déconnexion pour ne jamais laisser un écran croire qu'il peut
+  /// encore lire un serveur qui n'est plus joignable.
+  final Set<String> _apiScreens = {};
 
   /// [httpClient] injectable pour les tests (voir
   /// test/state/api_session_provider_test.dart) - un vrai client HTTP par
@@ -31,15 +39,24 @@ class ApiSessionProvider extends ChangeNotifier {
   String? get error => _error;
   String? get serverUrl => _client?.baseUrl;
 
-  /// Bascule de lecture pour l'écran Comptes (étape 4) - en mémoire
-  /// seulement pour l'instant (pas persistée entre deux lancements de
-  /// l'appli), remise à faux si la session se déconnecte pour ne jamais
-  /// laisser l'écran essayer de lire un serveur qui n'est plus joignable.
-  bool get useApiForAccounts => _useApiForAccounts && isConnected;
-  set useApiForAccounts(bool value) {
-    _useApiForAccounts = value;
+  bool _useApiFor(String screen) => _apiScreens.contains(screen) && isConnected;
+  void _setUseApiFor(String screen, bool value) {
+    if (value) {
+      _apiScreens.add(screen);
+    } else {
+      _apiScreens.remove(screen);
+    }
     notifyListeners();
   }
+
+  bool get useApiForAccounts => _useApiFor('accounts');
+  set useApiForAccounts(bool value) => _setUseApiFor('accounts', value);
+
+  bool get useApiForPayees => _useApiFor('payees');
+  set useApiForPayees(bool value) => _setUseApiFor('payees', value);
+
+  bool get useApiForCategories => _useApiFor('categories');
+  set useApiForCategories(bool value) => _setUseApiFor('categories', value);
 
   Future<void> login(String serverUrl, String pin) async {
     _busy = true;
@@ -60,24 +77,30 @@ class ApiSessionProvider extends ChangeNotifier {
   Future<void> logout() async {
     await _client?.logout();
     _client = null;
+    _apiScreens.clear();
     notifyListeners();
   }
 
-  Future<List<Account>> getAccounts({bool onlyOpen = false}) {
-    final client = _client;
-    if (client == null) throw StateError('Pas connecté au serveur API.');
-    return client.getAccounts(onlyOpen: onlyOpen);
-  }
+  Future<List<Account>> getAccounts({bool onlyOpen = false}) => _requireClient().getAccounts(onlyOpen: onlyOpen);
 
-  Future<CurrencyFormat?> getBaseCurrency() {
-    final client = _client;
-    if (client == null) throw StateError('Pas connecté au serveur API.');
-    return client.getBaseCurrency();
-  }
+  Future<CurrencyFormat?> getBaseCurrency() => _requireClient().getBaseCurrency();
 
-  Future<double> accountBalance(int accountId, {DateTime? asOf}) {
+  Future<double> accountBalance(int accountId, {DateTime? asOf}) =>
+      _requireClient().accountBalance(accountId, asOf: asOf);
+
+  Future<List<Payee>> getPayees({bool onlyActive = true}) =>
+      _requireClient().getPayees(onlyActive: onlyActive);
+
+  Future<int> payeeUsageCount(int payeeId) => _requireClient().payeeUsageCount(payeeId);
+
+  Future<List<Category>> getCategories({bool onlyActive = true}) =>
+      _requireClient().getCategories(onlyActive: onlyActive);
+
+  Future<CategoryUsage> categoryUsage(int categoryId) => _requireClient().categoryUsage(categoryId);
+
+  ApiClient _requireClient() {
     final client = _client;
     if (client == null) throw StateError('Pas connecté au serveur API.');
-    return client.accountBalance(accountId, asOf: asOf);
+    return client;
   }
 }

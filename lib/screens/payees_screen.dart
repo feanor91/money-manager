@@ -3,9 +3,21 @@ import 'package:provider/provider.dart';
 
 import 'package:money_manager_core/data/mmex_repository.dart';
 import 'package:money_manager_core/models/payee.dart';
+import '../state/api_session_provider.dart';
 import '../state/database_provider.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
+
+/// Bundle des données nécessaires pour dessiner l'écran, qu'elles viennent
+/// du fichier local ou du serveur API - étape 4 du chantier client/serveur
+/// (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md), même principe
+/// qu'AccountsScreen/CategoriesScreen.
+class _PayeesData {
+  final List<Payee> payees;
+  final int Function(int payeeId) usageCountOf;
+
+  _PayeesData({required this.payees, required this.usageCountOf});
+}
 
 /// "Gestion des tiers" (Paramètres) - 2026-08-23 user request: a flat list
 /// of every payee with how many real records reference it, rename in
@@ -26,6 +38,7 @@ class PayeesScreen extends StatefulWidget {
 class _PayeesScreenState extends State<PayeesScreen> {
   final _searchController = TextEditingController();
   String _search = '';
+  Future<_PayeesData>? _apiFuture;
 
   @override
   void dispose() {
@@ -33,57 +46,114 @@ class _PayeesScreenState extends State<PayeesScreen> {
     super.dispose();
   }
 
+  _PayeesData _localData(MmexRepository repo) {
+    return _PayeesData(
+      payees: repo.getPayees(onlyActive: false),
+      usageCountOf: repo.payeeUsageCount,
+    );
+  }
+
+  /// Lecture seule - voir AccountsScreen._loadViaApi pour la même nuance
+  /// (les écritures continuent de passer par le fichier local même en
+  /// mode API, pas de rafraîchissement automatique après une modification).
+  Future<_PayeesData> _loadViaApi(ApiSessionProvider session) async {
+    final payees = await session.getPayees(onlyActive: false);
+    final counts = await Future.wait([for (final p in payees) session.payeeUsageCount(p.id)]);
+    final countById = {for (var i = 0; i < payees.length; i++) payees[i].id: counts[i]};
+    return _PayeesData(payees: payees, usageCountOf: (id) => countById[id] ?? 0);
+  }
+
+  void _refreshApi(ApiSessionProvider session) {
+    setState(() => _apiFuture = _loadViaApi(session));
+  }
+
   @override
   Widget build(BuildContext context) {
     final dbProvider = context.watch<DatabaseProvider>();
+    final apiSession = context.watch<ApiSessionProvider>();
     final repo = dbProvider.repository!;
-    final all = repo.getPayees(onlyActive: false)..sort((a, b) =>
-        a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    if (apiSession.useApiForPayees) {
+      _apiFuture ??= _loadViaApi(apiSession);
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Tiers (via API)'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Rafraîchir',
+              onPressed: () => _refreshApi(apiSession),
+            ),
+          ],
+        ),
+        body: FutureBuilder<_PayeesData>(
+          future: _apiFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              return Center(child: Text('Erreur : ${snapshot.error}'));
+            }
+            return _buildBody(context, dbProvider, repo, snapshot.data!);
+          },
+        ),
+      );
+    }
+
+    _apiFuture = null;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Tiers')),
+      body: _buildBody(context, dbProvider, repo, _localData(repo)),
+    );
+  }
+
+  Widget _buildBody(
+      BuildContext context, DatabaseProvider dbProvider, MmexRepository repo, _PayeesData data) {
+    final all = [...data.payees]
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     final query = _search.trim().toLowerCase();
     final visible =
         query.isEmpty ? all : all.where((p) => p.name.toLowerCase().contains(query)).toList();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Tiers')),
-      body: ResponsiveBody(
-        maxWidth: 800,
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: TextField(
-                controller: _searchController,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: 'Rechercher un tiers',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (v) => setState(() => _search = v),
+    return ResponsiveBody(
+      maxWidth: 800,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Rechercher un tiers',
+                isDense: true,
+                border: OutlineInputBorder(),
               ),
+              onChanged: (v) => setState(() => _search = v),
             ),
-            Expanded(
-              child: visible.isEmpty
-                  ? const Center(child: Text('Aucun tiers'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
-                      itemCount: visible.length,
-                      itemBuilder: (context, index) {
-                        final payee = visible[index];
-                        return _PayeeRow(
-                          key: ValueKey(payee.id),
-                          payee: payee,
-                          usageCount: repo.payeeUsageCount(payee.id),
-                          repo: repo,
-                          allPayees: all,
-                          onChanged: () => dbProvider.touch(),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+          ),
+          Expanded(
+            child: visible.isEmpty
+                ? const Center(child: Text('Aucun tiers'))
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final payee = visible[index];
+                      return _PayeeRow(
+                        key: ValueKey(payee.id),
+                        payee: payee,
+                        usageCount: data.usageCountOf(payee.id),
+                        repo: repo,
+                        allPayees: all,
+                        onChanged: () => dbProvider.touch(),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }

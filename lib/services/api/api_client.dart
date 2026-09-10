@@ -2,7 +2,9 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:money_manager_core/models/account.dart';
+import 'package:money_manager_core/models/category.dart';
 import 'package:money_manager_core/models/currency.dart';
+import 'package:money_manager_core/models/payee.dart';
 
 /// Client HTTP pour le serveur API (voir PLAN_ARCHITECTURE_CLIENT_SERVEUR.md).
 /// Couvre les routes réellement exposées par le serveur à ce stade de
@@ -73,6 +75,28 @@ class ApiClient {
       if (asOf != null) 'asOf': asOf.toIso8601String(),
     });
     return (json as Map<String, dynamic>)['balance'] as double;
+  }
+
+  Future<List<Payee>> getPayees({bool onlyActive = true}) async {
+    final json = await _rpc('getPayees', query: {'onlyActive': '$onlyActive'});
+    final list = json as List;
+    return [for (final row in list) Payee.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<int> payeeUsageCount(int payeeId) async {
+    final json = await _rpc('payeeUsageCount', body: {'payeeId': payeeId});
+    return (json as Map<String, dynamic>)['count'] as int;
+  }
+
+  Future<List<Category>> getCategories({bool onlyActive = true}) async {
+    final json = await _rpc('getCategories', query: {'onlyActive': '$onlyActive'});
+    final list = json as List;
+    return [for (final row in list) Category.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<CategoryUsage> categoryUsage(int categoryId) async {
+    final json = await _rpc('categoryUsage', body: {'categoryId': categoryId});
+    return CategoryUsage.fromJson(json as Map<String, dynamic>);
   }
 
   Future<dynamic> _rpc(String method, {Map<String, String>? query, Map<String, dynamic>? body}) async {

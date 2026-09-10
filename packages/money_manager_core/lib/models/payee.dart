@@ -1,3 +1,8 @@
+import 'package:json_annotation/json_annotation.dart';
+
+part 'payee.g.dart';
+
+@JsonSerializable()
 class Payee {
   final int id;
   final String name;
@@ -19,4 +24,7 @@ class Payee {
       categoryId: row['CATEGID'] as int?,
     );
   }
+
+  factory Payee.fromJson(Map<String, dynamic> json) => _$PayeeFromJson(json);
+  Map<String, dynamic> toJson() => _$PayeeToJson(this);
 }

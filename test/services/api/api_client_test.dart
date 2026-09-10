@@ -135,4 +135,86 @@ void main() {
       expect(calls, 0);
     });
   });
+
+  group('getPayees / payeeUsageCount', () {
+    test('parses payees and forwards onlyActive as a query param', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          expect(request.url.path, '/rpc/getPayees');
+          expect(request.url.queryParameters['onlyActive'], 'false');
+          return http.Response(
+              jsonEncode([
+                {'id': 1, 'name': 'Carrefour', 'categoryId': null, 'active': true}
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final payees = await client.getPayees(onlyActive: false);
+      expect(payees.single.name, 'Carrefour');
+    });
+
+    test('returns the usage count', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(jsonEncode({'count': 3}), 200);
+        }),
+      );
+      await client.login('1234');
+      expect(await client.payeeUsageCount(1), 3);
+    });
+  });
+
+  group('getCategories / categoryUsage', () {
+    test('parses categories', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode([
+                {'id': 9, 'name': 'Alimentation', 'parentId': null, 'active': true}
+              ]),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final categories = await client.getCategories();
+      expect(categories.single.name, 'Alimentation');
+    });
+
+    test('parses category usage', () async {
+      final client = ApiClient(
+        baseUrl: 'http://test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/login') {
+            return http.Response(jsonEncode({'token': 'abc'}), 200);
+          }
+          return http.Response(
+              jsonEncode({
+                'childCategoryCount': 0,
+                'transactionCount': 5,
+                'recurringCount': 0,
+                'budgetEntryCount': 0,
+                'payeeDefaultCount': 0,
+              }),
+              200);
+        }),
+      );
+      await client.login('1234');
+      final usage = await client.categoryUsage(9);
+      expect(usage.transactionCount, 5);
+      expect(usage.canDelete, isFalse);
+    });
+  });
 }

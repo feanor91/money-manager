@@ -340,6 +340,22 @@ class SettingsScreen extends StatelessWidget {
                         ? (v) => apiSession.useApiForAccounts = v
                         : null,
                   ),
+                  SwitchListTile(
+                    title: const Text('Tiers via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "L'écran Tiers lit ses données depuis le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForPayees,
+                    onChanged:
+                        apiSession.isConnected ? (v) => apiSession.useApiForPayees = v : null,
+                  ),
+                  SwitchListTile(
+                    title: const Text('Catégories via API (lecture, chantier)'),
+                    subtitle: const Text(
+                        "L'écran Catégories lit ses données depuis le serveur au lieu du fichier local"),
+                    value: apiSession.useApiForCategories,
+                    onChanged:
+                        apiSession.isConnected ? (v) => apiSession.useApiForCategories = v : null,
+                  ),
                 ],
               ),
             );

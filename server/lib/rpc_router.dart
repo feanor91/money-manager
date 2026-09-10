@@ -83,6 +83,26 @@ Router buildRouter({
         asOf: asOfStr == null ? null : DateTime.parse(asOfStr));
     return Response.ok(jsonEncode({'balance': balance}));
   });
+  rpcRouter.post('/getPayees', (Request request) async {
+    final onlyActive = request.url.queryParameters['onlyActive'] != 'false';
+    final payees = repo.getPayees(onlyActive: onlyActive);
+    return Response.ok(jsonEncode([for (final p in payees) p.toJson()]));
+  });
+  rpcRouter.post('/payeeUsageCount', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final count = repo.payeeUsageCount(body['payeeId'] as int);
+    return Response.ok(jsonEncode({'count': count}));
+  });
+  rpcRouter.post('/getCategories', (Request request) async {
+    final onlyActive = request.url.queryParameters['onlyActive'] != 'false';
+    final categories = repo.getCategories(onlyActive: onlyActive);
+    return Response.ok(jsonEncode([for (final c in categories) c.toJson()]));
+  });
+  rpcRouter.post('/categoryUsage', (Request request) async {
+    final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+    final usage = repo.categoryUsage(body['categoryId'] as int);
+    return Response.ok(jsonEncode(usage.toJson()));
+  });
 
   router.mount(
       '/rpc', const Pipeline().addMiddleware(_bearerAuth(tokenStore)).addHandler(rpcRouter.call));
