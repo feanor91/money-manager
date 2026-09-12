@@ -874,6 +874,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
             transferToAccountId: _toAccountId,
             oldCategoryId: oldCategoryId,
             newCategoryId: _categoryId!,
+            oldNotes: widget.existing!.notes,
           );
         } else if (!isTransfer && payeeId != -1) {
           categoryChange = (
@@ -882,6 +883,7 @@ class _RecurringEditorSheetState extends State<RecurringEditorSheet> {
             transferToAccountId: null,
             oldCategoryId: oldCategoryId,
             newCategoryId: _categoryId!,
+            oldNotes: widget.existing!.notes,
           );
         }
       }

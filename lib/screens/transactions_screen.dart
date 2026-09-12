@@ -2330,6 +2330,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
             transferToAccountId: _toAccountId,
             oldCategoryId: oldCategoryId,
             newCategoryId: _categoryId!,
+            oldNotes: widget.existing!.notes,
           );
         } else if (!isTransfer && payeeId != -1) {
           categoryChange = (
@@ -2338,6 +2339,7 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
             transferToAccountId: null,
             oldCategoryId: oldCategoryId,
             newCategoryId: _categoryId!,
+            oldNotes: widget.existing!.notes,
           );
         }
       }

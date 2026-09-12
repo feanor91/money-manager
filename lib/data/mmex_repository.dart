@@ -1123,25 +1123,32 @@ class MmexRepository {
     return rows.isEmpty ? null : rows.first['BILLID'] as int;
   }
 
-  /// How many real ledger transactions share [payeeId] and [categoryId] -
-  /// "identical" for the purposes of a bulk category reassignment (see
-  /// [bulkReassignTransactionCategory]): same payee and same current
-  /// category, regardless of account or amount - a payee's category is
-  /// normally stable across both (groceries vary in amount every time but
-  /// stay the same category; the same payee can pay from more than one of
-  /// the user's own accounts).
+  /// How many real ledger transactions share [payeeId], [categoryId] and
+  /// [notes] - "identical" for the purposes of a bulk category reassignment
+  /// (see [bulkReassignTransactionCategory]): same payee, same current
+  /// category, and now also the same remarque (2026-09 user report: two
+  /// unrelated loan repayments - one ~255€ "Complément prêt travaux", one
+  /// ~1218€ "Prêt immobilier" - shared payee and category without sharing
+  /// an amount, so the note is the only thing left in this app's data model
+  /// that tells them apart; amount itself is deliberately never part of
+  /// this match, since it legitimately varies occurrence to occurrence for
+  /// a real recurring payment). Null and '' are treated as the same "no
+  /// remarque" value, not as "don't filter on notes at all" - this always
+  /// filters on it. Regardless of account - a payee's category/remarque
+  /// pairing is normally stable across the user's own accounts.
   int countTransactionsMatching(
-      {required int payeeId, required int categoryId}) {
+      {required int payeeId, required int categoryId, required String? notes}) {
     final rows = db.query(
       'SELECT COUNT(*) AS c FROM CHECKINGACCOUNT_V1 WHERE PAYEEID = ? AND CATEGID = ? '
+      "AND TRIM(COALESCE(NOTES, '')) = TRIM(COALESCE(?, '')) "
       "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
-      [payeeId, categoryId],
+      [payeeId, categoryId, notes],
     );
     return rows.first['c'] as int;
   }
 
-  /// Reassigns every real ledger transaction matching [payeeId] and
-  /// [oldCategoryId] to [newCategoryId] at once - see
+  /// Reassigns every real ledger transaction matching [payeeId],
+  /// [oldCategoryId] and [notes] to [newCategoryId] at once - see
   /// [countTransactionsMatching] for what "matching" means. Offered after
   /// changing a single transaction's category (or a recurring bill's -
   /// bills live in a separate table, but this always sweeps the ledger)
@@ -1150,11 +1157,13 @@ class MmexRepository {
     required int payeeId,
     required int oldCategoryId,
     required int newCategoryId,
+    required String? notes,
   }) {
     db.execute(
       'UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE PAYEEID = ? AND CATEGID = ? '
+      "AND TRIM(COALESCE(NOTES, '')) = TRIM(COALESCE(?, '')) "
       "AND UPPER(TRIM(STATUS)) != 'V' AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
-      [newCategoryId, payeeId, oldCategoryId],
+      [newCategoryId, payeeId, oldCategoryId, notes],
     );
   }
 
@@ -1163,34 +1172,40 @@ class MmexRepository {
   /// TransactionEditorSheet/RecurringEditorSheet's own _save), so the
   /// (source, destination) account pair plays the role a payee normally
   /// would for identifying "the same recurring transfer" across months.
+  /// Also matches on [notes] - see countTransactionsMatching's own doc
+  /// comment for why.
   int countTransfersMatching({
     required int accountId,
     required int toAccountId,
     required int categoryId,
+    required String? notes,
   }) {
     final rows = db.query(
       'SELECT COUNT(*) AS c FROM CHECKINGACCOUNT_V1 WHERE ACCOUNTID = ? AND TOACCOUNTID = ? '
       "AND CATEGID = ? AND TRANSCODE = 'Transfer' AND UPPER(TRIM(STATUS)) != 'V' "
+      "AND TRIM(COALESCE(NOTES, '')) = TRIM(COALESCE(?, '')) "
       "AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
-      [accountId, toAccountId, categoryId],
+      [accountId, toAccountId, categoryId, notes],
     );
     return rows.first['c'] as int;
   }
 
   /// Reassigns every real ledger transfer matching [accountId],
-  /// [toAccountId] and [oldCategoryId] to [newCategoryId] at once - see
-  /// [countTransfersMatching].
+  /// [toAccountId], [oldCategoryId] and [notes] to [newCategoryId] at once -
+  /// see [countTransfersMatching].
   void bulkReassignTransferCategory({
     required int accountId,
     required int toAccountId,
     required int oldCategoryId,
     required int newCategoryId,
+    required String? notes,
   }) {
     db.execute(
       'UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE ACCOUNTID = ? AND TOACCOUNTID = ? '
       "AND CATEGID = ? AND TRANSCODE = 'Transfer' AND UPPER(TRIM(STATUS)) != 'V' "
+      "AND TRIM(COALESCE(NOTES, '')) = TRIM(COALESCE(?, '')) "
       "AND (DELETEDTIME IS NULL OR DELETEDTIME = '')",
-      [newCategoryId, accountId, toAccountId, oldCategoryId],
+      [newCategoryId, accountId, toAccountId, oldCategoryId, notes],
     );
   }
 

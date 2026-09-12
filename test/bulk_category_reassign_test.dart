@@ -38,7 +38,8 @@ void main() {
     db.dispose();
   });
 
-  int insertTx({required int payee, required int category, double amount = 10}) {
+  int insertTx(
+      {required int payee, required int category, double amount = 10, String? notes}) {
     return repo.insertTransaction(
       accountId: accountId,
       payeeId: payee,
@@ -46,10 +47,16 @@ void main() {
       amount: amount,
       date: DateTime.now(),
       categoryId: category,
+      notes: notes,
     );
   }
 
-  int insertTransfer({required int from, required int to, required int category, double amount = 700}) {
+  int insertTransfer(
+      {required int from,
+      required int to,
+      required int category,
+      double amount = 700,
+      String? notes}) {
     return repo.insertTransaction(
       accountId: from,
       toAccountId: to,
@@ -59,11 +66,14 @@ void main() {
       toAmount: amount,
       date: DateTime.now(),
       categoryId: category,
+      notes: notes,
     );
   }
 
   test('countTransactionsMatching is 0 when nothing matches', () {
-    expect(repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId), 0);
+    expect(
+        repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId, notes: null),
+        0);
   });
 
   test('countTransactionsMatching counts every transaction sharing payee and category', () {
@@ -72,7 +82,35 @@ void main() {
     insertTx(payee: payeeId, category: newCategoryId); // different category - not counted
     insertTx(payee: otherPayeeId, category: oldCategoryId); // different payee - not counted
 
-    expect(repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId), 2);
+    expect(
+        repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId, notes: null),
+        2);
+  });
+
+  // 2026-09 user report: two unrelated loan repayments (one ~255€
+  // "Complément prêt travaux", one ~1218€ "Prêt immobilier") shared the
+  // same payee and category without sharing an amount - the remarque is
+  // the only thing left in this app's data model telling them apart.
+  test('countTransactionsMatching does not mix transactions with a different remarque', () {
+    insertTx(payee: payeeId, category: oldCategoryId, notes: 'Prêt immobilier', amount: 1218.08);
+    insertTx(payee: payeeId, category: oldCategoryId, notes: 'Prêt immobilier', amount: 1218.08);
+    insertTx(payee: payeeId, category: oldCategoryId, notes: 'Complément prêt travaux', amount: 255.59);
+
+    expect(
+      repo.countTransactionsMatching(
+          payeeId: payeeId, categoryId: oldCategoryId, notes: 'Prêt immobilier'),
+      2, // les deux "Prêt immobilier" - jamais celle à 255,59€
+    );
+  });
+
+  test('countTransactionsMatching treats null and empty remarque as the same "no remarque"', () {
+    insertTx(payee: payeeId, category: oldCategoryId, notes: null);
+    insertTx(payee: payeeId, category: oldCategoryId, notes: '');
+
+    expect(
+      repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId, notes: null),
+      2, // null et '' comptent comme la même "absence de remarque"
+    );
   });
 
   test('countTransactionsMatching excludes a voided transaction', () {
@@ -80,7 +118,9 @@ void main() {
     final voidedId = insertTx(payee: payeeId, category: oldCategoryId);
     db.execute('UPDATE CHECKINGACCOUNT_V1 SET STATUS = ? WHERE TRANSID = ?', ['V', voidedId]);
 
-    expect(repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId), 1);
+    expect(
+        repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId, notes: null),
+        1);
   });
 
   test('countTransactionsMatching excludes a soft-deleted transaction', () {
@@ -89,7 +129,9 @@ void main() {
     db.execute(
         'UPDATE CHECKINGACCOUNT_V1 SET DELETEDTIME = ? WHERE TRANSID = ?', ['2026-01-01', deletedId]);
 
-    expect(repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId), 1);
+    expect(
+        repo.countTransactionsMatching(payeeId: payeeId, categoryId: oldCategoryId, notes: null),
+        1);
   });
 
   test('bulkReassignTransactionCategory updates every matching transaction', () {
@@ -100,6 +142,7 @@ void main() {
       payeeId: payeeId,
       oldCategoryId: oldCategoryId,
       newCategoryId: newCategoryId,
+      notes: null,
     );
 
     final txns = {for (final t in repo.getTransactions(accountId: accountId)) t.id: t};
@@ -117,11 +160,30 @@ void main() {
       payeeId: payeeId,
       oldCategoryId: oldCategoryId,
       newCategoryId: newCategoryId,
+      notes: null,
     );
 
     final txns = {for (final t in repo.getTransactions(accountId: accountId)) t.id: t};
     expect(txns[samePayeeDifferentCategory]!.categoryId, unrelatedCategoryId);
     expect(txns[differentPayeeSameCategory]!.categoryId, oldCategoryId);
+  });
+
+  test('bulkReassignTransactionCategory leaves a different remarque alone', () {
+    final matching = insertTx(
+        payee: payeeId, category: oldCategoryId, notes: 'Complément prêt travaux', amount: 255.59);
+    final untouched =
+        insertTx(payee: payeeId, category: oldCategoryId, notes: 'Prêt immobilier', amount: 1218.08);
+
+    repo.bulkReassignTransactionCategory(
+      payeeId: payeeId,
+      oldCategoryId: oldCategoryId,
+      newCategoryId: newCategoryId,
+      notes: 'Complément prêt travaux',
+    );
+
+    final txns = {for (final t in repo.getTransactions(accountId: accountId)) t.id: t};
+    expect(txns[matching]!.categoryId, newCategoryId);
+    expect(txns[untouched]!.categoryId, oldCategoryId);
   });
 
   test('countTransfersMatching counts transfers sharing the same account pair and category', () {
@@ -131,7 +193,8 @@ void main() {
     insertTransfer(from: accountId, to: thirdAccountId, category: oldCategoryId); // different destination
 
     expect(
-      repo.countTransfersMatching(accountId: accountId, toAccountId: otherAccountId, categoryId: oldCategoryId),
+      repo.countTransfersMatching(
+          accountId: accountId, toAccountId: otherAccountId, categoryId: oldCategoryId, notes: null),
       2,
     );
   });
@@ -140,7 +203,8 @@ void main() {
     insertTx(payee: payeeId, category: oldCategoryId);
 
     expect(
-      repo.countTransfersMatching(accountId: accountId, toAccountId: otherAccountId, categoryId: oldCategoryId),
+      repo.countTransfersMatching(
+          accountId: accountId, toAccountId: otherAccountId, categoryId: oldCategoryId, notes: null),
       0,
     );
   });
@@ -154,6 +218,7 @@ void main() {
       toAccountId: otherAccountId,
       oldCategoryId: oldCategoryId,
       newCategoryId: newCategoryId,
+      notes: null,
     );
 
     final txns = {for (final t in repo.getTransactions(accountId: accountId)) t.id: t};
