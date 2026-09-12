@@ -2448,6 +2448,19 @@ class _SimulationChartState extends State<_SimulationChart> {
             LineChartData(
               minY: minY - pad,
               maxY: maxY + pad,
+              // Repère à 0€ - même convention que forecast_chart.dart, pour
+              // voir d'un coup d'œil quand une courbe passe en négatif
+              // (2026-09 user request).
+              extraLinesData: ExtraLinesData(
+                horizontalLines: [
+                  HorizontalLine(
+                    y: 0,
+                    color: Colors.grey.withValues(alpha: 0.6),
+                    strokeWidth: 1.2,
+                    dashArray: const [4, 4],
+                  ),
+                ],
+              ),
               gridData: const FlGridData(drawVerticalLine: false),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(

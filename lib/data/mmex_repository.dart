@@ -678,6 +678,96 @@ class MmexRepository {
     });
   }
 
+  /// The name [payee] would get if [search] were replaced with [replacement]
+  /// - at the very start of the name only when [prefixOnly] (both compared
+  /// case-insensitively), anywhere in the name otherwise. Returns null when
+  /// [search] doesn't occur (nothing to change). Always trimmed, so
+  /// stripping a trailing space along with the removed text (e.g. "CB " ->
+  /// "") never leaves a stray leading space behind.
+  String? _payeeNameAfterReplacement(
+    String name,
+    String search,
+    String replacement,
+    bool prefixOnly,
+  ) {
+    if (prefixOnly) {
+      if (name.length < search.length) return null;
+      if (!name.substring(0, search.length).toLowerCase().startsWith(search.toLowerCase())) {
+        return null;
+      }
+      return (replacement + name.substring(search.length)).trim();
+    }
+    final lowerName = name.toLowerCase();
+    final lowerSearch = search.toLowerCase();
+    if (!lowerName.contains(lowerSearch)) return null;
+    final buffer = StringBuffer();
+    var i = 0;
+    while (i < name.length) {
+      if (i + search.length <= name.length &&
+          name.substring(i, i + search.length).toLowerCase() == lowerSearch) {
+        buffer.write(replacement);
+        i += search.length;
+      } else {
+        buffer.write(name[i]);
+        i++;
+      }
+    }
+    return buffer.toString().trim();
+  }
+
+  /// Every payee [search] would actually change (a real new, non-empty name
+  /// - never renamed to blank), for the "Renommer en masse" preview
+  /// (payees_screen.dart) before anything is written - see
+  /// [applyBulkRenamePayees] for the write itself. E.g. a batch of bank-
+  /// import payees all prefixed "CB " (2026-09 user request) previews as
+  /// "CB Boucherie Martin" -> "Boucherie Martin" for every match.
+  List<({Payee payee, String newName})> previewBulkRenamePayees({
+    required String search,
+    required String replacement,
+    required bool prefixOnly,
+  }) {
+    if (search.isEmpty) return const [];
+    final result = <({Payee payee, String newName})>[];
+    for (final payee in getPayees(onlyActive: false)) {
+      final newName = _payeeNameAfterReplacement(payee.name, search, replacement, prefixOnly);
+      if (newName != null && newName.isNotEmpty && newName != payee.name) {
+        result.add((payee: payee, newName: newName));
+      }
+    }
+    return result;
+  }
+
+  /// Applies exactly the renames [previewBulkRenamePayees] computed - taken
+  /// as a parameter rather than recomputed here so the screen shows the
+  /// user precisely what's about to happen (no risk of the underlying data
+  /// shifting between preview and confirm). PAYEE_V1.PAYEENAME is UNIQUE, so
+  /// a rename landing on a name some other payee already has (or that an
+  /// earlier item in this same batch was just renamed to) merges into that
+  /// payee instead of erroring - the same real-world case [mergePayees]
+  /// itself already documents ("CB AMINE VIANDE FACT xxxxx" and friends all
+  /// really meaning "Boucherie").
+  ({int renamed, int merged}) applyBulkRenamePayees(
+    List<({Payee payee, String newName})> items,
+  ) {
+    final idByNameLower = {for (final p in getPayees(onlyActive: false)) p.name.toLowerCase(): p.id};
+    var renamed = 0;
+    var merged = 0;
+    for (final item in items) {
+      final key = item.newName.toLowerCase();
+      final existingId = idByNameLower[key];
+      if (existingId != null && existingId != item.payee.id) {
+        mergePayees(fromId: item.payee.id, toId: existingId);
+        merged++;
+      } else {
+        renamePayee(item.payee.id, item.newName);
+        idByNameLower.remove(item.payee.name.toLowerCase());
+        idByNameLower[key] = item.payee.id;
+        renamed++;
+      }
+    }
+    return (renamed: renamed, merged: merged);
+  }
+
   // ---- Transactions ----------------------------------------------------
 
   List<MoneyTransaction> getTransactions({

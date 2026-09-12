@@ -45,7 +45,19 @@ class _PayeesScreenState extends State<PayeesScreen> {
         query.isEmpty ? all : all.where((p) => p.name.toLowerCase().contains(query)).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tiers')),
+      appBar: AppBar(
+        title: const Text('Tiers'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.find_replace),
+            tooltip: 'Renommer en masse',
+            onPressed: () async {
+              final applied = await _bulkRenamePayees(context, repo);
+              if (applied) dbProvider.touch();
+            },
+          ),
+        ],
+      ),
       body: ResponsiveBody(
         maxWidth: 800,
         child: Column(
@@ -247,4 +259,129 @@ Future<void> _deletePayee(BuildContext context, MmexRepository repo, Payee payee
   if (confirmed == true) {
     repo.deletePayee(payee.id);
   }
+}
+
+/// "Renommer en masse" (2026-09 user request: un lot de tiers importés
+/// depuis un relevé bancaire, tous préfixés "CB ", à nettoyer d'un coup
+/// plutôt qu'un par un). Aperçu recalculé à chaque frappe (voir
+/// MmexRepository.previewBulkRenamePayees) avant tout write - rien n'est
+/// modifié tant que l'utilisateur n'a pas confirmé "Appliquer". Retourne
+/// true si au moins un tiers a réellement été modifié, pour que l'appelant
+/// sache s'il doit persister (dbProvider.touch()).
+Future<bool> _bulkRenamePayees(BuildContext context, MmexRepository repo) async {
+  final searchController = TextEditingController();
+  final replacementController = TextEditingController();
+  var prefixOnly = true;
+  var preview = const <({Payee payee, String newName})>[];
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) {
+        void recompute() {
+          setDialogState(() {
+            preview = repo.previewBulkRenamePayees(
+              search: searchController.text,
+              replacement: replacementController.text,
+              prefixOnly: prefixOnly,
+            );
+          });
+        }
+
+        return AlertDialog(
+          title: const Text('Renommer en masse'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Retire (ou remplace) un texte dans le nom de chaque tiers où il '
+                  'apparaît - par exemple "CB " pour que "CB Boucherie Martin" '
+                  'devienne "Boucherie Martin".',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: searchController,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: 'Texte à retirer/remplacer'),
+                  onChanged: (_) => recompute(),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: replacementController,
+                  decoration: const InputDecoration(
+                    labelText: 'Remplacer par (laisser vide pour retirer)',
+                  ),
+                  onChanged: (_) => recompute(),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Seulement en début de nom'),
+                  value: prefixOnly,
+                  onChanged: (v) {
+                    prefixOnly = v ?? true;
+                    recompute();
+                  },
+                ),
+                const SizedBox(height: 8),
+                if (searchController.text.isNotEmpty) ...[
+                  Text(
+                    preview.isEmpty
+                        ? 'Aucun tiers concerné.'
+                        : '${preview.length} tiers concerné(s) :',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: preview.length,
+                      itemBuilder: (context, index) {
+                        final item = preview[index];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text.rich(
+                            TextSpan(children: [
+                              TextSpan(text: item.payee.name),
+                              const TextSpan(text: '  →  '),
+                              TextSpan(
+                                text: item.newName,
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                            ]),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Annuler')),
+            FilledButton(
+              onPressed: preview.isEmpty ? null : () => Navigator.of(context).pop(true),
+              child: Text('Appliquer (${preview.length})'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+  if (confirmed != true || preview.isEmpty) return false;
+  final result = repo.applyBulkRenamePayees(preview);
+  if (!context.mounted) return true;
+  final parts = <String>[
+    if (result.renamed > 0) '${result.renamed} tiers renommé(s)',
+    if (result.merged > 0) '${result.merged} fusionné(s) avec un tiers existant',
+  ];
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parts.join(', '))));
+  return true;
 }
