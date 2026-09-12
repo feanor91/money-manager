@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.115] - 2026-09-12
+
+- feat(tiers,simulation): renommage en masse des tiers, repère à 0€ sur le graphique
+
 ## [1.0.114] - 2026-09-10
 
 - feat(ai): afficher le raisonnement en temps réel, compter les tokens, améliorer l'impression PDF et corriger le vérouillage PIN de la fenêtre IA
