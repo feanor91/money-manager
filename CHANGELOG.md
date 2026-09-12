@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.119] - 2026-09-12
+
+- feat(grand-livre): affiche le montant total des opérations filtrées
+
 ## [1.0.118] - 2026-09-12
 
 - feat(ux): affiche le nombre de résultats sous chaque champ de recherche
