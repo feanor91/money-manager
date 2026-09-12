@@ -179,6 +179,34 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchController = TextEditingController();
   String _search = '';
 
+  /// "Sélectionner" (AppBar) - lets the user hand-pick exactly which
+  /// transactions a bulk edit should touch, rather than relying on a
+  /// same-payee-and-category match (see bulk_category_reassign.dart's own
+  /// doc comment for why that heuristic alone isn't enough - two unrelated
+  /// series can share both without sharing an amount, 2026-09 user report).
+  /// Reset (both fields) whenever the mode is turned off, so re-entering it
+  /// later always starts from an empty selection rather than remembering a
+  /// stale one from a previous visit.
+  bool _selectionMode = false;
+  final Set<int> _selectedIds = {};
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _selectionMode = !_selectionMode;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelected(int id) {
+    setState(() {
+      if (_selectedIds.contains(id)) {
+        _selectedIds.remove(id);
+      } else {
+        _selectedIds.add(id);
+      }
+    });
+  }
+
   // Column-header sort - deliberately session-only, unlike column order/
   // visibility below (which persist to the companion settings file): this
   // is closer to the search box than to a real preference, reset on every
@@ -329,9 +357,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-            accountId == null ? 'Transactions' : accountsById[accountId]!.name),
-        actions: [
+        leading: _selectionMode
+            ? IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: 'Annuler la sélection',
+                onPressed: _toggleSelectionMode,
+              )
+            : null,
+        title: Text(_selectionMode
+            ? '${_selectedIds.length} sélectionnée(s)'
+            : (accountId == null ? 'Transactions' : accountsById[accountId]!.name)),
+        actions: _selectionMode
+            ? []
+            : [
           PopupMenuButton<int>(
             icon: const Icon(Icons.filter_list),
             onSelected: (id) => dbProvider.selectAccount(id),
@@ -339,6 +377,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               for (final a in visibleAccounts)
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.checklist),
+            tooltip: 'Sélectionner plusieurs opérations',
+            onPressed: rows.isEmpty ? null : _toggleSelectionMode,
           ),
           IconButton(
             icon: const Icon(Icons.download_outlined),
@@ -452,11 +495,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showAddChoice(context, accountId),
-        icon: const Icon(Icons.add),
-        label: const Text('Ajouter'),
-      ),
+      floatingActionButton: _selectionMode
+          ? FloatingActionButton.extended(
+              onPressed: _selectedIds.isEmpty
+                  ? null
+                  : () => _openBulkEditDialog(context, repo, dbProvider, rows),
+              icon: const Icon(Icons.edit_outlined),
+              label: Text('Modifier (${_selectedIds.length})'),
+            )
+          : FloatingActionButton.extended(
+              onPressed: () => _showAddChoice(context, accountId),
+              icon: const Icon(Icons.add),
+              label: const Text('Ajouter'),
+            ),
       body: rows.isEmpty
           ? Center(
               child: Text(query.isEmpty
@@ -494,6 +545,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   },
                   onEditAmount: (tx, amount) => _saveQuickAmountEdit(
                       context, repo, dbProvider, tx, amount),
+                  selectionMode: _selectionMode,
+                  selectedIds: _selectedIds,
+                  onToggleSelect: _toggleSelected,
                 );
               }
               return ResponsiveBody(
@@ -511,6 +565,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   sortColumn: _sortColumn,
                   sortAscending: _sortAscending,
                   onSort: _toggleSort,
+                  selectionMode: _selectionMode,
+                  selectedIds: _selectedIds,
+                  onToggleSelect: _toggleSelected,
                   onTapRow: (tx) =>
                       openTransactionEditor(context, existing: tx),
                   onToggleReconciled: (tx, value) {
@@ -552,6 +609,192 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       repo: repo,
       dbProvider: dbProvider,
       change: (billId: billId, newAmount: amount),
+    );
+  }
+
+  /// "Modifier (N)" on the multi-select FAB - applies catégorie/tiers/
+  /// remarque/pointé to exactly [_selectedIds], each behind its own "modify
+  /// this field" checkbox so leaving one unchecked never overwrites it
+  /// (see MmexRepository.bulkUpdateTransactions's own doc comment for why
+  /// this exists at all: bulk_category_reassign.dart's "same payee + same
+  /// old category" match is too broad once two unrelated series share
+  /// both without sharing an amount - 2026-09 user report).
+  Future<void> _openBulkEditDialog(
+    BuildContext context,
+    MmexRepository repo,
+    DatabaseProvider dbProvider,
+    List<TransactionWithBalance> rows,
+  ) async {
+    final selectedTxs = rows
+        .where((r) => _selectedIds.contains(r.transaction.id))
+        .map((r) => r.transaction)
+        .toList();
+    // A transfer's PAYEEID is always forced to -1 (see CLAUDE.md / this
+    // app's own convention) - never offer to overwrite it with a real
+    // payee when the selection includes one.
+    final hasTransfer =
+        selectedTxs.any((t) => t.transCode == TransCode.transfer);
+
+    final categories = repo.getCategories();
+    final categoriesById = {for (final c in categories) c.id: c};
+    final sortedCategories = [...categories]..sort((a, b) =>
+        categoryFullPath(a.id, categoriesById)
+            .toLowerCase()
+            .compareTo(categoryFullPath(b.id, categoriesById).toLowerCase()));
+    final payees = repo.getPayees(onlyActive: false);
+
+    var applyCategory = false;
+    Category? selectedCategory;
+    var applyPayee = false;
+    Payee? selectedPayee;
+    var applyNotes = false;
+    final notesController = TextEditingController();
+    var applyReconciled = false;
+    var reconciledValue = true;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final canApply = applyCategory ||
+              (applyPayee && selectedPayee != null) ||
+              applyNotes ||
+              applyReconciled;
+          return AlertDialog(
+            title: Text('Modifier ${selectedTxs.length} opération(s)'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Seuls les champs cochés ci-dessous seront modifiés, '
+                      'uniquement sur les opérations sélectionnées.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Catégorie'),
+                      value: applyCategory,
+                      onChanged: (v) =>
+                          setDialogState(() => applyCategory = v ?? false),
+                    ),
+                    if (applyCategory)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12, bottom: 8),
+                        child: SearchableSelectField<Category>(
+                          label: 'Catégorie',
+                          options: sortedCategories,
+                          labelOf: (c) => categoryFullPath(c.id, categoriesById),
+                          initialValue: selectedCategory,
+                          onSelected: (c) =>
+                              setDialogState(() => selectedCategory = c),
+                        ),
+                      ),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Tiers'),
+                      subtitle: hasTransfer
+                          ? const Text(
+                              'Non modifiable : la sélection contient un virement')
+                          : null,
+                      value: applyPayee && !hasTransfer,
+                      onChanged: hasTransfer
+                          ? null
+                          : (v) =>
+                              setDialogState(() => applyPayee = v ?? false),
+                    ),
+                    if (applyPayee && !hasTransfer)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12, bottom: 8),
+                        child: SearchableSelectField<Payee>(
+                          label: 'Tiers',
+                          options: payees,
+                          labelOf: (p) => p.name,
+                          initialValue: selectedPayee,
+                          onSelected: (p) =>
+                              setDialogState(() => selectedPayee = p),
+                        ),
+                      ),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Remarque'),
+                      value: applyNotes,
+                      onChanged: (v) =>
+                          setDialogState(() => applyNotes = v ?? false),
+                    ),
+                    if (applyNotes)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12, bottom: 8),
+                        child: TextField(
+                          controller: notesController,
+                          decoration: const InputDecoration(labelText: 'Remarque'),
+                        ),
+                      ),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('Statut pointé'),
+                      value: applyReconciled,
+                      onChanged: (v) =>
+                          setDialogState(() => applyReconciled = v ?? false),
+                    ),
+                    if (applyReconciled)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 12),
+                        child: SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(value: true, label: Text('Pointée')),
+                            ButtonSegment(
+                                value: false, label: Text('Non pointée')),
+                          ],
+                          selected: {reconciledValue},
+                          onSelectionChanged: (s) =>
+                              setDialogState(() => reconciledValue = s.first),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Annuler'),
+              ),
+              FilledButton(
+                onPressed: canApply ? () => Navigator.of(context).pop(true) : null,
+                child: const Text('Appliquer'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (confirmed != true) return;
+    repo.bulkUpdateTransactions(
+      selectedTxs.map((t) => t.id).toList(),
+      categoryId: applyCategory ? selectedCategory?.id : null,
+      clearCategory: applyCategory && selectedCategory == null,
+      payeeId: (applyPayee && !hasTransfer) ? selectedPayee?.id : null,
+      notes: applyNotes ? notesController.text : null,
+      reconciled: applyReconciled ? reconciledValue : null,
+    );
+    dbProvider.touch();
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${selectedTxs.length} opération(s) modifiée(s).')),
     );
   }
 
@@ -770,6 +1013,17 @@ class _LedgerTable extends StatelessWidget {
   final bool sortAscending;
   final ValueChanged<LedgerColumnId> onSort;
 
+  /// Multi-select mode ("Sélectionner" in the AppBar, 2026-09 user request
+  /// for a bulk edit that targets exactly a hand-picked set of transactions
+  /// rather than a same-payee-and-category heuristic - see
+  /// bulk_category_reassign.dart's own doc comment for why that heuristic
+  /// alone isn't enough). While active, the leading column shows a plain
+  /// Checkbox instead of the reconciled toggle, and tapping anywhere on a
+  /// row toggles its selection instead of opening the editor.
+  final bool selectionMode;
+  final Set<int> selectedIds;
+  final ValueChanged<int> onToggleSelect;
+
   const _LedgerTable({
     required this.rows,
     required this.accountId,
@@ -786,6 +1040,9 @@ class _LedgerTable extends StatelessWidget {
     required this.sortColumn,
     required this.sortAscending,
     required this.onSort,
+    required this.selectionMode,
+    required this.selectedIds,
+    required this.onToggleSelect,
     this.currency,
   });
 
@@ -1024,7 +1281,7 @@ class _LedgerTable extends StatelessWidget {
         case LedgerColumnId.date:
           return [
             InkWell(
-              onTap: () => _editDate(context, tx),
+              onTap: selectionMode ? null : () => _editDate(context, tx),
               child: cell(_colDate, DateFormat('dd/MM/yy').format(tx.date)),
             ),
           ];
@@ -1096,7 +1353,7 @@ class _LedgerTable extends StatelessWidget {
         case LedgerColumnId.montant:
           return [
             InkWell(
-              onTap: isTransfer ? null : () => _editAmount(context, tx),
+              onTap: (isTransfer || selectionMode) ? null : () => _editAmount(context, tx),
               child: cell(
                 _colMontant,
                 debit == null
@@ -1108,7 +1365,7 @@ class _LedgerTable extends StatelessWidget {
             ),
             const SizedBox(width: _colGap),
             InkWell(
-              onTap: isTransfer ? null : () => _editAmount(context, tx),
+              onTap: (isTransfer || selectionMode) ? null : () => _editAmount(context, tx),
               child: cell(
                 _colMontant,
                 credit == null
@@ -1145,7 +1402,8 @@ class _LedgerTable extends StatelessWidget {
             ? scheme.surfaceContainerLowest
             : scheme.surfaceContainerHigh,
         child: InkWell(
-          onTap: () => onTapRow(tx),
+          onTap: () =>
+              selectionMode ? onToggleSelect(tx.id) : onTapRow(tx),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
@@ -1153,21 +1411,28 @@ class _LedgerTable extends StatelessWidget {
               children: [
                 SizedBox(
                   width: _colCheck,
-                  child: IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
-                    iconSize: 20,
-                    tooltip: reconciled
-                        ? 'Pointée - toucher pour dépointer'
-                        : 'Non pointée - toucher pour pointer',
-                    icon: Icon(
-                      reconciled
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
-                      color: reconciled ? AppTheme.positive : Colors.grey[400],
-                    ),
-                    onPressed: () => onToggleReconciled(tx, !reconciled),
-                  ),
+                  child: selectionMode
+                      ? Checkbox(
+                          value: selectedIds.contains(tx.id),
+                          onChanged: (_) => onToggleSelect(tx.id),
+                        )
+                      : IconButton(
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          iconSize: 20,
+                          tooltip: reconciled
+                              ? 'Pointée - toucher pour dépointer'
+                              : 'Non pointée - toucher pour pointer',
+                          icon: Icon(
+                            reconciled
+                                ? Icons.check_circle
+                                : Icons.radio_button_unchecked,
+                            color: reconciled
+                                ? AppTheme.positive
+                                : Colors.grey[400],
+                          ),
+                          onPressed: () => onToggleReconciled(tx, !reconciled),
+                        ),
                 ),
                 for (final col in columns) ...[
                   const SizedBox(width: _colGap),
@@ -1321,6 +1586,12 @@ class _LedgerCards extends StatelessWidget {
   final Set<int> recurringTxIds;
   final Map<int, ({int index, int total})> recurringOccurrences;
 
+  /// See _LedgerTable's own doc comment on these three - same multi-select
+  /// mode, same fields.
+  final bool selectionMode;
+  final Set<int> selectedIds;
+  final ValueChanged<int> onToggleSelect;
+
   const _LedgerCards({
     required this.rows,
     required this.accountId,
@@ -1333,6 +1604,9 @@ class _LedgerCards extends StatelessWidget {
     required this.onEditAmount,
     required this.recurringTxIds,
     required this.recurringOccurrences,
+    required this.selectionMode,
+    required this.selectedIds,
+    required this.onToggleSelect,
     this.currency,
   });
 
@@ -1424,7 +1698,8 @@ class _LedgerCards extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-          onTap: () => onTapRow(tx),
+          onTap: () =>
+              selectionMode ? onToggleSelect(tx.id) : onTapRow(tx),
           child: Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -1432,25 +1707,32 @@ class _LedgerCards extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      iconSize: 20,
-                      tooltip: reconciled
-                          ? 'Pointée - toucher pour dépointer'
-                          : 'Non pointée - toucher pour pointer',
-                      icon: Icon(
-                        reconciled
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
-                        color:
-                            reconciled ? AppTheme.positive : Colors.grey[400],
-                      ),
-                      onPressed: () => onToggleReconciled(tx, !reconciled),
-                    ),
+                    selectionMode
+                        ? Checkbox(
+                            value: selectedIds.contains(tx.id),
+                            onChanged: (_) => onToggleSelect(tx.id),
+                          )
+                        : IconButton(
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                            iconSize: 20,
+                            tooltip: reconciled
+                                ? 'Pointée - toucher pour dépointer'
+                                : 'Non pointée - toucher pour pointer',
+                            icon: Icon(
+                              reconciled
+                                  ? Icons.check_circle
+                                  : Icons.radio_button_unchecked,
+                              color: reconciled
+                                  ? AppTheme.positive
+                                  : Colors.grey[400],
+                            ),
+                            onPressed: () =>
+                                onToggleReconciled(tx, !reconciled),
+                          ),
                     const SizedBox(width: 4),
                     InkWell(
-                      onTap: () => _editDate(context, tx),
+                      onTap: selectionMode ? null : () => _editDate(context, tx),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         child: Text(
@@ -1464,7 +1746,7 @@ class _LedgerCards extends StatelessWidget {
                     ),
                     const Spacer(),
                     InkWell(
-                      onTap: isTransfer ? null : () => _editAmount(context, tx),
+                      onTap: (isTransfer || selectionMode) ? null : () => _editAmount(context, tx),
                       child: Text(
                         '${debit != null ? '-' : '+'}${currency?.format(amount) ?? amount.toStringAsFixed(2)}',
                         style: TextStyle(

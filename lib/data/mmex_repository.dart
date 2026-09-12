@@ -1250,6 +1250,53 @@ class MmexRepository {
     );
   }
 
+  /// Applies the given field(s) to exactly [ids] - a manually-picked
+  /// selection from the ledger's multi-select mode (transactions_screen.dart),
+  /// rather than a criterion-based match. Complements
+  /// [bulk_category_reassign.dart]'s "same payee + same old category"
+  /// heuristic, which is too broad when two unrelated series happen to
+  /// share both (2026-09 user report: two different loan repayments, one
+  /// ~255€ and one ~1218€, both parked under the same payee/category by a
+  /// past mistake - reassigning "identical operations" moved both at once
+  /// when only the 1218€ ones should have changed). Amount is deliberately
+  /// never part of any matching criterion here - the caller already knows
+  /// exactly which transactions to touch, by id.
+  ///
+  /// Each parameter left null is simply not touched - [categoryId] is the
+  /// one exception with a real "clear it" case (a transaction going back to
+  /// uncategorized), so [clearCategory] exists precisely to tell "leave
+  /// alone" apart from "set to null" for that one field.
+  void bulkUpdateTransactions(
+    List<int> ids, {
+    int? categoryId,
+    bool clearCategory = false,
+    int? payeeId,
+    String? notes,
+    bool? reconciled,
+  }) {
+    if (ids.isEmpty) return;
+    db.transaction(() {
+      for (final id in ids) {
+        if (categoryId != null || clearCategory) {
+          db.execute('UPDATE CHECKINGACCOUNT_V1 SET CATEGID = ? WHERE TRANSID = ?',
+              [clearCategory ? null : categoryId, id]);
+        }
+        if (payeeId != null) {
+          db.execute(
+              'UPDATE CHECKINGACCOUNT_V1 SET PAYEEID = ? WHERE TRANSID = ?', [payeeId, id]);
+        }
+        if (notes != null) {
+          db.execute(
+              'UPDATE CHECKINGACCOUNT_V1 SET NOTES = ? WHERE TRANSID = ?', [notes, id]);
+        }
+        if (reconciled != null) {
+          db.execute('UPDATE CHECKINGACCOUNT_V1 SET STATUS = ? WHERE TRANSID = ?',
+              [reconciled ? 'R' : '', id]);
+        }
+      }
+    });
+  }
+
   /// Net signed monthly totals (income - expenses) for the last [months]
   /// months up to and including the month of [anchor]. When [accountId] is
   /// given, only that account's transactions are counted (transfers are
