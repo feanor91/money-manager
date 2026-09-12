@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.118] - 2026-09-12
+
+- feat(ux): affiche le nombre de résultats sous chaque champ de recherche
+
 ## [1.0.117] - 2026-09-12
 
 - fix(transactions): l'ancien report en masse tient maintenant compte de la remarque
