@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.116] - 2026-09-12
+
+- feat(transactions): sélection multiple du grand livre pour une modification en masse ciblée
+
 ## [1.0.115] - 2026-09-12
 
 - feat(tiers,simulation): renommage en masse des tiers, repère à 0€ sur le graphique
