@@ -355,6 +355,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         });
     }
 
+    // Somme des montants signés (compte courant) des lignes filtrées -
+    // affichée à côté du nombre de résultats (2026-09 user request).
+    final filteredTotal = accountId == null
+        ? 0.0
+        : rows.fold<double>(
+            0, (sum, row) => sum + row.transaction.signedAmountFor(accountId));
+
     return Scaffold(
       appBar: AppBar(
         leading: _selectionMode
@@ -476,12 +483,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     prefixIcon: const Icon(Icons.search),
                     hintText:
                         'Rechercher (tiers, catégorie, remarque, montant...)',
-                    // Combien de lignes le filtre laisse passer - seulement
+                    // Combien de lignes le filtre laisse passer et leur
+                    // somme (montant signé, compte courant) - seulement
                     // pendant qu'une recherche est active (2026-09 user
                     // request), jamais affiché sur la liste non filtrée.
                     helperText: _search.isEmpty
                         ? null
-                        : '${rows.length} résultat${rows.length > 1 ? 's' : ''}',
+                        : '${rows.length} résultat${rows.length > 1 ? 's' : ''}'
+                            ' · ${currency?.format(filteredTotal) ?? filteredTotal.toStringAsFixed(2)}',
                     isDense: true,
                     border: const OutlineInputBorder(),
                     suffixIcon: _search.isEmpty
