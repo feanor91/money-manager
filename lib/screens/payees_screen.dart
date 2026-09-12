@@ -66,11 +66,17 @@ class _PayeesScreenState extends State<PayeesScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: TextField(
                 controller: _searchController,
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
                   hintText: 'Rechercher un tiers',
+                  // Combien de tiers le filtre laisse passer - seulement
+                  // pendant qu'une recherche est active (2026-09 user
+                  // request).
+                  helperText: _search.isEmpty
+                      ? null
+                      : '${visible.length} résultat${visible.length > 1 ? 's' : ''}',
                   isDense: true,
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                 ),
                 onChanged: (v) => setState(() => _search = v),
               ),

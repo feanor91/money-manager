@@ -476,6 +476,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     prefixIcon: const Icon(Icons.search),
                     hintText:
                         'Rechercher (tiers, catégorie, remarque, montant...)',
+                    // Combien de lignes le filtre laisse passer - seulement
+                    // pendant qu'une recherche est active (2026-09 user
+                    // request), jamais affiché sur la liste non filtrée.
+                    helperText: _search.isEmpty
+                        ? null
+                        : '${rows.length} résultat${rows.length > 1 ? 's' : ''}',
                     isDense: true,
                     border: const OutlineInputBorder(),
                     suffixIcon: _search.isEmpty

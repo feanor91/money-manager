@@ -46,6 +46,10 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             final children = byParent[p.id] ?? const <Category>[];
             return matches(p) || children.any(matches);
           }).toList();
+    // Catégories (parents + sous-catégories) qui matchent directement le
+    // texte tapé - pour l'affichage "N résultat(s)" sous le champ de
+    // recherche (2026-09 user request).
+    final matchCount = query.isEmpty ? 0 : all.where(matches).length;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Catégories')),
@@ -68,11 +72,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                   Expanded(
                     child: TextField(
                       controller: _searchController,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.search),
                         hintText: 'Rechercher une catégorie',
+                        helperText: query.isEmpty
+                            ? null
+                            : '$matchCount résultat${matchCount > 1 ? 's' : ''}',
                         isDense: true,
-                        border: OutlineInputBorder(),
+                        border: const OutlineInputBorder(),
                       ),
                       onChanged: (v) => setState(() => _search = v),
                     ),

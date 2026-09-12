@@ -117,9 +117,15 @@ class _RecurringScreenState extends State<RecurringScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
               child: TextField(
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   hintText: 'Rechercher (tiers, compte, catégorie...)',
-                  prefixIcon: Icon(Icons.search),
+                  prefixIcon: const Icon(Icons.search),
+                  // Combien d'opérations le filtre laisse passer - seulement
+                  // pendant qu'une recherche est active (2026-09 user
+                  // request).
+                  helperText: _searchQuery.trim().isEmpty
+                      ? null
+                      : '${bills.length} résultat${bills.length > 1 ? 's' : ''}',
                   isDense: true,
                 ),
                 onChanged: (v) => setState(() => _searchQuery = v),
