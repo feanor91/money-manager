@@ -51,7 +51,19 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
+        # packages override: the action's own default list includes the
+        # legacy "tools" package, which Google has since removed from the
+        # SDK repository entirely - found 2026-09-15, this started failing
+        # the whole pipeline with "Warning: Failed to find package 'tools'"
+        # / exit code 1, on a run that touched no Android-related code at
+        # all. "tools" was never actually used by this workflow anyway -
+        # the very next step ("Install Android SDK components") already
+        # installs everything genuinely needed (platform-tools, the real
+        # platforms/build-tools versions) explicitly. platform-tools alone
+        # here just keeps the action's own setup (ANDROID_HOME etc.) working.
         uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
 
       - name: Install Android SDK components
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;28.0.3" "build-tools;34.0.0"
