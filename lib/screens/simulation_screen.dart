@@ -340,6 +340,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
                 );
                 final chart = _SimulationChart(
                   repo: repo,
+                  dbProvider: dbProvider,
                   scenarioId: scenario.id,
                   accountIds: selectedAccountIds,
                   accounts: accounts,
@@ -2222,6 +2223,7 @@ class _AccountSeries {
 /// (see [MmexRepository.simulatedDailyNetWithMeanReversion]).
 class _SimulationChart extends StatefulWidget {
   final MmexRepository repo;
+  final DatabaseProvider dbProvider;
   final int scenarioId;
   final List<int> accountIds;
   final List<Account> accounts;
@@ -2231,6 +2233,7 @@ class _SimulationChart extends StatefulWidget {
 
   const _SimulationChart({
     required this.repo,
+    required this.dbProvider,
     required this.scenarioId,
     required this.accountIds,
     required this.accounts,
@@ -2258,6 +2261,7 @@ class _SimulationChartState extends State<_SimulationChart> {
   bool _hideUnchanged = false;
 
   MmexRepository get repo => widget.repo;
+  DatabaseProvider get dbProvider => widget.dbProvider;
   int get scenarioId => widget.scenarioId;
   List<int> get accountIds => widget.accountIds;
   List<Account> get accounts => widget.accounts;
@@ -2283,7 +2287,8 @@ class _SimulationChartState extends State<_SimulationChart> {
       final id = accountIds[i];
       final account = accountsById[id];
       if (account == null) continue; // hidden/deleted since selection - skip
-      final color = _accountColors[i % _accountColors.length];
+      final color = dbProvider.accountColors[id] ??
+          _accountColors[i % _accountColors.length];
       final startingBalance = repo.accountBalance(id, asOf: DateTime.now());
       final baselineNet =
           repo.recurringDailyNet(anchor: anchor, days: days, accountId: id);
@@ -2381,7 +2386,13 @@ class _SimulationChartState extends State<_SimulationChart> {
           runSpacing: 4,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            for (final s in series) _Legend(color: s.color, label: s.account.name),
+            for (final s in series)
+              _Legend(
+                color: s.color,
+                label: s.account.name,
+                onTap: () =>
+                    _pickAccountColor(context, dbProvider, s.account, s.color),
+              ),
             if (!_hideUnchanged) _Legend(color: outline, label: 'Sans changement'),
             _Legend(color: outline, label: 'Avec ce scénario', dashed: true),
             InkWell(
@@ -2474,11 +2485,29 @@ class _SimulationChartState extends State<_SimulationChart> {
                   ),
                 ],
               ),
-              gridData: const FlGridData(drawVerticalLine: false),
+              // Écart fixe de 500€ entre chaque ligne/étiquette de l'échelle
+              // verticale (2026-09 user request), plutôt que fl_chart
+              // choisissant lui-même un intervalle "joli" selon l'étendue
+              // des courbes.
+              gridData: const FlGridData(
+                  drawVerticalLine: false, horizontalInterval: 500),
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
-                leftTitles:
-                    const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    interval: 500,
+                    reservedSize: 64,
+                    getTitlesWidget: (value, meta) => Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Text(
+                        currency?.format(value) ?? value.toStringAsFixed(0),
+                        style: const TextStyle(fontSize: 10),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ),
+                ),
                 rightTitles:
                     const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                 topTitles:
@@ -2577,13 +2606,17 @@ class _Legend extends StatelessWidget {
   final Color color;
   final String label;
   final bool dashed;
+  final VoidCallback? onTap;
 
   const _Legend(
-      {required this.color, required this.label, this.dashed = false});
+      {required this.color,
+      required this.label,
+      this.dashed = false,
+      this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    final content = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         SizedBox(
@@ -2604,7 +2637,97 @@ class _Legend extends StatelessWidget {
         ),
         const SizedBox(width: 6),
         Text(label, style: const TextStyle(fontSize: 12)),
+        // Léger indice visuel que ce compte a une couleur personnalisable
+        // (2026-09 user request) - jamais sur "Sans changement"/"Avec ce
+        // scénario", qui ne représentent pas un compte précis.
+        if (onTap != null) ...[
+          const SizedBox(width: 2),
+          Icon(Icons.edit_outlined,
+              size: 12, color: Theme.of(context).colorScheme.outline),
+        ],
       ],
     );
+    if (onTap == null) return content;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+        child: content,
+      ),
+    );
   }
+}
+
+/// Preset choices offered by [_pickAccountColor] - the same 8-colour
+/// rotation [_accountColors] cycles through automatically, plus 8 more for
+/// genuine choice once several accounts want a hand-picked colour.
+const _accountColorChoices = [
+  ..._accountColors,
+  Color(0xFFD32F2F), // rouge
+  Color(0xFFFFA000), // ambre
+  Color(0xFF7CB342), // vert clair
+  Color(0xFF00ACC1), // cyan
+  Color(0xFF5C6BC0), // indigo clair
+  Color(0xFFEC407A), // rose vif
+  Color(0xFF8D6E63), // brun clair
+  Color(0xFF546E7A), // gris bleu
+];
+
+/// Sentinel popped by the "Réinitialiser" option - distinguishes "user
+/// explicitly asked to go back to the automatic rotation colour" from "user
+/// dismissed the dialog without choosing anything" (both of which
+/// [showDialog] otherwise reports identically as a null result).
+const _resetAccountColorSentinel = Color(0x00000000);
+
+Future<void> _pickAccountColor(BuildContext context,
+    DatabaseProvider dbProvider, Account account, Color current) async {
+  final picked = await showDialog<Color>(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: Text('Couleur : ${account.name}'),
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              for (final c in _accountColorChoices)
+                InkWell(
+                  onTap: () => Navigator.of(context).pop(c),
+                  borderRadius: BorderRadius.circular(20),
+                  child: Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: c,
+                      shape: BoxShape.circle,
+                      border: c.toARGB32() == current.toARGB32()
+                          ? Border.all(color: Colors.white, width: 2)
+                          : null,
+                    ),
+                    child: c.toARGB32() == current.toARGB32()
+                        ? const Icon(Icons.check, color: Colors.white, size: 20)
+                        : null,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_resetAccountColorSentinel),
+            child: const Text('Réinitialiser (couleur automatique)'),
+          ),
+        ),
+      ],
+    ),
+  );
+  if (picked == null) return; // dialog dismissed - no change
+  await dbProvider.setAccountColor(
+      account.id, picked == _resetAccountColorSentinel ? null : picked);
 }

@@ -9,9 +9,11 @@ import 'package:provider/provider.dart';
 
 import '../data/mmex_repository.dart';
 import '../models/account.dart';
+import '../models/bill_deposit.dart';
 import '../models/category.dart';
 import '../models/currency.dart';
 import '../models/payee.dart';
+import '../models/recurrence.dart';
 import '../models/transaction.dart';
 import '../services/voice_entry/voice_transaction_parser.dart';
 import '../state/database_provider.dart';
@@ -21,10 +23,10 @@ import '../utils/list_utils.dart';
 import '../widgets/bill_amount_sync.dart';
 import '../widgets/bulk_category_reassign.dart';
 import '../widgets/confirm_delete.dart';
+import '../widgets/record_occurrence_dialog.dart';
 import '../widgets/responsive_body.dart';
 import '../widgets/searchable_select_field.dart';
 import '../widgets/transaction_entry_flow.dart';
-import 'recurring_screen.dart' show RecurringEditorSheet;
 
 /// True on every platform except web - i.e. desktop (Windows/Linux/macOS)
 /// *and* Android. Simplifies to `!kIsWeb` rather than enumerating
@@ -362,6 +364,27 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         : rows.fold<double>(
             0, (sum, row) => sum + row.transaction.signedAmountFor(accountId));
 
+    // Échéances récurrentes des 7 prochains jours (bornes incluses) pour le
+    // compte en cours de consultation - un compte comme un autre (2026-09
+    // user request: "voir les opérations récurrentes des 7 prochains jours
+    // du compte en cours de consultation et de les faire entrer dans le
+    // grand livre" directement depuis cet écran, sans passer par l'écran
+    // Récurrentes). Un virement compte pour les deux comptes concernés,
+    // comme partout ailleurs dans l'app. Jamais les opérations en pause.
+    final now = DateTime.now();
+    final upcomingStart = DateTime(now.year, now.month, now.day);
+    final upcomingCutoff = upcomingStart.add(const Duration(days: 7));
+    final upcomingBills = accountId == null
+        ? const <BillDeposit>[]
+        : (repo.getBillDeposits()
+              ..retainWhere((bill) =>
+                  !bill.paused &&
+                  (bill.accountId == accountId ||
+                      bill.toAccountId == accountId) &&
+                  !bill.nextOccurrence.isBefore(upcomingStart) &&
+                  !bill.nextOccurrence.isAfter(upcomingCutoff)))
+          ..sort((a, b) => a.nextOccurrence.compareTo(b.nextOccurrence));
+
     return Scaffold(
       appBar: AppBar(
         leading: _selectionMode
@@ -384,6 +407,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               for (final a in visibleAccounts)
                 PopupMenuItem(value: a.id, child: Text(a.name)),
             ],
+          ),
+          IconButton(
+            icon: upcomingBills.isEmpty
+                ? const Icon(Icons.event_repeat_outlined)
+                : Badge(
+                    label: Text('${upcomingBills.length}'),
+                    child: const Icon(Icons.event_repeat_outlined),
+                  ),
+            tooltip: 'Opérations récurrentes des 7 prochains jours',
+            onPressed: accountId == null
+                ? null
+                : () => _showUpcomingRecurring(context, repo, dbProvider, accountId),
           ),
           IconButton(
             icon: const Icon(Icons.checklist),
@@ -813,10 +848,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
-  /// Lets the FAB create either a one-off transaction or a recurring bill
-  /// without leaving this screen - avoids a trip to the "Récurrentes" tab
-  /// just to set up something recurring noticed while looking at the ledger.
+  /// Lets the FAB create a one-off transaction, or (Android only) choose
+  /// voice entry first - creating a *recurring* bill no longer has its own
+  /// entry here (2026-09 user request: "il faut supprimer la création
+  /// d'opération récurrente dans le menu du bas") now that
+  /// TransactionEditorSheet's own "Créer une opération récurrente" checkbox
+  /// covers that directly from the transaction form itself, first
+  /// occurrence included - see that checkbox's doc comment. On anything but
+  /// Android there's only ever one real choice, so skip the sheet
+  /// entirely rather than making the user tap through a single-option menu.
   Future<void> _showAddChoice(BuildContext context, int? accountId) async {
+    if (!_isAndroidPlatform) {
+      await openTransactionEditor(context, defaultAccountId: accountId);
+      return;
+    }
     final choice = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -829,41 +874,36 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               onTap: () => Navigator.of(context).pop('transaction'),
             ),
             ListTile(
-              leading: const Icon(Icons.autorenew),
-              title: const Text('Nouvelle opération récurrente'),
-              onTap: () => Navigator.of(context).pop('recurring'),
+              leading: const Icon(Icons.mic_outlined),
+              title: const Text('Par la voix'),
+              onTap: () => Navigator.of(context).pop('voice'),
             ),
-            if (_isAndroidPlatform)
-              ListTile(
-                leading: const Icon(Icons.mic_outlined),
-                title: const Text('Par la voix'),
-                onTap: () => Navigator.of(context).pop('voice'),
-              ),
           ],
         ),
       ),
     );
     if (!context.mounted || choice == null) return;
-    if (choice == 'transaction') {
-      await openTransactionEditor(context, defaultAccountId: accountId);
-    } else if (choice == 'voice') {
+    if (choice == 'voice') {
       await startVoiceEntry(context, accountId);
     } else {
-      await _openRecurringEditor(context, defaultAccountId: accountId);
+      await openTransactionEditor(context, defaultAccountId: accountId);
     }
   }
 
-  Future<void> _openRecurringEditor(BuildContext context,
-      {int? defaultAccountId}) async {
-    final dbProvider = context.read<DatabaseProvider>();
-    final repo = dbProvider.repository!;
+  /// Opérations récurrentes dues dans les 7 prochains jours sur ce compte,
+  /// avec la possibilité de les enregistrer directement dans le grand livre
+  /// sans changer d'écran (2026-09 user request) - même mécanisme
+  /// d'enregistrement que l'écran Récurrentes (RecordOccurrenceDialog,
+  /// partagé entre les deux depuis ce jour), juste filtré et déclenché
+  /// depuis le Grand livre.
+  Future<void> _showUpcomingRecurring(BuildContext context,
+      MmexRepository repo, DatabaseProvider dbProvider, int accountId) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) =>
-          RecurringEditorSheet(repo: repo, defaultAccountId: defaultAccountId),
+      builder: (_) => _UpcomingRecurringSheet(
+          repo: repo, dbProvider: dbProvider, accountId: accountId),
     );
-    dbProvider.touch();
   }
 
   /// Shows/reorders the desktop-style ledger table's columns - changes
@@ -1462,6 +1502,156 @@ class _LedgerTable extends StatelessWidget {
   }
 }
 
+/// Bottom sheet listing this account's recurring bills/deposits due within
+/// the next 7 days (see [_TransactionsScreenState._showUpcomingRecurring]),
+/// each recordable straight into the ledger via [RecordOccurrenceDialog] -
+/// the exact same dialog and repository call
+/// ([MmexRepository.recordBillOccurrence]) the Récurrentes screen itself
+/// uses, so recording from here is indistinguishable in effect from doing
+/// it there. Recomputes its own list after every recording (rather than
+/// trusting the snapshot the caller opened it with) since recording one
+/// occurrence changes that bill's own [BillDeposit.nextOccurrence] - it may
+/// no longer belong in this list at all (next due date now past the 7-day
+/// window), or a split-into-several occurrence may need to show its new
+/// next date immediately.
+class _UpcomingRecurringSheet extends StatefulWidget {
+  final MmexRepository repo;
+  final DatabaseProvider dbProvider;
+  final int accountId;
+
+  const _UpcomingRecurringSheet(
+      {required this.repo, required this.dbProvider, required this.accountId});
+
+  @override
+  State<_UpcomingRecurringSheet> createState() =>
+      _UpcomingRecurringSheetState();
+}
+
+class _UpcomingRecurringSheetState extends State<_UpcomingRecurringSheet> {
+  List<BillDeposit> _dueBills() {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day);
+    final cutoff = start.add(const Duration(days: 7));
+    return widget.repo.getBillDeposits()
+      ..retainWhere((bill) =>
+          !bill.paused &&
+          (bill.accountId == widget.accountId ||
+              bill.toAccountId == widget.accountId) &&
+          !bill.nextOccurrence.isBefore(start) &&
+          !bill.nextOccurrence.isAfter(cutoff))
+      ..sort((a, b) => a.nextOccurrence.compareTo(b.nextOccurrence));
+  }
+
+  Future<void> _record(BillDeposit bill) async {
+    await showDialog(
+      context: context,
+      builder: (_) => RecordOccurrenceDialog(bill: bill, repo: widget.repo),
+    );
+    widget.dbProvider.touch();
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = widget.repo;
+    final accounts = {for (final a in repo.getAccounts()) a.id: a};
+    final payees = {for (final p in repo.getPayees(onlyActive: false)) p.id: p};
+    final currency = repo.getBaseCurrency();
+    final bills = _dueBills();
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.3,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (context, scrollController) => SafeArea(
+        child: Column(
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Row(
+                children: [
+                  Icon(Icons.event_repeat_outlined),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text('Opérations récurrentes - 7 prochains jours',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: bills.isEmpty
+                  ? const Center(
+                      child:
+                          Text('Aucune échéance dans les 7 prochains jours'))
+                  : ListView.separated(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(16),
+                      itemCount: bills.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, i) {
+                        final bill = bills[i];
+                        final isTransfer = bill.transCode == TransCode.transfer;
+                        final signed = bill.transCode == TransCode.deposit
+                            ? bill.amount
+                            : -bill.amount;
+                        final positive = signed >= 0;
+                        final title = isTransfer
+                            ? '${accounts[bill.accountId]?.name ?? '?'} → '
+                                '${accounts[bill.toAccountId]?.name ?? '?'}'
+                            : (payees[bill.payeeId]?.name ?? 'Tiers inconnu');
+                        return Card(
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: (positive
+                                      ? AppTheme.positive
+                                      : AppTheme.negative)
+                                  .withValues(alpha: 0.12),
+                              child: Icon(
+                                isTransfer ? Icons.swap_horiz : Icons.autorenew,
+                                color: positive
+                                    ? AppTheme.positive
+                                    : AppTheme.negative,
+                                size: 18,
+                              ),
+                            ),
+                            title: Text(title,
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                            subtitle: Text(DateFormat('EEEE d MMMM', 'fr_FR')
+                                .format(bill.nextOccurrence)),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  currency?.format(signed) ??
+                                      signed.toStringAsFixed(2),
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: positive
+                                        ? AppTheme.positive
+                                        : AppTheme.negative,
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: 'Enregistrer cette occurrence',
+                                  icon: const Icon(Icons.playlist_add_check),
+                                  onPressed: () => _record(bill),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Bottom sheet letting the user hide/show and reorder [_LedgerTable]'s
 /// columns (see LedgerColumnId) - every column stays listed here even when
 /// hidden, so it can be dragged back into view. Every change applies (and
@@ -1947,6 +2137,28 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
   final _amountController = TextEditingController();
   final _notesController = TextEditingController();
 
+  /// New transaction only (see the checkbox itself, below) - when checked,
+  /// _save() creates a recurring template (BillDeposit) instead of a plain
+  /// one-off transaction, and immediately records *this* transaction as its
+  /// first occurrence via the same MmexRepository.recordBillOccurrence path
+  /// RecordOccurrenceDialog already uses elsewhere (Récurrentes screen,
+  /// the ledger's own "opérations à venir") - so a bill created this way is
+  /// never just a template sitting unfired until the next automatic/manual
+  /// trigger; the transaction the user is looking at right now becomes
+  /// occurrence 1 immediately. 2026-09 user request: "je veux le faire au
+  /// moment de la création" (e.g. a purchase paid in 4 instalments) -
+  /// replaces the separate "Nouvelle opération récurrente" entry that used
+  /// to be in the ledger's own "+" menu (see _showAddChoice), which always
+  /// left the first occurrence for later instead of recording it right away.
+  bool _makeRecurring = false;
+  RecurrencePeriod _recurrencePeriod = RecurrencePeriod.monthly;
+  RecurrenceAutoExecute _recurrenceAutoExecute = RecurrenceAutoExecute.notify;
+  // Same "durée limitée" convention as RecurringEditorSheet - false (repeats
+  // indefinitely) by default, matching that screen's own default rather
+  // than guessing a count from nothing.
+  bool _recurrenceLimited = false;
+  final _recurrenceOccurrencesController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -2177,6 +2389,109 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                 value: _reconciled,
                 onChanged: (v) => setState(() => _reconciled = v ?? false),
               ),
+              // New transaction only - editing an existing one manages its
+              // recurring status from the Récurrentes screen instead (a
+              // transaction already has whatever recurring link it has).
+              if (widget.existing == null) ...[
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Créer une opération récurrente'),
+                  subtitle: const Text('Cette opération devient la première '
+                      'occurrence ; les suivantes seront proposées '
+                      'automatiquement (ex : un achat payé en plusieurs fois)'),
+                  value: _makeRecurring,
+                  onChanged: (v) => setState(() => _makeRecurring = v ?? false),
+                ),
+                if (_makeRecurring) ...[
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<RecurrencePeriod>(
+                    decoration: const InputDecoration(labelText: 'Fréquence'),
+                    initialValue: _recurrencePeriod,
+                    items: RecurrencePeriod.values
+                        .where((p) => p != RecurrencePeriod.none)
+                        .map((p) => DropdownMenuItem(
+                            value: p, child: Text(recurrencePeriodLabel(p))))
+                        .toList(),
+                    onChanged: (v) => setState(() {
+                      _recurrencePeriod = v ?? _recurrencePeriod;
+                      if (periodUsesXParam(_recurrencePeriod) &&
+                          int.tryParse(
+                                  _recurrenceOccurrencesController.text) ==
+                              null) {
+                        _recurrenceOccurrencesController.text = '1';
+                      }
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<RecurrenceAutoExecute>(
+                    decoration: const InputDecoration(labelText: 'Exécution'),
+                    initialValue: _recurrenceAutoExecute,
+                    items: const [
+                      DropdownMenuItem(
+                          value: RecurrenceAutoExecute.manual,
+                          child: Text('Manuelle')),
+                      DropdownMenuItem(
+                          value: RecurrenceAutoExecute.notify,
+                          child: Text('Automatique (avec confirmation)')),
+                      DropdownMenuItem(
+                          value: RecurrenceAutoExecute.silent,
+                          child: Text('Automatique (silencieuse)')),
+                    ],
+                    onChanged: (v) => setState(
+                        () => _recurrenceAutoExecute = v ?? _recurrenceAutoExecute),
+                  ),
+                  const SizedBox(height: 12),
+                  if (periodUsesXParam(_recurrencePeriod)) ...[
+                    // Même convention que RecurringEditorSheet : pour "dans/
+                    // tous les X jours/mois", NUMOCCURRENCES porte
+                    // l'intervalle X, pas un compteur d'occurrences restantes.
+                    TextFormField(
+                      controller: _recurrenceOccurrencesController,
+                      decoration: InputDecoration(
+                        labelText: _recurrencePeriod == RecurrencePeriod.inXDays ||
+                                _recurrencePeriod == RecurrencePeriod.everyXDays
+                            ? 'Nombre de jours'
+                            : 'Nombre de mois',
+                      ),
+                      keyboardType: TextInputType.number,
+                      validator: (v) => (!_makeRecurring ||
+                              int.tryParse(v ?? '') != null &&
+                                  int.parse(v ?? '0') >= 1)
+                          ? null
+                          : 'Nombre invalide',
+                    ),
+                  ] else ...[
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Durée limitée'),
+                      subtitle: Text(_recurrenceLimited
+                          ? 'S\'arrête après un nombre fixe d\'occurrences '
+                              '(celle-ci comprise)'
+                          : 'Se répète indéfiniment'),
+                      value: _recurrenceLimited,
+                      onChanged: (v) =>
+                          setState(() => _recurrenceLimited = v),
+                    ),
+                    if (_recurrenceLimited) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _recurrenceOccurrencesController,
+                        decoration: const InputDecoration(
+                            labelText:
+                                'Nombre d\'occurrences (celle-ci comprise)'),
+                        keyboardType: TextInputType.number,
+                        validator: (v) => (!_makeRecurring ||
+                                !_recurrenceLimited ||
+                                (int.tryParse(v ?? '') != null &&
+                                    int.parse(v ?? '0') >= 1))
+                            ? null
+                            : 'Nombre invalide',
+                      ),
+                    ],
+                  ],
+                ],
+              ],
               // Existing-only, like Supprimer below: pausing only makes
               // sense for something already affecting the balance.
               if (widget.existing != null)
@@ -2295,7 +2610,38 @@ class _TransactionEditorSheetState extends State<TransactionEditorSheet> {
                     name: typedPayeeText, categoryId: _categoryId)));
     CategoryChange? categoryChange;
     BillAmountChange? billAmountChange;
-    if (widget.existing == null) {
+    if (widget.existing == null && _makeRecurring) {
+      // Creates the recurring template first, then immediately records
+      // *this* transaction as its first occurrence via the same repository
+      // path RecordOccurrenceDialog uses elsewhere - see _makeRecurring's
+      // own doc comment for why (never leaves a freshly-created bill
+      // sitting unfired until later).
+      final numOccurrences = periodUsesXParam(_recurrencePeriod)
+          ? int.parse(_recurrenceOccurrencesController.text)
+          : (_recurrenceLimited
+              ? int.parse(_recurrenceOccurrencesController.text)
+              : -1);
+      final billId = widget.repo.insertBillDeposit(
+        accountId: _accountId!,
+        toAccountId: isTransfer ? _toAccountId : null,
+        payeeId: payeeId,
+        transCode: _transCode,
+        amount: amount,
+        toAmount: isTransfer ? amount : null,
+        nextOccurrence: _date,
+        period: _recurrencePeriod,
+        autoExecute: _recurrenceAutoExecute,
+        categoryId: _categoryId,
+        numOccurrences: numOccurrences,
+        notes: _notesController.text,
+      );
+      if (_recurrenceLimited && !periodUsesXParam(_recurrencePeriod)) {
+        widget.repo.ensureBillOccurrenceTotal(billId, numOccurrences);
+      }
+      final bill =
+          widget.repo.getBillDeposits().firstWhere((b) => b.id == billId);
+      widget.repo.recordBillOccurrence(bill, date: _date, reconciled: _reconciled);
+    } else if (widget.existing == null) {
       widget.repo.insertTransaction(
         accountId: _accountId!,
         payeeId: payeeId,

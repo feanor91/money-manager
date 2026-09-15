@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' show ThemeMode;
+import 'package:flutter/material.dart' show Color, ThemeMode;
 
 import '../data/android_file_link.dart';
 import '../data/blank_database.dart';
@@ -221,6 +221,32 @@ class DatabaseProvider extends ChangeNotifier {
     if (prefs == null) return;
     await prefs.setStringList(_prefsKeySimulationAccounts,
         accountIds.map((id) => id.toString()).toList());
+  }
+
+  /// Per-account colour override for the Simulation screen's curves
+  /// (2026-09 user request: let the user pick which colour represents each
+  /// account, instead of always the fixed rotation in
+  /// simulation_screen.dart's `_accountColors`). Persisted here (not
+  /// AppPreferences) per this app's "any new setting lives in the
+  /// database's companion file" rule - see CLAUDE.md. An account absent
+  /// from this map falls back to the rotation, same "unset = default"
+  /// convention as [accountOrder].
+  Map<int, Color> accountColors = {};
+
+  Future<void> setAccountColor(int accountId, Color? color) async {
+    if (color == null) {
+      accountColors.remove(accountId);
+    } else {
+      accountColors[accountId] = color;
+    }
+    notifyListeners();
+    final prefs = companionSettings;
+    if (prefs == null) return;
+    await prefs.setStringList(
+        _prefsKeyAccountColors,
+        accountColors.entries
+            .map((e) => '${e.key}:${e.value.toARGB32().toRadixString(16)}')
+            .toList());
   }
 
   /// Custom account display order (list of account ids), used by the
@@ -901,6 +927,13 @@ class DatabaseProvider extends ChangeNotifier {
               .map((s) => int.tryParse(s))
               .whereType<int>()
               .toSet();
+      accountColors = {
+        for (final entry in prefs.getStringList(_prefsKeyAccountColors) ?? [])
+          if (entry.split(':') case [final idPart, final colorPart])
+            if (int.tryParse(idPart) case final id?)
+              if (int.tryParse(colorPart, radix: 16) case final argb?)
+                id: Color(argb)
+      };
       ledgerColumnOrder = prefs.getStringList(_prefsKeyLedgerColumnOrder) ?? [];
       ledgerHiddenColumns =
           (prefs.getStringList(_prefsKeyLedgerHiddenColumns) ?? []).toSet();
@@ -923,6 +956,7 @@ class DatabaseProvider extends ChangeNotifier {
       hiddenAccountIds = {};
       accountOrder = [];
       simulationSelectedAccountIds = {};
+      accountColors = {};
       ledgerColumnOrder = [];
       ledgerHiddenColumns = {};
       forecastDay = 24;
@@ -1244,6 +1278,7 @@ const _prefsKeySelectedAccount = 'mmex_selected_account_id';
 const _prefsKeyHiddenAccounts = 'mmex_hidden_account_ids';
 const _prefsKeyAccountOrder = 'mmex_account_order';
 const _prefsKeySimulationAccounts = 'mmex_simulation_selected_account_ids';
+const _prefsKeyAccountColors = 'mmex_account_colors';
 const _prefsKeyForecastDay = 'mmex_forecast_day';
 const _prefsKeyBackupRetentionWeeks = 'mmex_backup_retention_weeks';
 const _prefsKeyPalette = 'mmex_app_palette';
