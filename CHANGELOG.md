@@ -3,6 +3,11 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.121] - 2026-09-15
+
+- ci: corrige l'installation du SDK Android (le paquet legacy tools n'existe plus)
+- feat(simulation,récurrentes,grand-livre): échelle 500€, couleurs de comptes, création récurrente depuis une transaction
+
 ## [1.0.120] - 2026-09-12
 
 - fix(simulation): repère 0€ visible (couleur ambre + étiquette)
