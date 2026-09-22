@@ -725,6 +725,14 @@ class _ForecastChartState extends State<ForecastChart> {
           touchTooltipData: LineTouchTooltipData(
             fitInsideHorizontally: true,
             fitInsideVertically: true,
+            // fl_chart's own default (120) forces almost every line here to
+            // wrap - a date ("mercredi 29 septembre 2026") or an occurrence
+            // line ("Multirisque habitation : -45,20€") rarely fits in
+            // 120px, making the tooltip taller and harder to read than one
+            // line per item (2026-09-22 user report/screenshot). Wide enough
+            // for the longest realistic single line (a full French weekday
+            // date, or "label : -1 234,56€") without needing to wrap.
+            maxContentWidth: 280,
             getTooltipItems: (spots) {
               final seen = <String>{};
               final items = <LineTooltipItem?>[];
