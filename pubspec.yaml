@@ -74,8 +74,31 @@ dev_dependencies:
   # In-memory shared_preferences backend for widget tests that reach
   # AppPreferences.getInstance() - see nl_query_dialog_test.dart.
   shared_preferences_platform_interface: ^2.4.2
+  # Generates the app icon (android/web/windows) from assets/icon/app_icon.png
+  # - run `dart run flutter_launcher_icons` after changing that source image.
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
   assets:
     - assets/mmex_blank_schema.sql
+
+# 2026-09-22 user request ("la tirelire ... fond transparent ... arc en
+# ciel") - source is assets/icon/app_icon.png (transparent background, kept
+# transparent on android/web/windows below rather than forcing a background
+# color the user didn't ask for). Android's legacy launcher icon and web/
+# windows icons all support real transparency directly; adaptive_icon_*
+# (Android 8+'s two-layer icon) is deliberately left unset for the same
+# reason - setting only one of background/foreground errors, and picking an
+# arbitrary background color would silently override "transparent".
+flutter_launcher_icons:
+  android: true
+  image_path: assets/icon/app_icon.png
+  web:
+    generate: true
+    image_path: assets/icon/app_icon.png
+    background_color: "#00000000"
+    theme_color: "#F9A8D4"
+  windows:
+    generate: true
+    image_path: assets/icon/app_icon.png

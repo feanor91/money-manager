@@ -181,6 +181,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchController = TextEditingController();
   String _search = '';
 
+  /// "N'afficher que les opérations non pointées" (2026-09-22 user request)
+  /// - session-only like [_search]/[_sortColumn] above, not persisted:
+  /// reset on every fresh visit rather than remembered, since it's a quick
+  /// look ("qu'est-ce qu'il me reste à pointer") rather than a standing
+  /// preference. Composes with the search box - both filters apply
+  /// together, same as [_sortColumn] composes with either.
+  bool _onlyUnreconciled = false;
+
   /// "Sélectionner" (AppBar) - lets the user hand-pick exactly which
   /// transactions a bulk edit should touch, rather than relying on a
   /// same-payee-and-category match (see bulk_category_reassign.dart's own
@@ -342,6 +350,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             return haystack.contains(query);
           }).toList();
 
+    if (_onlyUnreconciled) {
+      rows = rows.where((row) => !row.transaction.isReconciled).toList();
+    }
+
     // Column-header sort (see _sortColumn's doc comment) - a pure display
     // reorder. row.balanceAfter stays whatever the repository already
     // computed in real chronological order; sorting by another column just
@@ -451,7 +463,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         ],
         bottom: PreferredSize(
-          preferredSize: Size.fromHeight(_showFullLedger ? 60 : 108),
+          preferredSize: Size.fromHeight(_showFullLedger ? 108 : 156),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -541,6 +553,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onChanged: (v) => setState(() => _search = v),
                 ),
               ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 16, 0),
+                child: CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Non pointées uniquement'),
+                  value: _onlyUnreconciled,
+                  onChanged: (v) =>
+                      setState(() => _onlyUnreconciled = v ?? false),
+                ),
+              ),
             ],
           ),
         ),
@@ -560,13 +584,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             ),
       body: rows.isEmpty
           ? Center(
-              child: Text(query.isEmpty
+              child: Text(query.isNotEmpty
                   ? (_showFullLedger
-                      ? 'Aucune transaction'
-                      : 'Aucune transaction sur cette période')
-                  : (_showFullLedger
                       ? 'Aucun résultat'
-                      : 'Aucun résultat sur cette période')),
+                      : 'Aucun résultat sur cette période')
+                  : _onlyUnreconciled
+                      ? (_showFullLedger
+                          ? 'Aucune opération non pointée'
+                          : 'Aucune opération non pointée sur cette période')
+                      : (_showFullLedger
+                          ? 'Aucune transaction'
+                          : 'Aucune transaction sur cette période')),
             )
           : LayoutBuilder(builder: (context, constraints) {
               // The desktop-style ledger grid needs its full column width
