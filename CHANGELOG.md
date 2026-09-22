@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.122] - 2026-09-22
+
+- feat(icon,grand-livre): remplace l'icône par défaut par une tirelire ; filtre non pointées
+
 ## [1.0.121] - 2026-09-15
 
 - ci: corrige l'installation du SDK Android (le paquet legacy tools n'existe plus)
