@@ -3,6 +3,10 @@
 Toutes les modifications notables de ce projet sont consignées ici.
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/).
 
+## [1.0.124] - 2026-10-22
+
+- feat(dashboard): un double-clic sur une carte de compte ouvre ses transactions
+
 ## [1.0.123] - 2026-09-22
 
 - fix(dashboard): élargit l'infobulle du graphique pour éviter les retours à la ligne
