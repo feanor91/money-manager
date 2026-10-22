@@ -35,6 +35,11 @@ class AccountBalanceCard extends StatelessWidget {
   final bool selected;
   final VoidCallback? onTap;
 
+  /// Double-tap / double-click on the card. Setting it makes Flutter hold
+  /// [onTap] back for a moment (kDoubleTapTimeout, ~300 ms) to see whether a
+  /// second tap follows - the unavoidable price of telling the two apart.
+  final VoidCallback? onDoubleTap;
+
   /// Projected balance on [forecastLabel]'s date (e.g. "Prev. au 24 juil."),
   /// using known recurring transactions only - see
   /// [MmexRepository.forecastAccountBalance]. Null hides the row entirely.
@@ -56,6 +61,7 @@ class AccountBalanceCard extends StatelessWidget {
     this.currency,
     this.selected = false,
     this.onTap,
+    this.onDoubleTap,
     this.forecastBalance,
     this.forecastLabel,
     this.negativeDate,
@@ -66,6 +72,7 @@ class AccountBalanceCard extends StatelessWidget {
     final positive = balance >= 0;
     return GestureDetector(
       onTap: onTap,
+      onDoubleTap: onDoubleTap,
       child: Container(
         decoration: selected
             ? BoxDecoration(

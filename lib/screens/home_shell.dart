@@ -59,11 +59,16 @@ class _HomeShellState extends State<HomeShell> {
   /// tablet/desktop/web one".
   static const _narrowNavBreakpoint = 640.0;
 
+  /// Position of [TransactionsScreen] in [_screens] - named because it's
+  /// also where [OpenTransactionsNotification] (a double-tap on a dashboard
+  /// account card) has to land, not just a nav-bar slot.
+  static const _transactionsScreenIndex = 1;
+
   /// The four most-used sections, kept directly on the bottom bar even on a
   /// narrow phone - see [_narrowNavBreakpoint].
   static const _primaryNavItems = [
     _NavItem(screenIndex: 0, icon: Icons.dashboard_outlined, selectedIcon: Icons.dashboard, label: 'Accueil'),
-    _NavItem(screenIndex: 1, icon: Icons.receipt_long_outlined, selectedIcon: Icons.receipt_long, label: 'Transactions'),
+    _NavItem(screenIndex: _transactionsScreenIndex, icon: Icons.receipt_long_outlined, selectedIcon: Icons.receipt_long, label: 'Transactions'),
     _NavItem(screenIndex: 2, icon: Icons.pie_chart_outline, selectedIcon: Icons.pie_chart, label: 'Budget'),
     _NavItem(screenIndex: 3, icon: Icons.autorenew, selectedIcon: Icons.autorenew, label: 'Récurrentes'),
   ];
@@ -140,7 +145,15 @@ class _HomeShellState extends State<HomeShell> {
       // spot) is most costly.
       body: Stack(
         children: [
-          Positioned.fill(child: IndexedStack(index: _index, children: _screens)),
+          Positioned.fill(
+            child: NotificationListener<OpenTransactionsNotification>(
+              onNotification: (_) {
+                setState(() => _index = _transactionsScreenIndex);
+                return true;
+              },
+              child: IndexedStack(index: _index, children: _screens),
+            ),
+          ),
           // Both banners can in principle be relevant at once (a failed
           // local save and a pending WebDAV conflict are independent
           // states) - a Column of whichever are currently active, not an

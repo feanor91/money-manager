@@ -28,6 +28,25 @@ import 'accounts_screen.dart' show openAccountEditor;
 bool get _isAndroidPlatform =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
+/// Sent by [DashboardScreen] to ask the surrounding HomeShell to switch to
+/// the Transactions tab (see [_openAccountTransactions]). A [Notification]
+/// rather than a callback passed through the constructor on purpose:
+/// HomeShell lists its screens as `const` widgets, so a tab switch doesn't
+/// rebuild the dashboard (a forecast query per account) - a closure
+/// parameter would make it a fresh instance on every HomeShell rebuild.
+class OpenTransactionsNotification extends Notification {
+  const OpenTransactionsNotification();
+}
+
+/// Double-tap on an account card: select that account (what a single tap
+/// already does) and jump to the Transactions tab, which always shows the
+/// selected account's ledger (see TransactionsScreen).
+void _openAccountTransactions(
+    BuildContext context, DatabaseProvider dbProvider, int accountId) {
+  dbProvider.selectAccount(accountId);
+  const OpenTransactionsNotification().dispatch(context);
+}
+
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
 
@@ -306,6 +325,11 @@ class DashboardScreen extends StatelessWidget {
                                                 account.id == selectedAccountId,
                                             onTap: () => dbProvider
                                                 .selectAccount(account.id),
+                                            onDoubleTap: () =>
+                                                _openAccountTransactions(
+                                                    context,
+                                                    dbProvider,
+                                                    account.id),
                                             forecastBalance:
                                                 forecastBalances[account.id],
                                             forecastLabel: forecastDateLabel,
@@ -359,6 +383,9 @@ class DashboardScreen extends StatelessWidget {
                                       selected: account.id == selectedAccountId,
                                       onTap: () =>
                                           dbProvider.selectAccount(account.id),
+                                      onDoubleTap: () =>
+                                          _openAccountTransactions(
+                                              context, dbProvider, account.id),
                                       forecastBalance:
                                           forecastBalances[account.id],
                                       forecastLabel: forecastDateLabel,
